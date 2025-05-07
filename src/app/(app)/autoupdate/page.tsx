@@ -4,10 +4,11 @@
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy } from "lucide-react";
+import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2 } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
-import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange } from './actions';
+import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion } from './actions';
 import type { AnalyzeCodeAlchemistSourceOutput, SuggestionUnit as FlowSuggestionUnit } from '@/ai/flows/analyze-codealchemist-source-flow';
+import type { SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -27,7 +28,7 @@ import { Label } from '@/components/ui/label';
 import { Progress } from "@/components/ui/progress";
 
 
-type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "success" | "error";
+type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "success" | "error" | "fixing_error";
 type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
 
 interface SuggestionWithStatus extends FlowSuggestionUnit {
@@ -42,6 +43,11 @@ interface AnalysisProgress {
   total: number;
 }
 
+interface AutoFixSuggestion {
+  causa_raiz: string;
+  sugerencias_de_solucion: string;
+}
+
 export default function AutoUpdatePage() {
   const [status, setStatus] = useState<AutoUpdateStatus>("idle");
   const [analysisResult, setAnalysisResult] = useState<AnalyzeCodeAlchemistSourceOutput | null>(null);
@@ -51,6 +57,9 @@ export default function AutoUpdatePage() {
   const [projectFiles, setProjectFiles] = useState<Awaited<ReturnType<typeof getApplicationSourceBundle>>['files']>([]);
   const [analysisPreferences, setAnalysisPreferences] = useState<string>("");
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
+  const [autoFixSuggestion, setAutoFixSuggestion] = useState<SuggestErrorFixOutput | null>(null);
+  const [isAutoFixModalOpen, setIsAutoFixModalOpen] = useState(false);
+
   const { toast } = useToast();
 
   const [apiKey, setApiKey] = useState<string | null>(null);
@@ -86,6 +95,7 @@ export default function AutoUpdatePage() {
     setCurrentAnalysisError(null);
     setSuggestionsWithStatus([]);
     setAnalysisProgress(null);
+    setAutoFixSuggestion(null);
     toast({
       title: "Auto-Análisis Iniciado",
       description: "Cargando y preparando el código fuente de YskCodeAlchemist..."
@@ -94,17 +104,21 @@ export default function AutoUpdatePage() {
     await fetchProjectFiles(); 
     setStatus("analyzing"); 
 
+    // Pass the callback to handle progress updates
     const result = await handleAutoAnalyzeAppSource(apiKey, modelName, analysisPreferences);
+    
+    setAnalysisProgress({ 
+        processed: result.chunksProcessed || 0, 
+        total: result.totalChunks || 0 
+    });
 
     if (result.success && result.data) {
       setAnalysisResult(result.data);
       const initialSuggestions = result.data.suggestions.map((s, index) => {
-        // Intentar encontrar el archivo por nombre base, o por nombre de parte si fue dividido
         const relatedFile = projectFiles?.find(f => {
             if (!s.area) return false;
             const areaLower = s.area.toLowerCase();
             const fileNameLower = f.fileName.toLowerCase();
-            // Check for exact match or if s.area is like "filename.ts (parte 1)"
             return fileNameLower === areaLower || fileNameLower === areaLower.split(' (parte ')[0];
         });
         let currentStatus: SuggestionStatus = "pending";
@@ -125,9 +139,6 @@ export default function AutoUpdatePage() {
         title: "Auto-Análisis Completado",
         description: `Se han generado sugerencias para YskCodeAlchemist. ${result.chunksProcessed || ''} fragmentos procesados de ${result.totalChunks || ''}.`
       });
-      if (result.totalChunks) {
-        setAnalysisProgress({ processed: result.chunksProcessed || result.totalChunks, total: result.totalChunks });
-      }
     } else {
       setStatus("error");
       setCurrentAnalysisError(result.error || "Ocurrió un error desconocido durante el auto-análisis.");
@@ -135,13 +146,41 @@ export default function AutoUpdatePage() {
         title: "Error en Auto-Análisis",
         description: result.error || "Ocurrió un error desconocido.",
         variant: "destructive",
-        duration: 10000, // Longer duration for errors
+        duration: 10000, 
       });
-       if (result.totalChunks) {
-        setAnalysisProgress({ processed: result.chunksProcessed || 0, total: result.totalChunks });
-      }
     }
   };
+  
+  const handleAttemptAutoFix = async () => {
+    if (!currentAnalysisError || !apiKey || !modelName) {
+      toast({
+        title: "Información Faltante",
+        description: "No hay error actual para corregir o falta configuración de API.",
+        variant: "destructive"
+      });
+      return;
+    }
+    setStatus("fixing_error");
+    setAutoFixSuggestion(null);
+    toast({ title: "Intentando Auto-Corrección", description: "Consultando a la IA para una posible solución..." });
+
+    const fixResult = await handleGetErrorFixSuggestion(currentAnalysisError, apiKey, modelName);
+
+    if (fixResult.success && fixResult.data) {
+      setAutoFixSuggestion(fixResult.data);
+      setIsAutoFixModalOpen(true); // Open modal with suggestions
+      toast({ title: "Sugerencia de Corrección Recibida", description: "La IA ha proporcionado una sugerencia." });
+    } else {
+      toast({
+        title: "Error en Auto-Corrección",
+        description: fixResult.error || "No se pudo obtener una sugerencia de la IA.",
+        variant: "destructive"
+      });
+    }
+    // Revert status to error so user can see original error and retry analysis if they wish
+    setStatus("error"); 
+  };
+
 
   const handleApplySuggestion = async (suggestionId: string) => {
     const suggestionIndex = suggestionsWithStatus.findIndex(s => s.id === suggestionId);
@@ -168,7 +207,6 @@ export default function AutoUpdatePage() {
     setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "applying"} : s));
     toast({ title: "Aplicando Sugerencia...", description: `Simulando aplicación de cambio a ${suggestionToApply.area}` });
     
-    // filePath should be the base name if it was chunked (e.g. "file.ts" from "file.ts (part 1)")
     const baseFilePath = suggestionToApply.area.includes(" (parte ") ? suggestionToApply.area.split(" (parte ")[0] : suggestionToApply.area;
 
     const result = await applySuggestedChange(baseFilePath, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent);
@@ -177,15 +215,10 @@ export default function AutoUpdatePage() {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {
           ...s, 
           status: "applied", 
-          // If applied, the *originalContent* for this specific suggestion unit
-          // should now reflect the AI's suggested content.
-          // This is for UI display if the user re-opens the dialog for this suggestion.
-          // The actual `projectFiles` state will hold the aggregated true current content.
           originalContent: result.newContent, 
         } : s));
       toast({ title: "Sugerencia Aplicada (Simulación)", description: `El cambio para ${baseFilePath} se ha simulado. Revisa la consola.`});
       
-      // Update the projectFiles state to reflect the simulated change
       setProjectFiles(prevFiles => (prevFiles || []).map(pf => pf.fileName === baseFilePath ? {...pf, content: result.newContent!} : pf));
     } else {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: result.error} : s));
@@ -318,7 +351,7 @@ export default function AutoUpdatePage() {
           <div className="flex flex-wrap gap-4">
             <Button 
               onClick={handleStartAutoAnalysis} 
-              disabled={status === "analyzing" || status === "loading_source" || !apiKey || !modelName}
+              disabled={status === "analyzing" || status === "loading_source" || status === "fixing_error" || !apiKey || !modelName}
               className="text-base py-3 px-6"
             >
               {(status === "analyzing" || status === "loading_source") ? (
@@ -343,12 +376,14 @@ export default function AutoUpdatePage() {
             </Button>
           </div>
 
-          {(status === "analyzing" || (status === "success" && analysisProgress) || (status === "error" && analysisProgress)) && analysisProgress && (
+          {(status === "analyzing" || status === "success" || status === "error") && analysisProgress && analysisProgress.total > 0 && (
             <div className="mt-4 space-y-2">
                 <Label className="text-sm">
-                    {status === "analyzing" ? "Procesando fragmentos..." : status === "success" ? "Análisis completado." : "Análisis interrumpido."}
+                    {status === "analyzing" ? "Procesando fragmentos..." : 
+                     status === "success" ? `Análisis completado (${analysisProgress.processed}/${analysisProgress.total} fragmentos).` : 
+                     status === "error" ? `Análisis interrumpido (${analysisProgress.processed}/${analysisProgress.total} fragmentos).` : ""}
                 </Label>
-                <Progress value={(analysisProgress.processed / analysisProgress.total) * 100} className="w-full h-2" />
+                <Progress value={(analysisProgress.processed / analysisProgress.total) * 100} className="w-full h-3" />
                 <p className="text-xs text-muted-foreground">
                     {analysisProgress.processed} de {analysisProgress.total} fragmentos procesados.
                 </p>
@@ -482,7 +517,7 @@ export default function AutoUpdatePage() {
               </CardContent>
             </Card>
           )}
-           {(status === "loading_source" || status === "analyzing" && !analysisProgress) && ( 
+           {(status === "loading_source" || (status === "analyzing" && (!analysisProgress || analysisProgress.total === 0))) && ( 
             <div 
               data-ai-hint="code processing animation"
               className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6"
@@ -497,22 +532,41 @@ export default function AutoUpdatePage() {
           {status === "error" && currentAnalysisError && ( 
              <Card className="mt-6 border-destructive bg-destructive/10">
                <CardHeader className="pb-2">
-                <CardTitle className="text-lg flex items-center gap-2 text-destructive"> {/* Changed text to destructive for better contrast on destructive background */}
+                <CardTitle className="text-lg flex items-center gap-2 text-destructive-foreground"> 
                   <AlertTriangle className="h-6 w-6" />
                   Error en el Auto-Análisis
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                <p className="text-destructive-foreground">Ocurrió un error durante el auto-análisis:</p> {/* Ensure foreground has contrast */}
+                <p className="text-destructive-foreground">Ocurrió un error durante el auto-análisis:</p> 
                 <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50">
-                    <pre className="text-xs text-foreground whitespace-pre-wrap">{currentAnalysisError}</pre> {/* Changed text to foreground (black on light themes) */}
+                    <pre className="text-xs text-foreground whitespace-pre-wrap">{currentAnalysisError}</pre> 
                 </ScrollArea>
-                <Button variant="outline" size="sm" onClick={() => handleCopyError(currentAnalysisError)} className="mt-2 text-destructive-foreground border-destructive/50 hover:bg-destructive/20">
-                    <Copy className="mr-2 h-4 w-4"/> Copiar Mensaje de Error
-                </Button>
+                <div className="flex gap-2 mt-2">
+                    <Button variant="outline" size="sm" onClick={() => handleCopyError(currentAnalysisError)} className="text-destructive-foreground border-destructive/50 hover:bg-destructive/20">
+                        <Copy className="mr-2 h-4 w-4"/> Copiar Mensaje de Error
+                    </Button>
+                    <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={handleAttemptAutoFix} 
+                        disabled={status === "fixing_error" || !apiKey || !modelName}
+                        className="text-accent-foreground border-accent/50 hover:bg-accent/20"
+                    >
+                        {status === "fixing_error" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Settings2 className="mr-2 h-4 w-4"/>}
+                         Auto-Fix (Experimental)
+                    </Button>
+                </div>
               </CardContent>
             </Card>
           )}
+          {status === "fixing_error" && (
+             <div className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[150px] mt-6">
+              <Loader2 className="h-10 w-10 animate-spin text-accent mb-4" />
+              <p className="text-lg text-muted-foreground">Intentando obtener sugerencia de Auto-Corrección...</p>
+             </div>
+          )}
+
         </CardContent>
         <CardFooter>
           <p className="text-xs text-muted-foreground">
@@ -522,6 +576,42 @@ export default function AutoUpdatePage() {
           </p>
         </CardFooter>
       </Card>
+
+      {/* Modal for Auto-Fix Suggestion */}
+      <AlertDialog open={isAutoFixModalOpen} onOpenChange={setIsAutoFixModalOpen}>
+          <AlertDialogContent className="max-w-2xl">
+              <AlertDialogHeader>
+                  <AlertDialogTitle className="flex items-center gap-2">
+                      <Settings2 className="h-6 w-6 text-accent"/>
+                      Sugerencia de Auto-Corrección de Error
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                      La IA ha analizado el error y propone lo siguiente. Revisa cuidadosamente antes de considerar cualquier acción.
+                  </AlertDialogDescription>
+              </AlertDialogHeader>
+              {autoFixSuggestion && (
+                  <ScrollArea className="max-h-[60vh] p-1 -mx-1">
+                      <div className="space-y-3 p-3 border rounded-md bg-card">
+                          <div>
+                              <h4 className="font-semibold text-sm mb-1">Posible Causa Raíz:</h4>
+                              <p className="text-xs text-muted-foreground whitespace-pre-wrap">{autoFixSuggestion.root_cause_analysis}</p>
+                          </div>
+                          <Separator />
+                          <div>
+                              <h4 className="font-semibold text-sm mb-1">Sugerencias de Solución:</h4>
+                              <p className="text-xs text-muted-foreground whitespace-pre-wrap">{autoFixSuggestion.solution_suggestions}</p>
+                          </div>
+                      </div>
+                  </ScrollArea>
+              )}
+              <AlertDialogFooter>
+                  <AlertDialogCancel onClick={() => setIsAutoFixModalOpen(false)}>Cerrar</AlertDialogCancel>
+                  {/* Podríamos añadir un botón para "Intentar aplicar (simulado)" si la sugerencia es aplicable */}
+              </AlertDialogFooter>
+          </AlertDialogContent>
+      </AlertDialog>
+
     </div>
   );
 }
+

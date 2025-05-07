@@ -2,6 +2,7 @@
 'use server';
 
 import { analyzeCodeAlchemistSource, AnalyzeCodeAlchemistSourceInput, AnalyzeCodeAlchemistSourceOutput } from '@/ai/flows/analyze-codealchemist-source-flow';
+import { suggestErrorFix, SuggestErrorFixInput, SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
 import fs from 'fs/promises';
 import path from 'path';
 import { glob } from 'glob'; 
@@ -23,16 +24,15 @@ const GROQ_API_TIMEOUT_MS = 60000 * 1; // 1 minuto por chunk
 export async function handleAutoAnalyzeAppSource(
   apiKey: string,
   modelName: string,
-  analysisPreferences?: string,
-  onProgress?: (progress: { processed: number; total: number }) => void
+  analysisPreferences?: string
 ): Promise<AutoUpdateAnalysisResult> {
   if (!apiKey || !modelName) {
-    return { success: false, error: "La clave API y el nombre del modelo son obligatorios. Por favor, configúralos en ajustes." };
+    return { success: false, error: "La clave API y el nombre del modelo son obligatorios. Por favor, configúralos en ajustes.", chunksProcessed: 0, totalChunks: 0 };
   }
 
   const sourceBundleResult = await getApplicationSourceBundle(false); 
   if (!sourceBundleResult.success || !sourceBundleResult.files || sourceBundleResult.files.length === 0) {
-    return { success: false, error: sourceBundleResult.error || "No se pudo obtener el código fuente para analizar." };
+    return { success: false, error: sourceBundleResult.error || "No se pudo obtener el código fuente para analizar.", chunksProcessed: 0, totalChunks: 0 };
   }
 
   const files = sourceBundleResult.files;
@@ -88,11 +88,12 @@ export async function handleAutoAnalyzeAppSource(
     chunks.push(currentChunk);
   }
 
-  if (chunks.length === 0) {
-    return { success: false, error: "No se generaron fragmentos de código para analizar." };
+  const totalChunks = chunks.length;
+  if (totalChunks === 0) {
+    return { success: false, error: "No se generaron fragmentos de código para analizar.", chunksProcessed: 0, totalChunks: 0 };
   }
   
-  console.log(`Código fuente dividido en ${chunks.length} fragmentos para análisis. MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}`);
+  console.log(`Código fuente dividido en ${totalChunks} fragmentos para análisis. MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}`);
   chunks.forEach((c, i) => console.log(`Fragmento ${i+1} tamaño: ${c.length} caracteres`));
 
   const allResults: AnalyzeCodeAlchemistSourceOutput[] = [];
@@ -112,36 +113,35 @@ export async function handleAutoAnalyzeAppSource(
     };
 
     try {
-      console.log(`Analizando fragmento ${processedChunks + 1} de ${chunks.length}... (${chunk.length} caracteres) con timeout de ${GROQ_API_TIMEOUT_MS / 1000}s y modelo ${modelName}`);
+      console.log(`Analizando fragmento ${processedChunks + 1} de ${totalChunks}... (${chunk.length} caracteres) con timeout de ${GROQ_API_TIMEOUT_MS / 1000}s y modelo ${modelName}`);
       const result = await analyzeCodeAlchemistSource(input);
       allResults.push(result);
       processedChunks++;
-      if (onProgress) { 
-         console.log(`Progreso: ${processedChunks}/${chunks.length}`);
-      }
+      // No direct onProgress callback here for server actions; progress is reported at the end or on error.
+      console.log(`Progreso: ${processedChunks}/${totalChunks}`);
     } catch (error) {
       console.error(`Error analizando el fragmento ${processedChunks + 1}:`, error);
       let errorMessage = "Ocurrió un error desconocido durante el análisis de un fragmento.";
       if (error instanceof Error) {
-        errorMessage = error.message; // fetchWithRetry en groq.ts ya maneja timeouts y rate limits con mensajes específicos
+        errorMessage = error.message; 
       }
-      return { success: false, error: `Falló el análisis del fragmento ${processedChunks + 1}: ${errorMessage}`, chunksProcessed: processedChunks, totalChunks: chunks.length };
+      return { success: false, error: `Falló el análisis del fragmento ${processedChunks + 1}: ${errorMessage}`, chunksProcessed: processedChunks, totalChunks: totalChunks };
     }
   }
 
   if (allResults.length === 0) {
-    return { success: false, error: "No se obtuvieron resultados del análisis de los fragmentos." };
+    return { success: false, error: "No se obtuvieron resultados del análisis de los fragmentos.", chunksProcessed: processedChunks, totalChunks: totalChunks };
   }
 
   // Agregación de resultados
   const aggregatedResult: AnalyzeCodeAlchemistSourceOutput = {
-    analysisTitle: allResults[0].analysisTitle || `Análisis Agregado de ${chunks.length} Fragmentos`,
+    analysisTitle: allResults[0].analysisTitle || `Análisis Agregado de ${totalChunks} Fragmentos`,
     identifiedAreas: Array.from(new Set(allResults.flatMap(r => r.identifiedAreas))),
     suggestions: allResults.flatMap(r => r.suggestions.map(s => ({...s, area: s.area || "General (Fragmento)" }))), 
     overallAssessment: allResults.map(r => r.overallAssessment).join('\n\n---\n\n'),
   };
   
-  return { success: true, data: aggregatedResult, chunksProcessed: processedChunks, totalChunks: chunks.length };
+  return { success: true, data: aggregatedResult, chunksProcessed: processedChunks, totalChunks: totalChunks };
 }
 
 
@@ -281,4 +281,45 @@ export async function applySuggestedChange(filePath: string, originalContent: st
         const errorMessage = error instanceof Error ? error.message : "Error desconocido al aplicar el cambio.";
         return { success: false, error: errorMessage };
     }
+}
+
+
+interface AutoFixSuggestionResult {
+  success: boolean;
+  data?: SuggestErrorFixOutput;
+  error?: string;
+}
+
+export async function handleGetErrorFixSuggestion(
+  errorMessage: string,
+  apiKey: string,
+  modelName: string
+): Promise<AutoFixSuggestionResult> {
+  if (!apiKey || !modelName) {
+    return { success: false, error: "La clave API y el nombre del modelo son obligatorios para la auto-corrección." };
+  }
+
+  const groqOptions: GroqOptions = {
+    apiKey,
+    modelName,
+    timeoutMs: GROQ_API_TIMEOUT_MS, // Usar el mismo timeout general
+  };
+
+  const input: SuggestErrorFixInput = {
+    error_message: errorMessage,
+    context: "Error ocurrido durante la función AutoUpdate (análisis del propio código de YskCodeAlchemist).",
+    groqOptions: groqOptions,
+  };
+
+  try {
+    const result = await suggestErrorFix(input);
+    return { success: true, data: result };
+  } catch (error) {
+    console.error("Error obteniendo sugerencia para la corrección:", error);
+    let specificErrorMessage = "Ocurrió un error desconocido al intentar obtener una sugerencia de corrección.";
+    if (error instanceof Error) {
+      specificErrorMessage = error.message;
+    }
+    return { success: false, error: `Falló la obtención de sugerencia para corrección: ${specificErrorMessage}` };
+  }
 }
