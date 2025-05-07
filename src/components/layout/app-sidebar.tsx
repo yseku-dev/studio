@@ -10,10 +10,12 @@ import {
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
+  SidebarTrigger, // Import SidebarTrigger
+  useSidebar, // Import useSidebar to control toggle
 } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { LayoutDashboard, ScanLine, GitCompareArrows, Settings, PackageSearch, FolderSearch, Sparkles } from 'lucide-react';
+import { LayoutDashboard, ScanLine, GitCompareArrows, Settings, PackageSearch, FolderSearch, Sparkles, PanelLeft } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
@@ -27,20 +29,31 @@ const navItems = [
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const { state, toggleSidebar, isMobile } = useSidebar(); // Get toggleSidebar and state
 
   return (
     <Sidebar collapsible="icon" variant="sidebar" side="left" className="border-r">
-      <SidebarHeader className="p-4">
-        <div className="flex items-center gap-2 group-data-[collapsible=icon]:justify-center">
+      <SidebarHeader className="p-4 flex items-center justify-between group-data-[collapsible=icon]:justify-center">
+        <div className="flex items-center gap-2">
           <Button variant="ghost" size="icon" className="rounded-lg group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8" asChild>
             <Link href="/dashboard">
               <PackageSearch className="h-6 w-6 text-primary" />
             </Link>
           </Button>
           <h1 className="text-xl font-semibold text-primary group-data-[collapsible=icon]:hidden">
-            CodeAlchemist
+            YskCodeAlchemist
           </h1>
         </div>
+        {/* Mostrar el SidebarTrigger solo en escritorio y cuando no está en modo icono por defecto */}
+         <Button 
+            variant="ghost" 
+            size="icon" 
+            onClick={toggleSidebar} 
+            className="rounded-lg md:hidden group-data-[collapsible=icon]:hidden" // Oculto en modo icono en desktop, visible en mobile si se quiere
+            aria-label="Toggle sidebar"
+          >
+           <PanelLeft className="h-5 w-5" />
+         </Button>
       </SidebarHeader>
       <ScrollArea className="flex-1">
         <SidebarContent className="p-2">
@@ -66,7 +79,21 @@ export function AppSidebar() {
           </SidebarMenu>
         </SidebarContent>
       </ScrollArea>
+       {/* Botón para colapsar/expandir en la parte inferior de la barra lateral, visible en desktop */}
+      {!isMobile && (
+        <div className="p-2 border-t border-sidebar-border group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center">
+            <Button 
+                variant="ghost" 
+                size={state === 'collapsed' ? 'icon' : 'default'}
+                onClick={toggleSidebar} 
+                className="w-full group-data-[collapsible=icon]:w-auto"
+                aria-label={state === 'collapsed' ? 'Expandir sidebar' : 'Colapsar sidebar'}
+            >
+            <PanelLeft className="h-5 w-5" />
+            <span className="group-data-[collapsible=icon]:hidden ml-2">{state === 'collapsed' ? 'Expandir' : 'Colapsar'}</span>
+          </Button>
+        </div>
+      )}
     </Sidebar>
   );
 }
-

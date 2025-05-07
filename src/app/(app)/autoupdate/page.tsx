@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -87,7 +88,7 @@ export default function AutoUpdatePage() {
     setAnalysisProgress(null);
     toast({
       title: "Auto-Análisis Iniciado",
-      description: "Cargando y preparando el código fuente de CodeAlchemist..."
+      description: "Cargando y preparando el código fuente de YskCodeAlchemist..."
     });
 
     await fetchProjectFiles(); 
@@ -98,7 +99,14 @@ export default function AutoUpdatePage() {
     if (result.success && result.data) {
       setAnalysisResult(result.data);
       const initialSuggestions = result.data.suggestions.map((s, index) => {
-        const relatedFile = projectFiles?.find(f => s.area && f.fileName.toLowerCase().includes(s.area.toLowerCase()));
+        // Intentar encontrar el archivo por nombre base, o por nombre de parte si fue dividido
+        const relatedFile = projectFiles?.find(f => {
+            if (!s.area) return false;
+            const areaLower = s.area.toLowerCase();
+            const fileNameLower = f.fileName.toLowerCase();
+            // Check for exact match or if s.area is like "filename.ts (parte 1)"
+            return fileNameLower === areaLower || fileNameLower === areaLower.split(' (parte ')[0];
+        });
         let currentStatus: SuggestionStatus = "pending";
         if (!s.suggestedFullFileContent || !relatedFile?.content) { 
             currentStatus = "not_applicable";
@@ -115,7 +123,7 @@ export default function AutoUpdatePage() {
       setStatus("success");
       toast({
         title: "Auto-Análisis Completado",
-        description: `Se han generado sugerencias para CodeAlchemist. ${result.chunksProcessed || ''} fragmentos procesados de ${result.totalChunks || ''}.`
+        description: `Se han generado sugerencias para YskCodeAlchemist. ${result.chunksProcessed || ''} fragmentos procesados de ${result.totalChunks || ''}.`
       });
       if (result.totalChunks) {
         setAnalysisProgress({ processed: result.chunksProcessed || result.totalChunks, total: result.totalChunks });
@@ -127,6 +135,7 @@ export default function AutoUpdatePage() {
         title: "Error en Auto-Análisis",
         description: result.error || "Ocurrió un error desconocido.",
         variant: "destructive",
+        duration: 10000, // Longer duration for errors
       });
        if (result.totalChunks) {
         setAnalysisProgress({ processed: result.chunksProcessed || 0, total: result.totalChunks });
@@ -159,25 +168,28 @@ export default function AutoUpdatePage() {
     setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "applying"} : s));
     toast({ title: "Aplicando Sugerencia...", description: `Simulando aplicación de cambio a ${suggestionToApply.area}` });
     
-    const result = await applySuggestedChange(suggestionToApply.area, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent);
+    // filePath should be the base name if it was chunked (e.g. "file.ts" from "file.ts (part 1)")
+    const baseFilePath = suggestionToApply.area.includes(" (parte ") ? suggestionToApply.area.split(" (parte ")[0] : suggestionToApply.area;
+
+    const result = await applySuggestedChange(baseFilePath, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent);
     
     if (result.success) {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {
           ...s, 
           status: "applied", 
+          // If applied, the *originalContent* for this specific suggestion unit
+          // should now reflect the AI's suggested content.
+          // This is for UI display if the user re-opens the dialog for this suggestion.
+          // The actual `projectFiles` state will hold the aggregated true current content.
           originalContent: result.newContent, 
-          // Update suggested content to new content, as original is now the "applied" one.
-          // This helps if user wants to re-evaluate or compare further based on the applied state.
-          // Or, keep suggestedFullFileContent as is if it's meant to be the AI's output.
-          // For simplicity, let's assume originalContent reflects the current state.
         } : s));
-      toast({ title: "Sugerencia Aplicada (Simulación)", description: `El cambio para ${suggestionToApply.area} se ha simulado. Revisa la consola.`});
+      toast({ title: "Sugerencia Aplicada (Simulación)", description: `El cambio para ${baseFilePath} se ha simulado. Revisa la consola.`});
       
       // Update the projectFiles state to reflect the simulated change
-      setProjectFiles(prevFiles => (prevFiles || []).map(pf => pf.fileName === suggestionToApply.area ? {...pf, content: result.newContent!} : pf));
+      setProjectFiles(prevFiles => (prevFiles || []).map(pf => pf.fileName === baseFilePath ? {...pf, content: result.newContent!} : pf));
     } else {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: result.error} : s));
-      toast({ title: "Error al Aplicar (Simulación)", description: result.error || `No se pudo simular la aplicación del cambio a ${suggestionToApply.area}.`, variant: "destructive"});
+      toast({ title: "Error al Aplicar (Simulación)", description: result.error || `No se pudo simular la aplicación del cambio a ${baseFilePath}.`, variant: "destructive"});
     }
   };
 
@@ -197,7 +209,7 @@ export default function AutoUpdatePage() {
     setIsDownloading(true);
     toast({
       title: "Preparando Descarga",
-      description: "Recopilando todos los archivos fuente de CodeAlchemist..."
+      description: "Recopilando todos los archivos fuente de YskCodeAlchemist..."
     });
 
     let filesToZip = projectFiles;
@@ -232,14 +244,14 @@ export default function AutoUpdatePage() {
         const url = URL.createObjectURL(zipBlob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'codealchemist-full-source.zip';
+        a.download = 'yskcodealchemist-full-source.zip';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         toast({
           title: "Descarga Iniciada",
-          description: "El paquete completo de código fuente (codealchemist-full-source.zip) se está descargando."
+          description: "El paquete completo de código fuente (yskcodealchemist-full-source.zip) se está descargando."
         });
       } catch (e) {
          const error = e instanceof Error ? e.message : "Error desconocido";
@@ -272,10 +284,10 @@ export default function AutoUpdatePage() {
         <CardHeader>
           <CardTitle className="text-3xl font-bold text-primary flex items-center gap-2">
             <Sparkles className="h-8 w-8" />
-            AutoUpdate: Análisis de CodeAlchemist
+            AutoUpdate: Análisis de YskCodeAlchemist
           </CardTitle>
           <CardDescription className="text-lg">
-            Esta sección permite a la IA analizar el propio código fuente completo de la aplicación CodeAlchemist para proponer mejoras y optimizaciones.
+            Esta sección permite a la IA analizar el propio código fuente completo de la aplicación YskCodeAlchemist para proponer mejoras y optimizaciones.
              {!apiKey || !modelName ? (
                 <span className="text-destructive block mt-1"> (Clave API o Modelo no configurado en Ajustes)</span>
             ) : <span className="text-muted-foreground block mt-1">(Usando modelo Groq: {modelName})</span>}
@@ -283,7 +295,7 @@ export default function AutoUpdatePage() {
         </CardHeader>
         <CardContent className="space-y-6">
           <p className="text-muted-foreground">
-            Al hacer clic en &quot;Iniciar Auto-Análisis&quot;, CodeAlchemist recopilará su código fuente, lo dividirá en fragmentos si es necesario, y lo enviará
+            Al hacer clic en &quot;Iniciar Auto-Análisis&quot;, YskCodeAlchemist recopilará su código fuente, lo dividirá en fragmentos si es necesario, y lo enviará
             al modelo de IA configurado para obtener un resumen de posibles mejoras. También puedes descargar el código fuente completo.
             Las llamadas a la API tienen un tiempo de espera para evitar bloqueos indefinidos.
           </p>
@@ -477,7 +489,7 @@ export default function AutoUpdatePage() {
             >
               <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
               <p className="text-lg text-muted-foreground">
-                {status === "loading_source" ? "Cargando código fuente..." : "Analizando el código fuente de CodeAlchemist..."}
+                {status === "loading_source" ? "Cargando código fuente..." : "Analizando el código fuente de YskCodeAlchemist..."}
               </p>
               <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos, especialmente si el código es extenso.</p>
             </div>
@@ -485,15 +497,15 @@ export default function AutoUpdatePage() {
           {status === "error" && currentAnalysisError && ( 
              <Card className="mt-6 border-destructive bg-destructive/10">
                <CardHeader className="pb-2">
-                <CardTitle className="text-lg flex items-center gap-2 text-destructive-foreground">
+                <CardTitle className="text-lg flex items-center gap-2 text-destructive"> {/* Changed text to destructive for better contrast on destructive background */}
                   <AlertTriangle className="h-6 w-6" />
                   Error en el Auto-Análisis
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                <p className="text-destructive-foreground/90">Ocurrió un error durante el auto-análisis:</p>
+                <p className="text-destructive-foreground">Ocurrió un error durante el auto-análisis:</p> {/* Ensure foreground has contrast */}
                 <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50">
-                    <pre className="text-xs text-destructive-foreground whitespace-pre-wrap">{currentAnalysisError}</pre>
+                    <pre className="text-xs text-foreground whitespace-pre-wrap">{currentAnalysisError}</pre> {/* Changed text to foreground (black on light themes) */}
                 </ScrollArea>
                 <Button variant="outline" size="sm" onClick={() => handleCopyError(currentAnalysisError)} className="mt-2 text-destructive-foreground border-destructive/50 hover:bg-destructive/20">
                     <Copy className="mr-2 h-4 w-4"/> Copiar Mensaje de Error
@@ -504,7 +516,7 @@ export default function AutoUpdatePage() {
         </CardContent>
         <CardFooter>
           <p className="text-xs text-muted-foreground">
-            <strong>Nota Importante:</strong> El análisis se realiza sobre el código fuente completo de CodeAlchemist, potencialmente dividido en fragmentos para manejar límites de tokens y timeouts.
+            <strong>Nota Importante:</strong> El análisis se realiza sobre el código fuente completo de YskCodeAlchemist, potencialmente dividido en fragmentos para manejar límites de tokens y timeouts.
             La descarga de código fuente proporciona un archivo ZIP de todos los archivos detectados.
             Las sugerencias de IA y su aplicación (simulada) siempre deben ser revisadas cuidadosamente por un desarrollador. La capacidad de "auto-reparación" se limita a aplicar estas sugerencias simuladas.
           </p>

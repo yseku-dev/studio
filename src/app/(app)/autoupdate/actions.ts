@@ -1,3 +1,4 @@
+
 'use server';
 
 import { analyzeCodeAlchemistSource, AnalyzeCodeAlchemistSourceInput, AnalyzeCodeAlchemistSourceOutput } from '@/ai/flows/analyze-codealchemist-source-flow';
@@ -14,9 +15,8 @@ interface AutoUpdateAnalysisResult {
   totalChunks?: number;
 }
 
-// Estimación: 1 token ~ 3 caracteres. Límite de 6000 tokens para el contenido.
-// Dejamos un margen para el prompt y la respuesta JSON.
-const MAX_CHARS_PER_CHUNK = 5500 * 3; // Aproximadamente 16500 caracteres
+// Reducido para evitar "Payload Too Large". Asumiendo ~1.9 chars/token y un límite de ~5200 tokens para contenido.
+const MAX_CHARS_PER_CHUNK = 9000; 
 const GROQ_API_TIMEOUT_MS = 60000 * 1; // 1 minuto por chunk
 
 export async function handleAutoAnalyzeAppSource(
@@ -40,33 +40,50 @@ export async function handleAutoAnalyzeAppSource(
   let currentChunkChars = 0;
 
   for (const file of files) {
-    const fileContentMarker = `\n\n// --- Archivo: ${file.fileName} ---\n\n`;
-    const fileEffectiveContent = file.content; 
+    const baseFileName = file.fileName;
+    let fileEffectiveContent = file.content;
 
-    if (fileEffectiveContent.length + fileContentMarker.length > MAX_CHARS_PER_CHUNK) {
-      if (currentChunkChars > 0) {
+    // Handle individual files that are too large by splitting them
+    if (fileEffectiveContent.length + `\n\n// --- Archivo: ${baseFileName} ---\n\n`.length > MAX_CHARS_PER_CHUNK) {
+      if (currentChunk.length > 0) { // Push any existing partial chunk
         chunks.push(currentChunk);
         currentChunk = "";
         currentChunkChars = 0;
       }
-      let processedFileContent = fileEffectiveContent;
-      if (fileEffectiveContent.length > MAX_CHARS_PER_CHUNK * 2) { 
-        console.warn(`Archivo ${file.fileName} truncado debido a su tamaño excesivo (${fileEffectiveContent.length} caracteres). Solo se procesarán los primeros ${MAX_CHARS_PER_CHUNK * 2} caracteres.`);
-        processedFileContent = fileEffectiveContent.substring(0, MAX_CHARS_PER_CHUNK * 2);
+      
+      let offset = 0;
+      let partIndex = 1;
+      while(offset < fileEffectiveContent.length) {
+        const partMarker = `\n\n// --- Archivo: ${baseFileName} (parte ${partIndex}) ---\n\n`;
+        const charsToTake = MAX_CHARS_PER_CHUNK - partMarker.length;
+        if (charsToTake <=0) { // Marker itself is too long, highly unlikely but a safeguard
+            console.error(`El marcador para ${baseFileName} es demasiado largo para el tamaño del fragmento.`);
+            break; 
+        }
+        const part = fileEffectiveContent.substring(offset, offset + charsToTake);
+        chunks.push(partMarker + part);
+        offset += part.length; // Use part.length because substring might return less if at end
+        partIndex++;
+        console.warn(`Archivo ${baseFileName} dividido en múltiples fragmentos. Fragmento procesado de ${part.length} caracteres.`);
       }
-      chunks.push(fileContentMarker + processedFileContent);
+      continue; // Move to the next file
+    }
 
-    } else if (currentChunkChars + fileEffectiveContent.length + fileContentMarker.length > MAX_CHARS_PER_CHUNK) {
-      chunks.push(currentChunk);
+    // If adding this file (which is not too large by itself) would make the current chunk too large
+    const fileContentMarker = `\n\n// --- Archivo: ${baseFileName} ---\n\n`;
+    if (currentChunkChars + fileEffectiveContent.length + fileContentMarker.length > MAX_CHARS_PER_CHUNK) {
+      if (currentChunk.length > 0) { // Push the current chunk before starting a new one
+        chunks.push(currentChunk);
+      }
       currentChunk = fileContentMarker + fileEffectiveContent;
       currentChunkChars = fileEffectiveContent.length + fileContentMarker.length;
-    } else {
+    } else { // Add to the current chunk
       currentChunk += fileContentMarker + fileEffectiveContent;
       currentChunkChars += fileEffectiveContent.length + fileContentMarker.length;
     }
   }
 
-  if (currentChunkChars > 0) {
+  if (currentChunk.length > 0) { // Push any remaining chunk
     chunks.push(currentChunk);
   }
 
@@ -74,7 +91,8 @@ export async function handleAutoAnalyzeAppSource(
     return { success: false, error: "No se generaron fragmentos de código para analizar." };
   }
   
-  console.log(`Código fuente dividido en ${chunks.length} fragmentos para análisis.`);
+  console.log(`Código fuente dividido en ${chunks.length} fragmentos para análisis. MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}`);
+  chunks.forEach((c, i) => console.log(`Fragmento ${i+1} tamaño: ${c.length} caracteres`));
 
   const allResults: AnalyzeCodeAlchemistSourceOutput[] = [];
   let processedChunks = 0;
@@ -88,12 +106,12 @@ export async function handleAutoAnalyzeAppSource(
   for (const chunk of chunks) {
     const input: AnalyzeCodeAlchemistSourceInput = {
       sourceCode: chunk, 
-      groqOptions: groqAPIOptions, // Pasar las opciones completas
+      groqOptions: groqAPIOptions, 
       analysisPreferences,
     };
 
     try {
-      console.log(`Analizando fragmento ${processedChunks + 1} de ${chunks.length}... (${chunk.length} caracteres) con timeout de ${GROQ_API_TIMEOUT_MS / 1000}s`);
+      console.log(`Analizando fragmento ${processedChunks + 1} de ${chunks.length}... (${chunk.length} caracteres) con timeout de ${GROQ_API_TIMEOUT_MS / 1000}s y modelo ${modelName}`);
       const result = await analyzeCodeAlchemistSource(input);
       allResults.push(result);
       processedChunks++;
@@ -107,6 +125,8 @@ export async function handleAutoAnalyzeAppSource(
         errorMessage = error.message;
         if (error.message.toLowerCase().includes("timeout") || error.message.toLowerCase().includes("excedió el tiempo límite")) {
           errorMessage = `El análisis del fragmento ${processedChunks + 1} excedió el tiempo límite de ${GROQ_API_TIMEOUT_MS / 1000} segundos. Intenta de nuevo o revisa la configuración.`;
+        } else if (error.message.includes("413") || error.message.toLowerCase().includes("payload too large") || error.message.toLowerCase().includes("request too large")) {
+          errorMessage = `El fragmento ${processedChunks + 1} (${chunk.length} caracteres) es demasiado grande para el modelo ${modelName}. Reduce el tamaño del fragmento (MAX_CHARS_PER_CHUNK) o prueba un modelo con mayor capacidad. Detalle: ${error.message}`;
         }
       }
       return { success: false, error: `Falló el análisis del fragmento ${processedChunks + 1}: ${errorMessage}`, chunksProcessed: processedChunks, totalChunks: chunks.length };
@@ -117,6 +137,7 @@ export async function handleAutoAnalyzeAppSource(
     return { success: false, error: "No se obtuvieron resultados del análisis de los fragmentos." };
   }
 
+  // Agregación de resultados
   const aggregatedResult: AnalyzeCodeAlchemistSourceOutput = {
     analysisTitle: allResults[0].analysisTitle || `Análisis Agregado de ${chunks.length} Fragmentos`,
     identifiedAreas: Array.from(new Set(allResults.flatMap(r => r.identifiedAreas))),
@@ -153,7 +174,7 @@ const ignorePatterns = [
   '.env.development',
   '.env.production',
   '.env.test',
-  'public/mockServiceWorker.js', // Ignorar el mock service worker si existe
+  'public/mockServiceWorker.js', 
 ];
 
 export async function getApplicationSourceBundle(concatenate: boolean = false): Promise<AppSourceBundleResult> {
