@@ -43,11 +43,6 @@ interface AnalysisProgress {
   total: number;
 }
 
-interface AutoFixSuggestion {
-  causa_raiz: string;
-  sugerencias_de_solucion: string;
-}
-
 export default function AutoUpdatePage() {
   const [status, setStatus] = useState<AutoUpdateStatus>("idle");
   const [analysisResult, setAnalysisResult] = useState<AnalyzeCodeAlchemistSourceOutput | null>(null);
@@ -56,7 +51,7 @@ export default function AutoUpdatePage() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [projectFiles, setProjectFiles] = useState<Awaited<ReturnType<typeof getApplicationSourceBundle>>['files']>([]);
   const [analysisPreferences, setAnalysisPreferences] = useState<string>("");
-  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
+  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ processed: 0, total: 0 });
   const [autoFixSuggestion, setAutoFixSuggestion] = useState<SuggestErrorFixOutput | null>(null);
   const [isAutoFixModalOpen, setIsAutoFixModalOpen] = useState(false);
 
@@ -94,7 +89,7 @@ export default function AutoUpdatePage() {
     setAnalysisResult(null);
     setCurrentAnalysisError(null);
     setSuggestionsWithStatus([]);
-    setAnalysisProgress(null);
+    setAnalysisProgress({ processed: 0, total: 0 }); // Initialize progress
     setAutoFixSuggestion(null);
     toast({
       title: "Auto-Análisis Iniciado",
@@ -104,12 +99,11 @@ export default function AutoUpdatePage() {
     await fetchProjectFiles(); 
     setStatus("analyzing"); 
 
-    // Pass the callback to handle progress updates
     const result = await handleAutoAnalyzeAppSource(apiKey, modelName, analysisPreferences);
     
     setAnalysisProgress({ 
         processed: result.chunksProcessed || 0, 
-        total: result.totalChunks || 0 
+        total: result.totalChunks || 1 // Ensure total is at least 1 to avoid division by zero if 0 chunks processed
     });
 
     if (result.success && result.data) {
@@ -137,11 +131,12 @@ export default function AutoUpdatePage() {
       setStatus("success");
       toast({
         title: "Auto-Análisis Completado",
-        description: `Se han generado sugerencias para YskCodeAlchemist. ${result.chunksProcessed || ''} fragmentos procesados de ${result.totalChunks || ''}.`
+        description: `Se han generado sugerencias para YskCodeAlchemist. ${result.chunksProcessed || 0} fragmentos procesados de ${result.totalChunks || 0}.`
       });
     } else {
       setStatus("error");
       setCurrentAnalysisError(result.error || "Ocurrió un error desconocido durante el auto-análisis.");
+      // analysisProgress is already set with the state at the time of error by the server action
       toast({
         title: "Error en Auto-Análisis",
         description: result.error || "Ocurrió un error desconocido.",
@@ -168,7 +163,7 @@ export default function AutoUpdatePage() {
 
     if (fixResult.success && fixResult.data) {
       setAutoFixSuggestion(fixResult.data);
-      setIsAutoFixModalOpen(true); // Open modal with suggestions
+      setIsAutoFixModalOpen(true); 
       toast({ title: "Sugerencia de Corrección Recibida", description: "La IA ha proporcionado una sugerencia." });
     } else {
       toast({
@@ -177,7 +172,6 @@ export default function AutoUpdatePage() {
         variant: "destructive"
       });
     }
-    // Revert status to error so user can see original error and retry analysis if they wish
     setStatus("error"); 
   };
 
@@ -376,17 +370,23 @@ export default function AutoUpdatePage() {
             </Button>
           </div>
 
-          {(status === "analyzing" || status === "success" || status === "error") && analysisProgress && analysisProgress.total > 0 && (
+          {(status === "analyzing" || status === "success" || status === "error") && analysisProgress && (
             <div className="mt-4 space-y-2">
-                <Label className="text-sm">
-                    {status === "analyzing" ? "Procesando fragmentos..." : 
+                <Label className="text-sm text-foreground">
+                    {status === "analyzing" ? 
+                        (analysisProgress.total > 0 ? `Procesando fragmentos... (${analysisProgress.processed}/${analysisProgress.total})` : "Iniciando análisis, calculando total de fragmentos...") : 
                      status === "success" ? `Análisis completado (${analysisProgress.processed}/${analysisProgress.total} fragmentos).` : 
-                     status === "error" ? `Análisis interrumpido (${analysisProgress.processed}/${analysisProgress.total} fragmentos).` : ""}
+                     status === "error" ? `Análisis interrumpido (${analysisProgress.processed > 0 ? `${analysisProgress.processed}/` : ''}${analysisProgress.total > 0 ? analysisProgress.total : '?'} fragmentos).` : ""}
                 </Label>
-                <Progress value={(analysisProgress.processed / analysisProgress.total) * 100} className="w-full h-3" />
-                <p className="text-xs text-muted-foreground">
-                    {analysisProgress.processed} de {analysisProgress.total} fragmentos procesados.
-                </p>
+                <Progress 
+                    value={analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 : (status === "analyzing" ? 0 : 100) } 
+                    className="w-full h-3" 
+                />
+                {(analysisProgress.total > 0 || (status === "error" && analysisProgress.processed > 0)) && (
+                    <p className="text-xs text-muted-foreground">
+                        {analysisProgress.processed} de {analysisProgress.total > 0 ? analysisProgress.total : '?'} fragmentos procesados.
+                    </p>
+                )}
             </div>
            )}
 
@@ -412,7 +412,7 @@ export default function AutoUpdatePage() {
                     <h4 className="font-semibold text-accent-foreground/90 mb-2">Áreas Identificadas (Agregado):</h4>
                     <div className="flex flex-wrap gap-2">
                       {analysisResult.identifiedAreas.map((area, index) => (
-                        <Badge key={index} variant="secondary">{area}</Badge>
+                        <Badge key={index} variant="secondary" className="text-foreground">{area}</Badge>
                       ))}
                     </div>
                   </div>
@@ -459,10 +459,10 @@ export default function AutoUpdatePage() {
                                             size="sm" 
                                             variant="outline" 
                                             disabled={s.status === "applying" || s.status === "applied" || s.status === "not_applicable" || !s.area || !s.originalContent || !s.suggestedFullFileContent}
-                                            className={s.status === "applied" ? "border-green-500 text-green-600" : ""}
+                                            className={s.status === "applied" ? "border-green-500 text-green-700 dark:text-green-400" : ""}
                                         >
                                         {s.status === "applying" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                        {s.status === "applied" && <CheckCircle className="mr-2 h-4 w-4 text-green-600" />}
+                                        {s.status === "applied" && <CheckCircle className="mr-2 h-4 w-4 text-green-600 dark:text-green-500" />}
                                         {s.status === "error_applying" && <XCircle className="mr-2 h-4 w-4 text-destructive" />}
                                         {s.status === "pending" && <Wand2 className="mr-2 h-4 w-4" />}
                                         {s.status === "not_applicable" && <Info className="mr-2 h-4 w-4 text-muted-foreground" />}
@@ -476,23 +476,23 @@ export default function AutoUpdatePage() {
                                     </AlertDialogTrigger>
                                     <AlertDialogContent className="max-w-3xl">
                                         <AlertDialogHeader>
-                                        <AlertDialogTitle>¿Aplicar esta sugerencia (Simulación)?</AlertDialogTitle>
-                                        <AlertDialogDescription>
-                                            Se intentará aplicar (simuladamente) la siguiente sugerencia al archivo <strong>{s.area}</strong>:
-                                            <blockquote className="mt-2 pl-3 border-l-2 italic text-xs">
+                                        <AlertDialogTitle className="text-foreground">¿Aplicar esta sugerencia (Simulación)?</AlertDialogTitle>
+                                        <AlertDialogDescription className="text-muted-foreground">
+                                            Se intentará aplicar (simuladamente) la siguiente sugerencia al archivo <strong className="text-foreground">{s.area}</strong>:
+                                            <blockquote className="mt-2 pl-3 border-l-2 italic text-xs text-muted-foreground">
                                             {s.suggestion}
                                             </blockquote>
                                             <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[50vh] text-xs">
                                                 <div>
-                                                    <p className="font-semibold mb-1">Contenido Original (Fragmento):</p>
+                                                    <p className="font-semibold mb-1 text-foreground">Contenido Original (Fragmento):</p>
                                                     <ScrollArea className="h-60 border rounded p-2 bg-muted/30">
-                                                        <pre className="text-xs font-mono whitespace-pre-wrap">{s.originalContent?.substring(0,1500) + (s.originalContent && s.originalContent.length > 1500 ? "..." : "") || "No disponible"}</pre>
+                                                        <pre className="text-xs font-mono whitespace-pre-wrap text-foreground">{s.originalContent?.substring(0,1500) + (s.originalContent && s.originalContent.length > 1500 ? "..." : "") || "No disponible"}</pre>
                                                     </ScrollArea>
                                                 </div>
                                                 <div>
-                                                    <p className="font-semibold mb-1">Contenido Sugerido por IA (Fragmento):</p>
+                                                    <p className="font-semibold mb-1 text-foreground">Contenido Sugerido por IA (Fragmento):</p>
                                                     <ScrollArea className="h-60 border rounded p-2 bg-muted/30">
-                                                      <pre className="text-xs font-mono whitespace-pre-wrap">{s.suggestedFullFileContent?.substring(0,1500) + (s.suggestedFullFileContent && s.suggestedFullFileContent.length > 1500 ? "..." : "") || "No disponible"}</pre>
+                                                      <pre className="text-xs font-mono whitespace-pre-wrap text-foreground">{s.suggestedFullFileContent?.substring(0,1500) + (s.suggestedFullFileContent && s.suggestedFullFileContent.length > 1500 ? "..." : "") || "No disponible"}</pre>
                                                     </ScrollArea>
                                                 </div>
                                             </div>
@@ -532,7 +532,7 @@ export default function AutoUpdatePage() {
           {status === "error" && currentAnalysisError && ( 
              <Card className="mt-6 border-destructive bg-destructive/10">
                <CardHeader className="pb-2">
-                <CardTitle className="text-lg flex items-center gap-2 text-destructive-foreground"> 
+                <CardTitle className="text-lg flex items-center gap-2 text-destructive"> 
                   <AlertTriangle className="h-6 w-6" />
                   Error en el Auto-Análisis
                 </CardTitle>
@@ -581,11 +581,11 @@ export default function AutoUpdatePage() {
       <AlertDialog open={isAutoFixModalOpen} onOpenChange={setIsAutoFixModalOpen}>
           <AlertDialogContent className="max-w-2xl">
               <AlertDialogHeader>
-                  <AlertDialogTitle className="flex items-center gap-2">
+                  <AlertDialogTitle className="flex items-center gap-2 text-accent-foreground">
                       <Settings2 className="h-6 w-6 text-accent"/>
                       Sugerencia de Auto-Corrección de Error
                   </AlertDialogTitle>
-                  <AlertDialogDescription>
+                  <AlertDialogDescription className="text-muted-foreground">
                       La IA ha analizado el error y propone lo siguiente. Revisa cuidadosamente antes de considerar cualquier acción.
                   </AlertDialogDescription>
               </AlertDialogHeader>
@@ -593,12 +593,12 @@ export default function AutoUpdatePage() {
                   <ScrollArea className="max-h-[60vh] p-1 -mx-1">
                       <div className="space-y-3 p-3 border rounded-md bg-card">
                           <div>
-                              <h4 className="font-semibold text-sm mb-1">Posible Causa Raíz:</h4>
+                              <h4 className="font-semibold text-sm mb-1 text-foreground">Posible Causa Raíz:</h4>
                               <p className="text-xs text-muted-foreground whitespace-pre-wrap">{autoFixSuggestion.root_cause_analysis}</p>
                           </div>
                           <Separator />
                           <div>
-                              <h4 className="font-semibold text-sm mb-1">Sugerencias de Solución:</h4>
+                              <h4 className="font-semibold text-sm mb-1 text-foreground">Sugerencias de Solución:</h4>
                               <p className="text-xs text-muted-foreground whitespace-pre-wrap">{autoFixSuggestion.solution_suggestions}</p>
                           </div>
                       </div>
@@ -606,7 +606,6 @@ export default function AutoUpdatePage() {
               )}
               <AlertDialogFooter>
                   <AlertDialogCancel onClick={() => setIsAutoFixModalOpen(false)}>Cerrar</AlertDialogCancel>
-                  {/* Podríamos añadir un botón para "Intentar aplicar (simulado)" si la sugerencia es aplicable */}
               </AlertDialogFooter>
           </AlertDialogContent>
       </AlertDialog>

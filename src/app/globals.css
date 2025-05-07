@@ -9,21 +9,21 @@ body {
 @layer base {
   :root {
     --background: 210 17% 94%; /* #ECEFF1 Light Gray */
-    --foreground: 233 30% 20%; /* Dark gray for text */
+    --foreground: 233 30% 20%; /* Dark gray for text, NOT white */
     --card: 0 0% 100%; /* White cards */
-    --card-foreground: 233 30% 20%;
+    --card-foreground: 233 30% 20%; /* Dark gray text on cards */
     --popover: 0 0% 100%;
-    --popover-foreground: 233 30% 20%;
+    --popover-foreground: 233 30% 20%; /* Dark gray text on popovers */
     --primary: 233 63% 30%; /* #1A237E Dark Blue */
-    --primary-foreground: 233 60% 95%; /* Light text on primary */
+    --primary-foreground: 210 17% 95%; /* Light gray, NOT white, for text on primary */
     --secondary: 210 17% 88%; /* Slightly darker gray */
-    --secondary-foreground: 233 30% 25%;
+    --secondary-foreground: 233 30% 25%; /* Darker gray for text on secondary */
     --muted: 210 17% 90%;
-    --muted-foreground: 233 20% 45%;
+    --muted-foreground: 233 20% 45%; /* Mid-gray for muted text */
     --accent: 174 60% 40%; /* #26A69A Teal */
-    --accent-foreground: 174 60% 95%; /* Light text on accent */
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
+    --accent-foreground: 210 17% 95%; /* Light gray, NOT white, for text on accent */
+    --destructive: 0 84.2% 60.2%; /* Red for destructive actions */
+    --destructive-foreground: 0 0% 98%; /* Very light gray for text on destructive */
     --border: 210 17% 85%;
     --input: 210 17% 85%;
     --ring: 174 60% 40%; /* Accent color for rings */
@@ -35,33 +35,33 @@ body {
     --radius: 0.5rem;
 
     /* Sidebar variables aligned with main theme */
-    --sidebar-background: 0 0% 100%; /* Same as card */
-    --sidebar-foreground: 233 30% 20%; /* Same as card-foreground */
-    --sidebar-primary: 233 63% 30%; /* Same as primary */
-    --sidebar-primary-foreground: 233 60% 95%; /* Same as primary-foreground */
-    --sidebar-accent: 174 60% 40%; /* Same as accent */
-    --sidebar-accent-foreground: 174 60% 95%; /* Same as accent-foreground */
-    --sidebar-border: 210 17% 85%; /* Same as border */
-    --sidebar-ring: 174 60% 40%; /* Same as ring */
+    --sidebar-background: 0 0% 100%; 
+    --sidebar-foreground: 233 30% 20%; 
+    --sidebar-primary: 233 63% 30%; 
+    --sidebar-primary-foreground: 210 17% 95%; 
+    --sidebar-accent: 174 60% 40%; 
+    --sidebar-accent-foreground: 210 17% 95%; 
+    --sidebar-border: 210 17% 85%; 
+    --sidebar-ring: 174 60% 40%; 
   }
 
   .dark {
     --background: 233 30% 12%; /* Dark blue-gray */
-    --foreground: 210 17% 94%; /* Light Gray for text */
+    --foreground: 210 17% 85%; /* Lighter Gray for text, NOT white */
     --card: 233 30% 15%;
-    --card-foreground: 210 17% 94%;
+    --card-foreground: 210 17% 85%; /* Lighter Gray text on cards */
     --popover: 233 30% 15%;
-    --popover-foreground: 210 17% 94%;
+    --popover-foreground: 210 17% 85%; /* Lighter Gray text on popovers */
     --primary: 174 60% 50%; /* Brighter Teal for primary action in dark mode */
     --primary-foreground: 174 60% 10%; /* Dark text on light primary */
     --secondary: 233 30% 20%;
-    --secondary-foreground: 210 17% 90%;
+    --secondary-foreground: 210 17% 80%; /* Lighter gray for text on secondary */
     --muted: 233 30% 20%;
-    --muted-foreground: 210 17% 65%;
+    --muted-foreground: 210 17% 60%; /* Mid-light-gray for muted text */
     --accent: 233 63% 55%; /* Brighter Dark Blue for accent in dark mode */
-    --accent-foreground: 233 60% 95%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 0 0% 98%;
+    --accent-foreground: 233 60% 90%; /* Lighter gray for text on accent */
+    --destructive: 0 62.8% 45%; /* Slightly adjusted red for dark mode destructive actions */
+    --destructive-foreground: 0 0% 95%; /* Very light gray for text on destructive */
     --border: 233 30% 25%;
     --input: 233 30% 25%;
     --ring: 174 60% 50%; /* Teal for rings in dark mode */
@@ -72,14 +72,14 @@ body {
     --chart-5: 340 75% 55%;
 
     /* Sidebar variables aligned with main theme for dark mode */
-    --sidebar-background: 233 30% 15%; /* Same as card */
-    --sidebar-foreground: 210 17% 94%; /* Same as card-foreground */
-    --sidebar-primary: 174 60% 50%; /* Same as primary */
-    --sidebar-primary-foreground: 174 60% 10%; /* Same as primary-foreground */
-    --sidebar-accent: 233 63% 55%; /* Same as accent */
-    --sidebar-accent-foreground: 233 60% 95%; /* Same as accent-foreground */
-    --sidebar-border: 233 30% 25%; /* Same as border */
-    --sidebar-ring: 174 60% 50%; /* Same as ring */
+    --sidebar-background: 233 30% 15%; 
+    --sidebar-foreground: 210 17% 85%; 
+    --sidebar-primary: 174 60% 50%; 
+    --sidebar-primary-foreground: 174 60% 10%; 
+    --sidebar-accent: 233 63% 55%; 
+    --sidebar-accent-foreground: 233 60% 90%; 
+    --sidebar-border: 233 30% 25%; 
+    --sidebar-ring: 174 60% 50%;
   }
 }
 
