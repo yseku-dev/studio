@@ -1,16 +1,17 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, ChangeEvent } from 'react';
 import { useForm, SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { handleAnalyzeCode } from '@/app/(app)/analyze/actions';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Wand2, Save } from 'lucide-react';
+import { Loader2, Wand2, Save, UploadCloud, XCircle } from 'lucide-react';
 import { ScrollArea } from './ui/scroll-area';
 
 const formSchema = z.object({
@@ -34,6 +35,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
   const [isLoading, setIsLoading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [originalCode, setOriginalCode] = useState<string>('');
+  const [fileName, setFileName] = useState<string | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -46,9 +48,59 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
     handleSubmit,
     formState: { errors },
     reset,
+    setValue,
+    watch,
   } = useForm<FormData>({
     resolver: zodResolver(formSchema),
+    defaultValues: {
+      code: '',
+    }
   });
+
+  const codeValue = watch('code');
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target?.result as string;
+        setValue('code', content, { shouldValidate: true });
+        setFileName(file.name);
+        toast({
+          title: 'Archivo Cargado',
+          description: `Contenido de "${file.name}" cargado en el área de texto.`,
+        });
+      };
+      reader.onerror = () => {
+        toast({
+          title: 'Error al Leer Archivo',
+          description: 'No se pudo leer el contenido del archivo.',
+          variant: 'destructive',
+        });
+        setFileName(null);
+      };
+      reader.readAsText(file);
+    } else {
+      // Clear if no file is selected or selection is cancelled
+      if (fileName) { // only clear if there was a file previously
+        setValue('code', '');
+        setFileName(null);
+      }
+    }
+     // Reset file input to allow re-uploading the same file
+    event.target.value = '';
+  };
+  
+  const clearFile = () => {
+    setValue('code', '');
+    setFileName(null);
+    toast({
+        title: 'Archivo Eliminado',
+        description: 'El contenido del archivo ha sido eliminado del área de texto.',
+    });
+  };
+
 
   const onSubmit: SubmitHandler<FormData> = async (data) => {
     if (!apiKey || !modelName) {
@@ -107,7 +159,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
             Analiza Tu Código
           </CardTitle>
           <CardDescription>
-            Pega tu código abajo para obtener sugerencias de mejora potenciadas por IA.
+            Pega tu código abajo o sube un archivo para obtener sugerencias de mejora potenciadas por IA.
             {!apiKey || !modelName ? (
                 <span className="text-destructive block mt-1"> (Clave API o Modelo no configurado en Ajustes)</span>
             ) : <span className="text-muted-foreground block mt-1">(Usando modelo: {modelName})</span>}
@@ -115,14 +167,35 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
         </CardHeader>
         <form onSubmit={handleSubmit(onSubmit)}>
           <CardContent className="space-y-4">
-            <div>
+            <div className="space-y-2">
+                <Label htmlFor="code-file" className="text-base flex items-center gap-2">
+                    <UploadCloud className="h-5 w-5" /> Sube un archivo de código (opcional)
+                </Label>
+                <div className="flex items-center gap-2">
+                    <Input 
+                        id="code-file" 
+                        type="file" 
+                        onChange={handleFileChange} 
+                        className="text-base file:text-base flex-grow"
+                        accept=".py,.js,.ts,.jsx,.tsx,.java,.c,.cpp,.cs,.go,.php,.rb,.rs,.swift,.kt,.html,.css,.json,.md, .txt" // Common code file extensions
+                    />
+                    {fileName && (
+                        <Button variant="ghost" size="icon" onClick={clearFile} title="Eliminar archivo cargado">
+                            <XCircle className="h-5 w-5 text-muted-foreground hover:text-destructive" />
+                        </Button>
+                    )}
+                </div>
+                {fileName && <p className="text-sm text-muted-foreground">Archivo cargado: <span className="font-medium text-foreground">{fileName}</span>. Su contenido está en el área de texto.</p>}
+            </div>
+
+            <div className="mt-4">
               <Label htmlFor="code">Entrada de Código (Python recomendado)</Label>
               <Textarea
                 id="code"
                 {...register('code')}
                 rows={15}
                 className="font-mono text-sm bg-card mt-1"
-                placeholder="Pega tu código aquí..."
+                placeholder="Pega tu código aquí o sube un archivo..."
               />
               {errors.code && (
                 <p className="text-sm text-destructive mt-1">{errors.code.message}</p>
@@ -130,7 +203,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
             </div>
           </CardContent>
           <CardFooter>
-            <Button type="submit" disabled={isLoading} className="w-full md:w-auto">
+            <Button type="submit" disabled={isLoading || !codeValue} className="w-full md:w-auto">
               {isLoading ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
