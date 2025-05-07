@@ -8,32 +8,32 @@ export default function DashboardPage() {
     <div className="flex flex-col gap-6">
       <Card className="shadow-lg">
         <CardHeader>
-          <CardTitle className="text-3xl font-bold text-primary">Welcome to CodeAlchemist</CardTitle>
+          <CardTitle className="text-3xl font-bold text-primary">Bienvenido a CodeAlchemist</CardTitle>
           <CardDescription className="text-lg">
-            Your AI-powered assistant for code analysis, refactoring, and version management.
+            Tu asistente potenciado por IA para análisis de código, refactorización y gestión de versiones.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <p className="mb-6">
-            Navigate through the sections using the sidebar to analyze your code, manage snapshots, or configure your settings.
+            Navega por las secciones usando la barra lateral para analizar tu código, gestionar versiones guardadas o configurar tus ajustes.
           </p>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Link href="/analyze" passHref>
               <Button variant="outline" className="w-full h-24 text-lg flex flex-col items-center justify-center gap-2 hover:bg-accent/10">
                 <ScanLine className="h-8 w-8 text-accent" />
-                Analyze Code
+                Analizar Código
               </Button>
             </Link>
             <Link href="/versions" passHref>
               <Button variant="outline" className="w-full h-24 text-lg flex flex-col items-center justify-center gap-2 hover:bg-accent/10">
                 <GitCompareArrows className="h-8 w-8 text-accent" />
-                View Snapshots
+                Ver Versiones
               </Button>
             </Link>
             <Link href="/settings" passHref>
               <Button variant="outline" className="w-full h-24 text-lg flex flex-col items-center justify-center gap-2 hover:bg-accent/10">
                 <SettingsIcon className="h-8 w-8 text-accent" />
-                Configure Settings
+                Configurar Ajustes
               </Button>
             </Link>
           </div>
@@ -42,12 +42,12 @@ export default function DashboardPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Quick Start</CardTitle>
+          <CardTitle>Inicio Rápido</CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
-          <p><strong>1. Configure Settings:</strong> Go to the <Link href="/settings" className="text-accent hover:underline">Settings</Link> page to add your Groq API key and select a model.</p>
-          <p><strong>2. Analyze Code:</strong> Navigate to the <Link href="/analyze" className="text-accent hover:underline">Analyze Code</Link> page, paste your code, and get AI-powered suggestions.</p>
-          <p><strong>3. Manage Snapshots:</strong> Use the <Link href="/versions" className="text-accent hover:underline">Version Snapshots</Link> page to save and compare different versions of your code.</p>
+          <p><strong>1. Configurar Ajustes:</strong> Ve a la página de <Link href="/settings" className="text-accent hover:underline">Configuración</Link> para añadir tu clave API de Groq y seleccionar un modelo.</p>
+          <p><strong>2. Analizar Código:</strong> Navega a la página de <Link href="/analyze" className="text-accent hover:underline">Analizar Código</Link>, pega tu código y obtén sugerencias potenciadas por IA.</p>
+          <p><strong>3. Gestionar Versiones:</strong> Usa la página de <Link href="/versions" className="text-accent hover:underline">Versiones Guardadas</Link> para guardar y comparar diferentes versiones de tu código.</p>
         </CardContent>
       </Card>
     </div>

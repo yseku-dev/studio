@@ -19,13 +19,13 @@ import {
 } from "@/components/ui/select";
 
 const settingsSchema = z.object({
-  groqApiKey: z.string().min(1, 'Groq API Key is required.'),
-  groqModelName: z.string().min(1, 'Groq Model Name is required.'),
+  groqApiKey: z.string().min(1, 'La clave API de Groq es obligatoria.'),
+  groqModelName: z.string().min(1, 'El nombre del modelo de Groq es obligatorio.'),
 });
 
 type SettingsFormData = z.infer<typeof settingsSchema>;
 
-// Supported Groq models - this list can be updated as needed
+// Modelos de Groq soportados - esta lista puede actualizarse según sea necesario
 const groqModels = [
   "llama3-8b-8192",
   "llama3-70b-8192",
@@ -63,10 +63,10 @@ export function SettingsForm() {
     localStorage.setItem('codealchemist_groq_api_key', data.groqApiKey);
     localStorage.setItem('codealchemist_groq_model_name', data.groqModelName);
     toast({
-      title: 'Settings Saved',
-      description: 'Your Groq API Key and Model Name have been updated.',
+      title: 'Configuración Guardada',
+      description: 'Tu clave API de Groq y el nombre del modelo han sido actualizados.',
     });
-    reset(data, { keepValues: true, keepDirty: false }); // Reset dirty state after save
+    reset(data, { keepValues: true, keepDirty: false }); // Restablecer el estado 'dirty' después de guardar
   };
 
   return (
@@ -74,21 +74,21 @@ export function SettingsForm() {
       <CardHeader>
         <CardTitle className="text-2xl flex items-center gap-2">
           <SettingsIcon className="h-6 w-6 text-primary" />
-          Application Settings
+          Configuración de la Aplicación
         </CardTitle>
         <CardDescription>
-          Configure your API keys and select your preferred AI model. These settings are saved in your browser&apos;s local storage.
+          Configura tus claves API y selecciona tu modelo de IA preferido. Estos ajustes se guardan en el almacenamiento local de tu navegador.
         </CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit(onSubmit)}>
         <CardContent className="space-y-6">
           <div className="space-y-2">
-            <Label htmlFor="groqApiKey">Groq API Key</Label>
+            <Label htmlFor="groqApiKey">Clave API de Groq</Label>
             <Input
               id="groqApiKey"
               type="password"
               {...register('groqApiKey')}
-              placeholder="Enter your Groq API Key"
+              placeholder="Introduce tu clave API de Groq"
               className="bg-card"
             />
             {errors.groqApiKey && (
@@ -96,13 +96,13 @@ export function SettingsForm() {
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="groqModelName">Groq Model Name</Label>
+            <Label htmlFor="groqModelName">Nombre del Modelo de Groq</Label>
             <Select
               value={currentModel}
               onValueChange={(value) => setValue('groqModelName', value, { shouldDirty: true })}
             >
               <SelectTrigger id="groqModelName" className="w-full bg-card">
-                <SelectValue placeholder="Select a Groq model" />
+                <SelectValue placeholder="Selecciona un modelo de Groq" />
               </SelectTrigger>
               <SelectContent>
                 {groqModels.map((model) => (
@@ -120,7 +120,7 @@ export function SettingsForm() {
         <CardFooter>
           <Button type="submit" disabled={!isDirty} className="w-full md:w-auto">
             <Save className="mr-2 h-4 w-4" />
-            Save Settings
+            Guardar Configuración
           </Button>
         </CardFooter>
       </form>

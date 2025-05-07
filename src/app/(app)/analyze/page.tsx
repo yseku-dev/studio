@@ -14,28 +14,28 @@ export default function AnalyzePage() {
       
       const newSnapshot = {
         id: crypto.randomUUID(),
-        name: `Analysis ${nameSuffix} - ${new Date().toLocaleString()}`,
+        name: `Análisis ${nameSuffix} - ${new Date().toLocaleString('es-ES')}`, // Localized date
         code: code,
         timestamp: new Date().toISOString(),
       };
       
-      snapshots.unshift(newSnapshot); // Add to the beginning
+      snapshots.unshift(newSnapshot); // Añadir al principio
       localStorage.setItem('codealchemist_snapshots', JSON.stringify(snapshots));
       
       toast({
-        title: 'Snapshot Saved!',
-        description: `${newSnapshot.name} has been saved.`,
+        title: '¡Versión Guardada!',
+        description: `${newSnapshot.name} ha sido guardada.`,
         action: (
             <button onClick={() => router.push('/versions')} className="ml-auto rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90">
-                View Snapshots
+                Ver Versiones
             </button>
         ),
       });
     } catch (error) {
-      console.error("Failed to save snapshot:", error);
+      console.error("Error al guardar la versión:", error);
       toast({
-        title: 'Error Saving Snapshot',
-        description: 'Could not save the snapshot to local storage.',
+        title: 'Error al Guardar Versión',
+        description: 'No se pudo guardar la versión en el almacenamiento local.',
         variant: 'destructive',
       });
     }

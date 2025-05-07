@@ -1,22 +1,22 @@
 'use server';
 /**
- * @fileOverview Explains a code snippet in plain English.
+ * @fileOverview Explica un fragmento de código en lenguaje sencillo.
  *
- * - explainCodeSnippet - A function that explains a code snippet.
- * - ExplainCodeSnippetInput - The input type for the explainCodeSnippet function.
- * - ExplainCodeSnippetOutput - The return type for the explainCodeSnippet function.
+ * - explainCodeSnippet - Una función que explica un fragmento de código.
+ * - ExplainCodeSnippetInput - El tipo de entrada para la función explainCodeSnippet.
+ * - ExplainCodeSnippetOutput - El tipo de retorno para la función explainCodeSnippet.
  */
 
 import {ai} from '@/ai/genkit';
 import {z} from 'genkit';
 
 const ExplainCodeSnippetInputSchema = z.object({
-  code: z.string().describe('The code snippet to explain.'),
+  code: z.string().describe('El fragmento de código a explicar.'),
 });
 export type ExplainCodeSnippetInput = z.infer<typeof ExplainCodeSnippetInputSchema>;
 
 const ExplainCodeSnippetOutputSchema = z.object({
-  explanation: z.string().describe('The explanation of the code snippet in plain English.'),
+  explanation: z.string().describe('La explicación del fragmento de código en lenguaje sencillo.'),
 });
 export type ExplainCodeSnippetOutput = z.infer<typeof ExplainCodeSnippetOutputSchema>;
 
@@ -28,7 +28,7 @@ const prompt = ai.definePrompt({
   name: 'explainCodeSnippetPrompt',
   input: {schema: ExplainCodeSnippetInputSchema},
   output: {schema: ExplainCodeSnippetOutputSchema},
-  prompt: `You are an expert software developer. Explain the following code snippet in plain English, so that a non-technical person can understand it.\n\nCode:\n{{code}}`,
+  prompt: `Eres un desarrollador de software experto. Explica el siguiente fragmento de código en lenguaje sencillo, para que una persona no técnica pueda entenderlo.\n\nCódigo:\n{{code}}`,
 });
 
 const explainCodeSnippetFlow = ai.defineFlow(

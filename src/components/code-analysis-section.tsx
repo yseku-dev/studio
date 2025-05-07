@@ -14,7 +14,7 @@ import { Loader2, Wand2, Save } from 'lucide-react';
 import { ScrollArea } from './ui/scroll-area';
 
 const formSchema = z.object({
-  code: z.string().min(10, 'Code must be at least 10 characters long.'),
+  code: z.string().min(10, 'El código debe tener al menos 10 caracteres.'),
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -53,8 +53,8 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
   const onSubmit: SubmitHandler<FormData> = async (data) => {
     if (!apiKey || !modelName) {
       toast({
-        title: 'Configuration Missing',
-        description: 'Please set your Groq API Key and Model Name in Settings.',
+        title: 'Configuración Faltante',
+        description: 'Por favor, establece tu Clave API de Groq y Nombre de Modelo en Configuración.',
         variant: 'destructive',
       });
       return;
@@ -68,13 +68,13 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
     if (result.success && result.data) {
       setAnalysisResult(result.data);
       toast({
-        title: 'Analysis Complete',
-        description: 'Suggestions generated successfully.',
+        title: 'Análisis Completo',
+        description: 'Sugerencias generadas exitosamente.',
       });
     } else {
       toast({
-        title: 'Analysis Failed',
-        description: result.error || 'An unknown error occurred.',
+        title: 'Análisis Fallido',
+        description: result.error || 'Ocurrió un error desconocido.',
         variant: 'destructive',
       });
     }
@@ -85,15 +85,15 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
     if (originalCode) {
       onSaveSnapshot(originalCode, "original");
     } else {
-      toast({ title: "Nothing to save", description: "Original code is empty.", variant: "destructive" });
+      toast({ title: "Nada que guardar", description: "El código original está vacío.", variant: "destructive" });
     }
   };
 
   const handleSaveSuggestion = () => {
     if (analysisResult?.codeSuggestion) {
-      onSaveSnapshot(analysisResult.codeSuggestion, "suggested");
+      onSaveSnapshot(analysisResult.codeSuggestion, "sugerido");
     } else {
-      toast({ title: "Nothing to save", description: "No code suggestion available.", variant: "destructive" });
+      toast({ title: "Nada que guardar", description: "No hay sugerencia de código disponible.", variant: "destructive" });
     }
   };
 
@@ -104,25 +104,25 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
         <CardHeader>
           <CardTitle className="text-2xl flex items-center gap-2">
             <Wand2 className="h-6 w-6 text-primary" />
-            Analyze Your Code
+            Analiza Tu Código
           </CardTitle>
           <CardDescription>
-            Paste your code below to get AI-powered improvement suggestions.
+            Pega tu código abajo para obtener sugerencias de mejora potenciadas por IA.
             {!apiKey || !modelName ? (
-                <span className="text-destructive block mt-1"> (API Key or Model not set in Settings)</span>
-            ) : <span className="text-muted-foreground block mt-1">(Using model: {modelName})</span>}
+                <span className="text-destructive block mt-1"> (Clave API o Modelo no configurado en Ajustes)</span>
+            ) : <span className="text-muted-foreground block mt-1">(Usando modelo: {modelName})</span>}
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit(onSubmit)}>
           <CardContent className="space-y-4">
             <div>
-              <Label htmlFor="code">Code Input (Python recommended)</Label>
+              <Label htmlFor="code">Entrada de Código (Python recomendado)</Label>
               <Textarea
                 id="code"
                 {...register('code')}
                 rows={15}
                 className="font-mono text-sm bg-card mt-1"
-                placeholder="Paste your code here..."
+                placeholder="Pega tu código aquí..."
               />
               {errors.code && (
                 <p className="text-sm text-destructive mt-1">{errors.code.message}</p>
@@ -136,7 +136,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
               ) : (
                 <Wand2 className="mr-2 h-4 w-4" />
               )}
-              Analyze Code
+              Analizar Código
             </Button>
           </CardFooter>
         </form>
@@ -145,11 +145,11 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
       {analysisResult && (
         <Card className="shadow-lg">
           <CardHeader>
-            <CardTitle className="text-2xl">Analysis Results</CardTitle>
+            <CardTitle className="text-2xl">Resultados del Análisis</CardTitle>
           </CardHeader>
           <CardContent className="space-y-6">
             <div>
-              <h3 className="text-xl font-semibold mb-2">Explanation</h3>
+              <h3 className="text-xl font-semibold mb-2">Explicación</h3>
               <Card className="bg-muted/50">
                 <CardContent className="p-4">
                   <p className="text-sm">{analysisResult.explanation}</p>
@@ -160,9 +160,9 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
             <div className="grid md:grid-cols-2 gap-4">
               <div>
                 <div className="flex justify-between items-center mb-2">
-                    <h3 className="text-xl font-semibold">Original Code</h3>
+                    <h3 className="text-xl font-semibold">Código Original</h3>
                     <Button variant="outline" size="sm" onClick={handleSaveOriginal} disabled={!originalCode}>
-                        <Save className="mr-2 h-4 w-4" /> Save Snapshot
+                        <Save className="mr-2 h-4 w-4" /> Guardar Versión
                     </Button>
                 </div>
                 <ScrollArea className="h-[400px] rounded-md border bg-card p-1">
@@ -171,9 +171,9 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
               </div>
               <div>
                 <div className="flex justify-between items-center mb-2">
-                    <h3 className="text-xl font-semibold">Suggested Code</h3>
+                    <h3 className="text-xl font-semibold">Código Sugerido</h3>
                     <Button variant="outline" size="sm" onClick={handleSaveSuggestion} disabled={!analysisResult.codeSuggestion}>
-                        <Save className="mr-2 h-4 w-4" /> Save Snapshot
+                        <Save className="mr-2 h-4 w-4" /> Guardar Versión
                     </Button>
                 </div>
                 <ScrollArea className="h-[400px] rounded-md border bg-card p-1">

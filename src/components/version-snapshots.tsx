@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/dialog";
 import { Separator } from './ui/separator';
 import { Badge } from './ui/badge';
+import { cn } from '@/lib/utils';
 
 export function VersionSnapshots() {
   const [snapshots, setSnapshots] = useState<CodeSnapshot[]>([]);
@@ -53,7 +54,7 @@ export function VersionSnapshots() {
     const updatedSnapshots = snapshots.filter(snap => snap.id !== id);
     setSnapshots(updatedSnapshots);
     localStorage.setItem('codealchemist_snapshots', JSON.stringify(updatedSnapshots));
-    toast({ title: 'Snapshot Deleted', description: 'The snapshot has been removed.' });
+    toast({ title: 'Versión Eliminada', description: 'La versión ha sido eliminada.' });
     if (selectedSnapshot?.id === id) setSelectedSnapshot(null);
     if (compareSnapshotA?.id === id) setCompareSnapshotA(null);
     if (compareSnapshotB?.id === id) setCompareSnapshotB(null);
@@ -62,7 +63,7 @@ export function VersionSnapshots() {
   const deleteAllSnapshots = () => {
     setSnapshots([]);
     localStorage.removeItem('codealchemist_snapshots');
-    toast({ title: 'All Snapshots Deleted', description: 'All snapshots have been removed.' });
+    toast({ title: 'Todas las Versiones Eliminadas', description: 'Todas las versiones han sido eliminadas.' });
     setSelectedSnapshot(null);
     setCompareSnapshotA(null);
     setCompareSnapshotB(null);
@@ -75,22 +76,22 @@ export function VersionSnapshots() {
   const handleSelectForCompare = (snapshot: CodeSnapshot) => {
     if (!compareSnapshotA) {
       setCompareSnapshotA(snapshot);
-      toast({ title: 'Snapshot A Selected', description: `Selected "${snapshot.name}" for comparison.`});
+      toast({ title: 'Versión A Seleccionada', description: `"${snapshot.name}" seleccionada para comparar.`});
     } else if (!compareSnapshotB && snapshot.id !== compareSnapshotA.id) {
       setCompareSnapshotB(snapshot);
       setIsCompareModalOpen(true);
-      toast({ title: 'Snapshot B Selected', description: `Selected "${snapshot.name}" for comparison. Showing diff.`});
+      toast({ title: 'Versión B Seleccionada', description: `"${snapshot.name}" seleccionada para comparar. Mostrando diferencias.`});
     } else if (snapshot.id === compareSnapshotA.id) {
       setCompareSnapshotA(null);
-       toast({ title: 'Snapshot A Deselected'});
+       toast({ title: 'Versión A Deseleccionada'});
     } else if (compareSnapshotB && snapshot.id === compareSnapshotB.id) {
        setCompareSnapshotB(null);
-       toast({ title: 'Snapshot B Deselected'});
+       toast({ title: 'Versión B Deseleccionada'});
     } else {
-      // Both A and B are selected, new selection replaces B
+      // A y B están seleccionadas, la nueva selección reemplaza a B
       setCompareSnapshotB(snapshot);
       setIsCompareModalOpen(true);
-      toast({ title: 'Snapshot B Replaced', description: `Selected "${snapshot.name}" for comparison. Showing diff.`});
+      toast({ title: 'Versión B Reemplazada', description: `"${snapshot.name}" seleccionada para comparar. Mostrando diferencias.`});
     }
   };
 
@@ -98,17 +99,17 @@ export function VersionSnapshots() {
     const blob = new Blob([snapshot.code], { type: 'text/plain;charset=utf-8' });
     const link = document.createElement('a');
     link.href = URL.createObjectURL(blob);
-    const fileName = snapshot.name.replace(/[^a-z0-9_.-]/gi, '_').toLowerCase() + '.py'; // Assuming Python for now
+    const fileName = snapshot.name.replace(/[^a-z0-9_.-]/gi, '_').toLowerCase() + '.py'; // Asumiendo Python por ahora
     link.download = fileName;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(link.href);
-    toast({ title: 'Snapshot Downloaded', description: `${fileName} has been downloaded.` });
+    toast({ title: 'Versión Descargada', description: `${fileName} ha sido descargada.` });
   };
   
   const getDiff = (textA: string, textB: string) => {
-    // Basic line-by-line diff, can be replaced with a more sophisticated library
+    // Diff básico línea por línea, puede reemplazarse con una biblioteca más sofisticada
     const linesA = textA.split('\n');
     const linesB = textB.split('\n');
     const maxLen = Math.max(linesA.length, linesB.length);
@@ -140,7 +141,7 @@ export function VersionSnapshots() {
       <style jsx global>{`
         .diff-line { white-space: pre-wrap; font-family: monospace; font-size: 0.875rem; padding: 0.125rem 0.5rem; display: flex;}
         .diff-line .line-num { display: inline-block; width: 3em; color: hsl(var(--muted-foreground)); text-align: right; margin-right: 1em; user-select: none; }
-        .diff-line.same { /* No specific background for same lines */ }
+        .diff-line.same { /* Sin fondo específico para líneas iguales */ }
         .diff-line.added { background-color: hsla(var(--accent)/0.1); color: hsl(var(--accent-foreground) / 0.9); }
         .diff-line.removed { background-color: hsla(var(--destructive)/0.1); color: hsl(var(--destructive-foreground) / 0.9); }
         .diff-line.added .line-num { color: hsl(var(--accent-foreground)/0.7); }
@@ -151,30 +152,30 @@ export function VersionSnapshots() {
           <div>
             <CardTitle className="text-2xl flex items-center gap-2">
               <GitCompareArrows className="h-6 w-6 text-primary" />
-              Version Snapshots
+              Versiones Guardadas
             </CardTitle>
             <CardDescription>
-              Manage and compare your saved code snapshots. Select two snapshots to compare.
+              Gestiona y compara tus versiones de código guardadas. Selecciona dos versiones para comparar.
             </CardDescription>
           </div>
           {snapshots.length > 0 && (
              <AlertDialog>
               <AlertDialogTrigger asChild>
                 <Button variant="destructive" size="sm">
-                  <Trash2 className="mr-2 h-4 w-4" /> Delete All
+                  <Trash2 className="mr-2 h-4 w-4" /> Eliminar Todas
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
-                  <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                  <AlertDialogTitle>¿Estás absolutamente seguro?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This action cannot be undone. This will permanently delete all your snapshots.
+                    Esta acción no se puede deshacer. Esto eliminará permanentemente todas tus versiones.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
                   <AlertDialogAction onClick={deleteAllSnapshots}>
-                    Yes, delete all
+                    Sí, eliminar todas
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -185,8 +186,8 @@ export function VersionSnapshots() {
           {snapshots.length === 0 ? (
             <div className="text-center py-12">
               <FileText className="mx-auto h-16 w-16 text-muted-foreground mb-4" />
-              <p className="text-muted-foreground text-lg">No snapshots found.</p>
-              <p className="text-sm text-muted-foreground">Save snapshots from the <a href="/analyze" className="text-accent hover:underline">Analyze Code</a> page.</p>
+              <p className="text-muted-foreground text-lg">No se encontraron versiones.</p>
+              <p className="text-sm text-muted-foreground">Guarda versiones desde la página <a href="/analyze" className="text-accent hover:underline">Analizar Código</a>.</p>
             </div>
           ) : (
             <ScrollArea className="h-[600px] pr-4">
@@ -201,7 +202,7 @@ export function VersionSnapshots() {
                         <div>
                           <h3 className="font-semibold">{snap.name}</h3>
                           <p className="text-xs text-muted-foreground">
-                            {new Date(snap.timestamp).toLocaleString()}
+                            {new Date(snap.timestamp).toLocaleString('es-ES')}
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
@@ -210,6 +211,7 @@ export function VersionSnapshots() {
                             size="sm"
                             onClick={() => handleSelectForCompare(snap)}
                             className={cn(compareSnapshotA?.id === snap.id && "bg-primary text-primary-foreground")}
+                            title="Seleccionar como Versión A"
                           >
                             A
                           </Button>
@@ -219,32 +221,33 @@ export function VersionSnapshots() {
                             onClick={() => handleSelectForCompare(snap)}
                             disabled={!compareSnapshotA || compareSnapshotA.id === snap.id}
                             className={cn(compareSnapshotB?.id === snap.id && "bg-primary text-primary-foreground")}
+                            title="Seleccionar como Versión B"
                           >
                             B
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => handleViewSnapshot(snap)} title="View Code">
+                          <Button variant="ghost" size="icon" onClick={() => handleViewSnapshot(snap)} title="Ver Código">
                             <Eye className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => downloadSnapshot(snap)} title="Download Code">
+                          <Button variant="ghost" size="icon" onClick={() => downloadSnapshot(snap)} title="Descargar Código">
                             <Download className="h-4 w-4" />
                           </Button>
                           <AlertDialog>
                             <AlertDialogTrigger asChild>
-                              <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive hover:bg-destructive/10" title="Delete Snapshot">
+                              <Button variant="ghost" size="icon" className="text-destructive hover:text-destructive hover:bg-destructive/10" title="Eliminar Versión">
                                 <Trash2 className="h-4 w-4" />
                               </Button>
                             </AlertDialogTrigger>
                             <AlertDialogContent>
                               <AlertDialogHeader>
-                                <AlertDialogTitle>Delete Snapshot?</AlertDialogTitle>
+                                <AlertDialogTitle>¿Eliminar Versión?</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                  Are you sure you want to delete &quot;{snap.name}&quot;? This action cannot be undone.
+                                  ¿Estás seguro de que quieres eliminar &quot;{snap.name}&quot;? Esta acción no se puede deshacer.
                                 </AlertDialogDescription>
                               </AlertDialogHeader>
                               <AlertDialogFooter>
-                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogCancel>Cancelar</AlertDialogCancel>
                                 <AlertDialogAction onClick={() => deleteSnapshot(snap.id)}>
-                                  Delete
+                                  Eliminar
                                 </AlertDialogAction>
                               </AlertDialogFooter>
                             </AlertDialogContent>
@@ -260,7 +263,7 @@ export function VersionSnapshots() {
         </CardContent>
          {snapshots.length > 0 && (
           <CardFooter className="text-sm text-muted-foreground flex items-center gap-1">
-            <Info className="h-4 w-4"/> Select two snapshots (A and B) to compare their differences.
+            <Info className="h-4 w-4"/> Selecciona dos versiones (A y B) para comparar sus diferencias.
           </CardFooter>
         )}
       </Card>
@@ -271,7 +274,7 @@ export function VersionSnapshots() {
             <DialogHeader>
               <DialogTitle>{selectedSnapshot.name}</DialogTitle>
               <DialogDescription>
-                Saved on: {new Date(selectedSnapshot.timestamp).toLocaleString()}
+                Guardado el: {new Date(selectedSnapshot.timestamp).toLocaleString('es-ES')}
               </DialogDescription>
             </DialogHeader>
             <Separator className="my-4" />
@@ -279,7 +282,7 @@ export function VersionSnapshots() {
               <pre className="p-4 text-sm font-mono whitespace-pre-wrap break-all">{selectedSnapshot.code}</pre>
             </ScrollArea>
              <DialogClose asChild>
-                <Button type="button" variant="outline" className="mt-4">Close</Button>
+                <Button type="button" variant="outline" className="mt-4">Cerrar</Button>
             </DialogClose>
           </DialogContent>
         </Dialog>
@@ -289,16 +292,13 @@ export function VersionSnapshots() {
          <Dialog open={isCompareModalOpen} onOpenChange={(isOpen) => {
              if(!isOpen) {
                  setIsCompareModalOpen(false);
-                 // Optionally clear selections when closing compare dialog, or keep them for re-opening.
-                 // setCompareSnapshotA(null); 
-                 // setCompareSnapshotB(null);
              } else {
                  setIsCompareModalOpen(true);
              }
          }}>
           <DialogContent className="max-w-5xl w-[90vw] h-[90vh] flex flex-col">
             <DialogHeader>
-              <DialogTitle>Comparing Snapshots</DialogTitle>
+              <DialogTitle>Comparando Versiones</DialogTitle>
               <DialogDescription className="flex flex-wrap items-center gap-2">
                 <Badge variant="outline">A: {compareSnapshotA.name}</Badge>
                 <Badge variant="outline">B: {compareSnapshotB.name}</Badge>
@@ -319,7 +319,7 @@ export function VersionSnapshots() {
             </div>
             <div className="mt-4 flex justify-end">
                 <DialogClose asChild>
-                    <Button type="button" variant="outline">Close</Button>
+                    <Button type="button" variant="outline">Cerrar</Button>
                 </DialogClose>
             </div>
           </DialogContent>

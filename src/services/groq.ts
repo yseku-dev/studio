@@ -1,46 +1,49 @@
 /**
- * Represents the response from Groq's language model API.
+ * Representa la respuesta de la API del modelo de lenguaje de Groq.
  */
 export interface GroqResponse {
   /**
-   * The generated code suggestion from the Groq model.
+   * La sugerencia de código generada por el modelo Groq.
    */
   codeSuggestion: string;
   /**
-   * A description of the suggested change.
+   * Una descripción del cambio sugerido.
    */
   explanation: string;
 }
 
 /**
- * Configuration options for interacting with the Groq API.
+ * Opciones de configuración para interactuar con la API de Groq.
  */
 export interface GroqOptions {
   /**
-   * The API key for authenticating with Groq.
+   * La clave API para autenticarse con Groq.
    */
   apiKey: string;
   /**
-   * The specific Groq model to use for code analysis.
+   * El modelo específico de Groq a utilizar para el análisis de código.
    */
   modelName: string;
 }
 
 /**
- * Asynchronously analyzes code using the Groq language model API to suggest improvements.
+ * Analiza de forma asíncrona el código utilizando la API del modelo de lenguaje Groq
+ * para sugerir mejoras.
  *
- * @param code The code to analyze.
- * @param options Configuration options for the Groq API.
- * @returns A promise that resolves to a GroqResponse object containing the code suggestion and explanation.
+ * @param code El código a analizar.
+ * @param options Opciones de configuración para la API de Groq.
+ * @returns Una promesa que se resuelve en un objeto GroqResponse que contiene la sugerencia de código y la explicación.
  */
 export async function analyzeCodeWithGroq(
   code: string,
   options: GroqOptions
 ): Promise<GroqResponse> {
-  // TODO: Implement this by calling the Groq API.
+  // TODO: Implementar esto llamando a la API de Groq.
+  // Asegúrate de manejar errores de red y de API de forma adecuada.
 
+  // Este es un ejemplo de respuesta simulada. Reemplazar con la llamada real a la API.
   return {
-    codeSuggestion: "// Refactored code here",
-    explanation: "This change improves performance.",
+    codeSuggestion: "// Código refactorizado aquí",
+    explanation: "Este cambio mejora el rendimiento.",
   };
 }

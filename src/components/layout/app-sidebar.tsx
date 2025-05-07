@@ -17,10 +17,10 @@ import { LayoutDashboard, ScanLine, GitCompareArrows, Settings, PackageSearch } 
 import { cn } from '@/lib/utils';
 
 const navItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/analyze', label: 'Analyze Code', icon: ScanLine },
-  { href: '/versions', label: 'Version Snapshots', icon: GitCompareArrows },
-  { href: '/settings', label: 'Settings', icon: Settings },
+  { href: '/dashboard', label: 'Panel de Control', icon: LayoutDashboard },
+  { href: '/analyze', label: 'Analizar Código', icon: ScanLine },
+  { href: '/versions', label: 'Versiones Guardadas', icon: GitCompareArrows },
+  { href: '/settings', label: 'Configuración', icon: Settings },
 ];
 
 export function AppSidebar() {

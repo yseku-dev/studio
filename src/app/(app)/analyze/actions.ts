@@ -14,7 +14,7 @@ export async function handleAnalyzeCode(
   modelName: string
 ): Promise<AnalyzeCodeResult> {
   if (!apiKey || !modelName) {
-    return { success: false, error: "API key and model name are required. Please configure them in settings." };
+    return { success: false, error: "La clave API y el nombre del modelo son obligatorios. Por favor, configúralos en ajustes." };
   }
 
   const input: SuggestCodeImprovementsInput = {
@@ -24,14 +24,14 @@ export async function handleAnalyzeCode(
   };
 
   try {
-    // The AI flow is expected to call the actual Groq service.
-    // The provided `analyzeCodeWithGroq` in `src/services/groq.ts` is a placeholder.
-    // We trust the AI flow `suggestCodeImprovements` to handle the actual call.
+    // Se espera que el flujo de IA llame al servicio Groq real.
+    // La función `analyzeCodeWithGroq` proporcionada en `src/services/groq.ts` es un marcador de posición.
+    // Confiamos en que el flujo de IA `suggestCodeImprovements` maneje la llamada real.
     const result = await suggestCodeImprovements(input);
     return { success: true, data: result };
   } catch (error) {
-    console.error("Error analyzing code:", error);
-    const errorMessage = error instanceof Error ? error.message : "An unknown error occurred during analysis.";
-    return { success: false, error: `Failed to analyze code: ${errorMessage}` };
+    console.error("Error analizando el código:", error);
+    const errorMessage = error instanceof Error ? error.message : "Ocurrió un error desconocido durante el análisis.";
+    return { success: false, error: `Falló el análisis del código: ${errorMessage}` };
   }
 }

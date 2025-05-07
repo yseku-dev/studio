@@ -1,11 +1,11 @@
-// use server'
+'use server';
 
 /**
- * @fileOverview Provides AI-powered suggestions for improving code.
+ * @fileOverview Proporciona sugerencias impulsadas por IA para mejorar el código.
  *
- * - suggestCodeImprovements - A function that suggests code improvements.
- * - SuggestCodeImprovementsInput - The input type for the suggestCodeImprovements function.
- * - SuggestCodeImprovementsOutput - The return type for the suggestCodeImprovements function.
+ * - suggestCodeImprovements - Una función que sugiere mejoras de código.
+ * - SuggestCodeImprovementsInput - El tipo de entrada para la función suggestCodeImprovements.
+ * - SuggestCodeImprovementsOutput - El tipo de retorno para la función suggestCodeImprovements.
  */
 
 import {ai} from '@/ai/genkit';
@@ -13,15 +13,15 @@ import {z} from 'genkit';
 import {analyzeCodeWithGroq, GroqOptions, GroqResponse} from '@/services/groq';
 
 const SuggestCodeImprovementsInputSchema = z.object({
-  code: z.string().describe('The code to analyze for improvements.'),
-  groqApiKey: z.string().describe('The API key for accessing the Groq model.'),
-  groqModelName: z.string().describe('The name of the Groq model to use.'),
+  code: z.string().describe('El código a analizar para mejoras.'),
+  groqApiKey: z.string().describe('La clave API para acceder al modelo Groq.'),
+  groqModelName: z.string().describe('El nombre del modelo Groq a utilizar.'),
 });
 export type SuggestCodeImprovementsInput = z.infer<typeof SuggestCodeImprovementsInputSchema>;
 
 const SuggestCodeImprovementsOutputSchema = z.object({
-  codeSuggestion: z.string().describe('The suggested improved code.'),
-  explanation: z.string().describe('The explanation of the suggested improvement.'),
+  codeSuggestion: z.string().describe('El código mejorado sugerido.'),
+  explanation: z.string().describe('La explicación de la mejora sugerida.'),
 });
 export type SuggestCodeImprovementsOutput = z.infer<typeof SuggestCodeImprovementsOutputSchema>;
 
@@ -41,6 +41,8 @@ const suggestCodeImprovementsFlow = ai.defineFlow(
       modelName: input.groqModelName,
     };
 
+    // Aquí es donde se llamaría al servicio Groq real.
+    // Por ahora, utiliza la implementación simulada en src/services/groq.ts
     const groqResponse: GroqResponse = await analyzeCodeWithGroq(input.code, groqOptions);
 
     return {
