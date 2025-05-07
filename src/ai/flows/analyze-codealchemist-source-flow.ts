@@ -5,6 +5,7 @@
  * - analyzeCodeAlchemistSource - Una función que analiza el código fuente de CodeAlchemist usando la API de Groq.
  * - AnalyzeCodeAlchemistSourceInput - El tipo de entrada para la función analyzeCodeAlchemistSource.
  * - AnalyzeCodeAlchemistSourceOutput - El tipo de retorno para la función analyzeCodeAlchemistSource.
+ * - SuggestionUnit - El tipo para una única unidad de sugerencia.
  */
 
 import {z} from 'zod'; // Zod sigue siendo útil para la validación de esquemas
@@ -17,15 +18,20 @@ const AnalyzeCodeAlchemistSourceInputSchema = z.object({
 });
 export type AnalyzeCodeAlchemistSourceInput = z.infer<typeof AnalyzeCodeAlchemistSourceInputSchema>;
 
+// Definir el esquema para una única sugerencia
+const SuggestionUnitSchema = z.object({
+  area: z.string().describe('El área/componente al que se aplica la sugerencia.'),
+  suggestion: z.string().describe('Una sugerencia específica para mejora o refactorización.'),
+  priority: z.enum(['high', 'medium', 'low']).optional().describe('Prioridad de la sugerencia.'),
+});
+export type SuggestionUnit = z.infer<typeof SuggestionUnitSchema>;
+
+
 // La salida del flujo coincidirá con ProjectAnalysisGroqResponse para simplificar
 const AnalyzeCodeAlchemistSourceOutputSchema = z.object({
   analysisTitle: z.string().describe('Un título conciso para los hallazgos del análisis.'),
   identifiedAreas: z.array(z.string()).describe('Áreas o archivos específicos identificados para una posible revisión o mejora.'),
-  suggestions: z.array(z.object({
-    area: z.string().describe('El área/componente al que se aplica la sugerencia.'),
-    suggestion: z.string().describe('Una sugerencia específica para mejora o refactorización.'),
-    priority: z.enum(['high', 'medium', 'low']).optional().describe('Prioridad de la sugerencia.'),
-  })).describe('Una lista de sugerencias para mejorar.'),
+  suggestions: z.array(SuggestionUnitSchema).describe('Una lista de sugerencias para mejorar.'),
   overallAssessment: z.string().describe('Una breve evaluación general del código fuente de CodeAlchemist proporcionado.')
 });
 export type AnalyzeCodeAlchemistSourceOutput = z.infer<typeof AnalyzeCodeAlchemistSourceOutputSchema>;

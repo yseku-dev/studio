@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -7,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange } from './actions';
-import type { AnalyzeCodeAlchemistSourceOutput, AnalyzeCodeAlchemistSourceInput } from '@/ai/flows/analyze-codealchemist-source-flow';
+import type { AnalyzeCodeAlchemistSourceOutput, SuggestionUnit } from '@/ai/flows/analyze-codealchemist-source-flow';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -28,7 +27,7 @@ import { Textarea } from '@/components/ui/textarea';
 type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "success" | "error";
 type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying";
 
-interface SuggestionWithStatus extends AnalyzeCodeAlchemistSourceOutput['suggestions'][0] {
+interface SuggestionWithStatus extends SuggestionUnit {
   id: string;
   status: SuggestionStatus;
   errorMessage?: string;
@@ -45,7 +44,7 @@ export default function AutoUpdatePage() {
   const [analysisResult, setAnalysisResult] = useState<AnalyzeCodeAlchemistSourceOutput | null>(null);
   const [suggestionsWithStatus, setSuggestionsWithStatus] = useState<SuggestionWithStatus[]>([]);
   const [isDownloading, setIsDownloading] = useState(false);
-  const [projectFiles, setProjectFiles] = useState<Awaited<ReturnType<typeof getApplicationSourceBundle>>['data']>([]);
+  const [projectFiles, setProjectFiles] = useState<Awaited<ReturnType<typeof getApplicationSourceBundle>>['files']>([]); // Corrected type
   const { toast } = useToast();
 
   const [apiKey, setApiKey] = useState<string | null>(null);
@@ -75,15 +74,16 @@ export default function AutoUpdatePage() {
       return;
     }
 
-    setStatus("analyzing");
+    setStatus("loading_source"); // Status update
     setAnalysisResult(null);
     setSuggestionsWithStatus([]);
     toast({
       title: "Auto-Análisis Iniciado",
-      description: "Analizando el código fuente completo de CodeAlchemist..."
+      description: "Cargando y analizando el código fuente completo de CodeAlchemist..."
     });
 
     await fetchProjectFiles(); // Cargar archivos para referencia antes de que las sugerencias se procesen
+    setStatus("analyzing"); // Status update after loading files
 
     const result = await handleAutoAnalyzeAppSource(apiKey, modelName);
 
@@ -129,27 +129,29 @@ export default function AutoUpdatePage() {
         setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying" as SuggestionStatus, errorMessage: "Falta contenido original o sugerido."} : s));
         return;
     }
+    
+    if(!suggestionToApply.area){
+        toast({ title: "Error", description: `El área de la sugerencia (nombre del archivo) no está definida. No se puede aplicar.`, variant: "destructive" });
+        setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying" as SuggestionStatus, errorMessage: "Falta el nombre del archivo en la sugerencia."} : s));
+        return;
+    }
+
 
     setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "applying" as SuggestionStatus} : s));
     
     toast({ title: "Aplicando Sugerencia...", description: `Aplicando cambio a ${suggestionToApply.area}` });
-
-    // SIMULACIÓN: En una app real, aquí llamarías a `applySuggestedChange`
-    // const result = await applySuggestedChange(suggestionToApply.area, suggestionToApply.originalContent, suggestionToApply.suggestedContent);
     
-    // Para esta simulación, solo marcamos como aplicado después de un tiempo.
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    const result = { success: true, newContent: suggestionToApply.suggestedContent }; // Resultado simulado
-
+    const result = await applySuggestedChange(suggestionToApply.area, suggestionToApply.originalContent, suggestionToApply.suggestedContent);
+    
 
     if (result.success) {
-      setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "applied" as SuggestionStatus, originalContent: result.newContent } : s));
-      toast({ title: "Sugerencia Aplicada (Simulado)", description: `El cambio para ${suggestionToApply.area} se ha simulado como aplicado.`});
+      setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "applied" as SuggestionStatus, originalContent: result.newContent, suggestedContent: result.newContent } : s)); // Update suggestedContent as well for consistency if applied successfully
+      toast({ title: "Sugerencia Aplicada", description: `El cambio para ${suggestionToApply.area} se ha aplicado (simulado).`});
       // Actualizar el archivo en projectFiles localmente si es necesario para futuras referencias
-      setProjectFiles(prevFiles => prevFiles.map(pf => pf.fileName === suggestionToApply.area ? {...pf, content: result.newContent!} : pf));
+      setProjectFiles(prevFiles => (prevFiles || []).map(pf => pf.fileName === suggestionToApply.area ? {...pf, content: result.newContent!} : pf));
     } else {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying" as SuggestionStatus, errorMessage: result.error} : s));
-      toast({ title: "Error al Aplicar (Simulado)", description: result.error || `No se pudo aplicar el cambio a ${suggestionToApply.area}.`, variant: "destructive"});
+      toast({ title: "Error al Aplicar", description: result.error || `No se pudo aplicar el cambio a ${suggestionToApply.area}.`, variant: "destructive"});
     }
   };
 
@@ -299,7 +301,7 @@ export default function AutoUpdatePage() {
                                     <Button 
                                         size="sm" 
                                         variant="outline" 
-                                        disabled={s.status === "applying" || s.status === "applied" || !s.originalContent || !s.suggestedContent}
+                                        disabled={s.status === "applying" || s.status === "applied" || !s.originalContent || !s.suggestedContent || !s.area}
                                         className={s.status === "applied" ? "border-green-500 text-green-600" : ""}
                                     >
                                     {s.status === "applying" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -356,15 +358,15 @@ export default function AutoUpdatePage() {
             </div>
           )}
           {status === "error" && !analysisResult && ( 
-             <Card className="mt-6 border-red-500 bg-red-500/5">
+             <Card className="mt-6 border-destructive bg-destructive/10">
                <CardHeader className="pb-2">
-                <CardTitle className="text-lg flex items-center gap-2 text-red-700 dark:text-red-400">
+                <CardTitle className="text-lg flex items-center gap-2 text-destructive-foreground">
                   <AlertTriangle className="h-6 w-6" />
                   Error en el Auto-Análisis
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <p className="text-red-700 dark:text-red-400">Ocurrió un error durante el auto-análisis. Revisa la consola para más detalles o inténtalo de nuevo.</p>
+                <p className="text-destructive-foreground">Ocurrió un error durante el auto-análisis. Revisa la consola para más detalles o inténtalo de nuevo.</p>
               </CardContent>
             </Card>
           )}
@@ -380,4 +382,3 @@ export default function AutoUpdatePage() {
     </div>
   );
 }
-
