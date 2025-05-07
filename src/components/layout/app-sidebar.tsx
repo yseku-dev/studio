@@ -1,3 +1,4 @@
+
 'use client';
 
 import Link from 'next/link';
@@ -9,16 +10,17 @@ import {
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
-  SidebarTrigger,
 } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { LayoutDashboard, ScanLine, GitCompareArrows, Settings, PackageSearch } from 'lucide-react';
+import { LayoutDashboard, ScanLine, GitCompareArrows, Settings, PackageSearch, FolderSearch, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
   { href: '/dashboard', label: 'Panel de Control', icon: LayoutDashboard },
   { href: '/analyze', label: 'Analizar Código', icon: ScanLine },
+  { href: '/project-analysis', label: 'Analizar Proyecto', icon: FolderSearch },
+  { href: '/autoupdate', label: 'AutoUpdate', icon: Sparkles },
   { href: '/versions', label: 'Versiones Guardadas', icon: GitCompareArrows },
   { href: '/settings', label: 'Configuración', icon: Settings },
 ];
@@ -67,3 +69,4 @@ export function AppSidebar() {
     </Sidebar>
   );
 }
+
