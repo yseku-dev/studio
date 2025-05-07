@@ -19,7 +19,7 @@ const AnalyzeCodeAlchemistSourceInputSchema = z.object({
 export type AnalyzeCodeAlchemistSourceInput = z.infer<typeof AnalyzeCodeAlchemistSourceInputSchema>;
 
 // La salida del flujo coincidirá con ProjectAnalysisGroqResponse para simplificar
-export const AnalyzeCodeAlchemistSourceOutputSchema = z.object({
+const AnalyzeCodeAlchemistSourceOutputSchema = z.object({
   analysisTitle: z.string().describe('Un título conciso para los hallazgos del análisis.'),
   identifiedAreas: z.array(z.string()).describe('Áreas o archivos específicos identificados para una posible revisión o mejora.'),
   suggestions: z.array(z.object({
@@ -54,3 +54,4 @@ const analyzeCodeAlchemistSourceFlow = ai.defineFlow(
     return analysisResult;
   }
 );
+
