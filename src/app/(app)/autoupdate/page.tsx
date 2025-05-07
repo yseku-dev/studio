@@ -3,10 +3,10 @@
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info } from "lucide-react";
+import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3 } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange } from './actions';
-import type { AnalyzeCodeAlchemistSourceOutput, SuggestionUnit } from '@/ai/flows/analyze-codealchemist-source-flow';
+import type { AnalyzeCodeAlchemistSourceOutput, SuggestionUnit as FlowSuggestionUnit } from '@/ai/flows/analyze-codealchemist-source-flow';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -19,23 +19,21 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Textarea } from '@/components/ui/textarea';
+import JSZip from 'jszip'; // For zipping files
+import { Label } from '@/components/ui/label';
 
 
 type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "success" | "error";
-type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying";
+type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
 
-interface SuggestionWithStatus extends SuggestionUnit {
+interface SuggestionWithStatus extends FlowSuggestionUnit {
   id: string;
   status: SuggestionStatus;
   errorMessage?: string;
-  // Para poder aplicar el cambio, necesitamos el contenido original del archivo al que se refiere.
-  // Esto es una simplificación; idealmente, el LLM debería devolver el contenido original modificado
-  // o un diff aplicable. Por ahora, asumiremos que 'area' es el nombre del archivo.
   originalContent?: string; 
-  suggestedContent?: string; // Y el contenido sugerido completo.
+  // 'suggestedFullFileContent' from FlowSuggestionUnit will be used
 }
 
 
@@ -44,7 +42,8 @@ export default function AutoUpdatePage() {
   const [analysisResult, setAnalysisResult] = useState<AnalyzeCodeAlchemistSourceOutput | null>(null);
   const [suggestionsWithStatus, setSuggestionsWithStatus] = useState<SuggestionWithStatus[]>([]);
   const [isDownloading, setIsDownloading] = useState(false);
-  const [projectFiles, setProjectFiles] = useState<Awaited<ReturnType<typeof getApplicationSourceBundle>>['files']>([]); // Corrected type
+  const [projectFiles, setProjectFiles] = useState<Awaited<ReturnType<typeof getApplicationSourceBundle>>['files']>([]);
+  const [analysisPreferences, setAnalysisPreferences] = useState<string>("");
   const { toast } = useToast();
 
   const [apiKey, setApiKey] = useState<string | null>(null);
@@ -74,7 +73,7 @@ export default function AutoUpdatePage() {
       return;
     }
 
-    setStatus("loading_source"); // Status update
+    setStatus("loading_source"); 
     setAnalysisResult(null);
     setSuggestionsWithStatus([]);
     toast({
@@ -82,25 +81,25 @@ export default function AutoUpdatePage() {
       description: "Cargando y analizando el código fuente completo de CodeAlchemist..."
     });
 
-    await fetchProjectFiles(); // Cargar archivos para referencia antes de que las sugerencias se procesen
-    setStatus("analyzing"); // Status update after loading files
+    await fetchProjectFiles(); // Cargar archivos para referencia ANTES de que las sugerencias se procesen
+    setStatus("analyzing"); 
 
-    const result = await handleAutoAnalyzeAppSource(apiKey, modelName);
+    const result = await handleAutoAnalyzeAppSource(apiKey, modelName, analysisPreferences);
 
     if (result.success && result.data) {
       setAnalysisResult(result.data);
-      // Aquí necesitaríamos una lógica más sofisticada para mapear `area` a contenido real.
-      // Por ahora, intentaremos encontrar el archivo.
       const initialSuggestions = result.data.suggestions.map((s, index) => {
-        const relatedFile = projectFiles?.find(f => f.fileName.includes(s.area));
+        const relatedFile = projectFiles?.find(f => s.area && f.fileName.toLowerCase().includes(s.area.toLowerCase()));
+        let currentStatus: SuggestionStatus = "pending";
+        if (!s.suggestedFullFileContent || !relatedFile) {
+            currentStatus = "not_applicable";
+        }
+
         return {
           ...s,
           id: `suggestion-${index}-${Date.now()}`,
-          status: "pending" as SuggestionStatus,
-          originalContent: relatedFile?.content, // Puede ser undefined si no se encuentra
-          // El LLM debería devolver el CÓDIGO COMPLETO SUGERIDO para el archivo, no solo la sugerencia de cambio.
-          // Esto es una GRAN SIMPLIFICACIÓN.
-          suggestedContent: `// --- CONTENIDO ORIGINAL DE ${s.area} ---\n${relatedFile?.content}\n\n// --- SUGERENCIA APLICADA ---\n// ${s.suggestion}\n// (Este es un marcador de posición. El LLM debe proporcionar el archivo completo modificado.)`
+          status: currentStatus,
+          originalContent: relatedFile?.content,
         };
       });
       setSuggestionsWithStatus(initialSuggestions);
@@ -124,37 +123,48 @@ export default function AutoUpdatePage() {
     if (suggestionIndex === -1) return;
 
     const suggestionToApply = suggestionsWithStatus[suggestionIndex];
-    if (!suggestionToApply.originalContent || !suggestionToApply.suggestedContent) {
-        toast({ title: "Error", description: `No se encontró el contenido original o sugerido para ${suggestionToApply.area}. No se puede aplicar.`, variant: "destructive" });
-        setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying" as SuggestionStatus, errorMessage: "Falta contenido original o sugerido."} : s));
+    
+    if (!suggestionToApply.area) {
+        toast({ title: "Error", description: `El área (nombre de archivo) no está definida para esta sugerencia.`, variant: "destructive" });
+        setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: "Falta el nombre del archivo en la sugerencia."} : s));
         return;
     }
-    
-    if(!suggestionToApply.area){
-        toast({ title: "Error", description: `El área de la sugerencia (nombre del archivo) no está definida. No se puede aplicar.`, variant: "destructive" });
-        setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying" as SuggestionStatus, errorMessage: "Falta el nombre del archivo en la sugerencia."} : s));
+    if (!suggestionToApply.originalContent) {
+        toast({ title: "Error", description: `No se encontró el contenido original para ${suggestionToApply.area}.`, variant: "destructive" });
+        setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: "Falta contenido original."} : s));
+        return;
+    }
+    if (!suggestionToApply.suggestedFullFileContent) {
+        toast({ title: "No Aplicable", description: `Esta sugerencia no incluye contenido de archivo modificado para aplicar directamente a ${suggestionToApply.area}.`, variant: "default" });
+        setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "not_applicable", errorMessage: "No hay contenido de archivo sugerido."} : s));
         return;
     }
 
-
-    setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "applying" as SuggestionStatus} : s));
+    setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "applying"} : s));
+    toast({ title: "Aplicando Sugerencia...", description: `Simulando aplicación de cambio a ${suggestionToApply.area}` });
     
-    toast({ title: "Aplicando Sugerencia...", description: `Aplicando cambio a ${suggestionToApply.area}` });
+    // La acción applySuggestedChange ahora es principalmente para simulación y logging en consola.
+    // La lógica real de escritura de archivos está desactivada por seguridad.
+    const result = await applySuggestedChange(suggestionToApply.area, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent);
     
-    const result = await applySuggestedChange(suggestionToApply.area, suggestionToApply.originalContent, suggestionToApply.suggestedContent);
-    
-
     if (result.success) {
-      setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "applied" as SuggestionStatus, originalContent: result.newContent, suggestedContent: result.newContent } : s)); // Update suggestedContent as well for consistency if applied successfully
-      toast({ title: "Sugerencia Aplicada", description: `El cambio para ${suggestionToApply.area} se ha aplicado (simulado).`});
-      // Actualizar el archivo en projectFiles localmente si es necesario para futuras referencias
+      setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {
+          ...s, 
+          status: "applied", 
+          // Actualizamos el 'originalContent' localmente para reflejar el cambio simulado,
+          // y el 'suggestedFullFileContent' también para consistencia.
+          originalContent: result.newContent, 
+          suggestedFullFileContent: result.newContent 
+        } : s));
+      toast({ title: "Sugerencia Aplicada (Simulación)", description: `El cambio para ${suggestionToApply.area} se ha simulado. Revisa la consola.`});
+      
+      // Actualizar el archivo en projectFiles localmente para futuras referencias si se aplicara realmente
       setProjectFiles(prevFiles => (prevFiles || []).map(pf => pf.fileName === suggestionToApply.area ? {...pf, content: result.newContent!} : pf));
     } else {
-      setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying" as SuggestionStatus, errorMessage: result.error} : s));
-      toast({ title: "Error al Aplicar", description: result.error || `No se pudo aplicar el cambio a ${suggestionToApply.area}.`, variant: "destructive"});
+      setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: result.error} : s));
+      toast({ title: "Error al Aplicar (Simulación)", description: result.error || `No se pudo simular la aplicación del cambio a ${suggestionToApply.area}.`, variant: "destructive"});
     }
   };
-
 
   const handleDownloadSource = async () => {
     setIsDownloading(true);
@@ -163,32 +173,41 @@ export default function AutoUpdatePage() {
       description: "Recopilando todos los archivos fuente de CodeAlchemist..."
     });
 
-    const result = await getApplicationSourceBundle(); // No concatenar para descarga
+    const result = await getApplicationSourceBundle(false); // No concatenar para descarga
 
     if (result.success && result.files) {
       try {
-        // Crear un zip en el cliente es complejo, por ahora descargaremos un JSON con todos los archivos.
-        // Para una descarga de zip real, se necesitaría una biblioteca como JSZip.
-        const bundleJsonString = JSON.stringify(result.files, null, 2);
-        const blob = new Blob([bundleJsonString], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
+        const zip = new JSZip();
+        result.files.forEach(file => {
+          // Asegurarse de que no haya nombres de archivo vacíos o inválidos
+          if (file.fileName && file.fileName.trim() !== "") {
+            zip.file(file.fileName, file.content);
+          } else {
+            console.warn("Archivo omitido en ZIP debido a nombre inválido:", file);
+          }
+        });
+
+        const zipBlob = await zip.generateAsync({ type: "blob" });
+        const url = URL.createObjectURL(zipBlob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'codealchemist-full-source-bundle.json';
+        a.download = 'codealchemist-full-source.zip';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         toast({
           title: "Descarga Iniciada",
-          description: "El paquete completo de código fuente (codealchemist-full-source-bundle.json) se está descargando."
+          description: "El paquete completo de código fuente (codealchemist-full-source.zip) se está descargando."
         });
       } catch (e) {
+         const error = e instanceof Error ? e.message : "Error desconocido";
          toast({
-          title: "Error al Crear Descarga",
-          description: "No se pudo crear el archivo de descarga en el navegador.",
+          title: "Error al Crear Descarga ZIP",
+          description: `No se pudo crear el archivo ZIP en el navegador: ${error}`,
           variant: "destructive",
         });
+        console.error("Error al crear ZIP:", e);
       }
     } else {
       toast({
@@ -220,6 +239,21 @@ export default function AutoUpdatePage() {
             Al hacer clic en &quot;Iniciar Auto-Análisis&quot;, CodeAlchemist enviará su código fuente completo
             al modelo de IA configurado para obtener un resumen de posibles mejoras. También puedes descargar el código fuente completo.
           </p>
+
+          <div className="space-y-2">
+            <Label htmlFor="analysis-preferences" className="text-base flex items-center gap-2">
+                <Edit3 className="h-5 w-5"/> Preferencias de Análisis (Opcional)
+            </Label>
+            <Textarea
+                id="analysis-preferences"
+                value={analysisPreferences}
+                onChange={(e) => setAnalysisPreferences(e.target.value)}
+                placeholder="Ej: 'Enfócate en optimizar el rendimiento de los componentes React', 'Revisa la seguridad en las llamadas a API', 'Sugiere mejoras de accesibilidad'..."
+                rows={3}
+                className="bg-card"
+            />
+            <p className="text-xs text-muted-foreground">Describe qué tipo de actualizaciones o áreas específicas te gustaría que la IA priorizara.</p>
+          </div>
           
           <div className="flex flex-wrap gap-4">
             <Button 
@@ -245,11 +279,11 @@ export default function AutoUpdatePage() {
               ) : (
                 <DownloadCloud className="mr-2 h-5 w-5" />
               )}
-              Descargar Código Fuente Completo
+              Descargar Código Fuente (ZIP)
             </Button>
           </div>
 
-          {analysisResult && suggestionsWithStatus.length > 0 && status === "success" && (
+          {analysisResult && status === "success" && (
             <Card className="mt-6 border-accent bg-accent/5">
               <CardHeader className="pb-3">
                 <CardTitle className="text-xl flex items-center gap-2 text-accent-foreground">
@@ -263,85 +297,106 @@ export default function AutoUpdatePage() {
                   <p className="text-sm text-accent-foreground/80">{analysisResult.overallAssessment}</p>
                 </div>
                 <Separator />
-                <div>
-                  <h4 className="font-semibold text-accent-foreground/90 mb-2">Áreas Identificadas:</h4>
-                  <div className="flex flex-wrap gap-2">
-                    {analysisResult.identifiedAreas.map((area, index) => (
-                      <Badge key={index} variant="secondary">{area}</Badge>
-                    ))}
-                  </div>
-                </div>
-                <Separator />
-                <div>
-                  <h4 className="font-semibold text-accent-foreground/90 mb-2">Sugerencias Detalladas:</h4>
-                   <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1">
-                      <Info className="h-3 w-3 shrink-0"/> Las sugerencias de la IA pueden modificar archivos. Revisa cuidadosamente antes de aplicar. La aplicación es una simulación.
-                    </p>
-                  <ScrollArea className="h-[400px] pr-3">
-                    <ul className="space-y-3">
-                      {suggestionsWithStatus.map((s) => (
-                        <li key={s.id} className="p-3 rounded-md border bg-background/80 shadow-sm">
-                          <div className="flex justify-between items-start mb-1">
-                            <span className="font-medium text-sm text-foreground">{s.area}</span>
-                            {s.priority && (
-                              <Badge variant={s.priority === 'high' ? 'destructive' : s.priority === 'medium' ? 'default' : 'outline'} className="capitalize text-xs">
-                                {s.priority}
-                              </Badge>
-                            )}
-                          </div>
-                          <p className="text-xs text-muted-foreground mb-2">{s.suggestion}</p>
-                          
-                          {s.status === "error_applying" && s.errorMessage && (
-                             <p className="text-xs text-destructive mt-1 mb-1">Error al aplicar: {s.errorMessage}</p>
-                          )}
-
-                          <div className="flex items-center gap-2 mt-2">
-                            <AlertDialog>
-                                <AlertDialogTrigger asChild>
-                                    <Button 
-                                        size="sm" 
-                                        variant="outline" 
-                                        disabled={s.status === "applying" || s.status === "applied" || !s.originalContent || !s.suggestedContent || !s.area}
-                                        className={s.status === "applied" ? "border-green-500 text-green-600" : ""}
-                                    >
-                                    {s.status === "applying" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                    {s.status === "applied" && <CheckCircle className="mr-2 h-4 w-4 text-green-600" />}
-                                    {s.status === "error_applying" && <XCircle className="mr-2 h-4 w-4 text-destructive" />}
-                                    {s.status === "pending" && <Wand2 className="mr-2 h-4 w-4" />}
-                                    {s.status === "applied" ? "Aplicada (Sim.)" : s.status === "applying" ? "Aplicando..." : s.status === "error_applying" ? "Reintentar Aplicar (Sim.)" : "Aplicar Sugerencia (Sim.)"}
-                                    </Button>
-                                </AlertDialogTrigger>
-                                <AlertDialogContent>
-                                    <AlertDialogHeader>
-                                    <AlertDialogTitle>¿Aplicar esta sugerencia?</AlertDialogTitle>
-                                    <AlertDialogDescription>
-                                        Se intentará aplicar la siguiente sugerencia al archivo <strong>{s.area}</strong>:
-                                        <blockquote className="mt-2 pl-3 border-l-2 italic text-xs">
-                                        {s.suggestion}
-                                        </blockquote>
-                                        <div className="mt-3 max-h-60 overflow-y-auto text-xs space-y-1">
-                                            <p className="font-semibold">Contenido Original (Fragmento):</p>
-                                            <Textarea readOnly value={s.originalContent?.substring(0,500) + (s.originalContent && s.originalContent.length > 500 ? "..." : "")} rows={5} className="text-xs font-mono bg-muted/30"/>
-                                             <p className="font-semibold mt-2">Contenido Sugerido (Fragmento):</p>
-                                            <Textarea readOnly value={s.suggestedContent?.substring(0,500) + (s.suggestedContent && s.suggestedContent.length > 500 ? "..." : "")} rows={5} className="text-xs font-mono bg-muted/30"/>
-                                        </div>
-                                        <strong className="block mt-3 text-destructive">¡Importante!</strong> Esta acción (simulada) modificaría el código fuente. En un entorno real, asegúrate de tener copias de seguridad y revisar los cambios.
-                                    </AlertDialogDescription>
-                                    </AlertDialogHeader>
-                                    <AlertDialogFooter>
-                                    <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                    <AlertDialogAction onClick={() => handleApplySuggestion(s.id)}>
-                                        Sí, aplicar (Simulación)
-                                    </AlertDialogAction>
-                                    </AlertDialogFooter>
-                                </AlertDialogContent>
-                            </AlertDialog>
-                          </div>
-                        </li>
+                {analysisResult.identifiedAreas.length > 0 && (
+                  <div>
+                    <h4 className="font-semibold text-accent-foreground/90 mb-2">Áreas Identificadas:</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {analysisResult.identifiedAreas.map((area, index) => (
+                        <Badge key={index} variant="secondary">{area}</Badge>
                       ))}
-                    </ul>
-                  </ScrollArea>
-                </div>
+                    </div>
+                  </div>
+                )}
+                {suggestionsWithStatus.length > 0 && <Separator />}
+                {suggestionsWithStatus.length > 0 && (
+                    <div>
+                    <h4 className="font-semibold text-accent-foreground/90 mb-2">Sugerencias Detalladas:</h4>
+                    <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1">
+                        <Info className="h-3 w-3 shrink-0"/> Las sugerencias de la IA pueden proponer modificar archivos. La aplicación de cambios es una SIMULACIÓN y no modificará tus archivos reales. Revisa la consola para ver qué se habría modificado.
+                        </p>
+                    <ScrollArea className="h-[400px] pr-3">
+                        <ul className="space-y-3">
+                        {suggestionsWithStatus.map((s) => (
+                            <li key={s.id} className="p-3 rounded-md border bg-background/80 shadow-sm">
+                            <div className="flex justify-between items-start mb-1">
+                                <span className="font-medium text-sm text-foreground break-all">{s.area || "Sugerencia General"}</span>
+                                {s.priority && (
+                                <Badge variant={s.priority === 'high' ? 'destructive' : s.priority === 'medium' ? 'default' : 'outline'} className="capitalize text-xs shrink-0 ml-2">
+                                    {s.priority}
+                                </Badge>
+                                )}
+                            </div>
+                            <p className="text-xs text-muted-foreground mb-2">{s.suggestion}</p>
+                            
+                            {s.status === "error_applying" && s.errorMessage && (
+                                <p className="text-xs text-destructive mt-1 mb-1">Error al aplicar: {s.errorMessage}</p>
+                            )}
+                            {s.status === "not_applicable" && (
+                                <p className="text-xs text-muted-foreground mt-1 mb-1">No aplicable directamente (sin contenido de archivo sugerido).</p>
+                            )}
+
+                            <div className="flex items-center gap-2 mt-2">
+                                <AlertDialog>
+                                    <AlertDialogTrigger asChild>
+                                        <Button 
+                                            size="sm" 
+                                            variant="outline" 
+                                            disabled={s.status === "applying" || s.status === "applied" || s.status === "not_applicable" || !s.area || !s.originalContent || !s.suggestedFullFileContent}
+                                            className={s.status === "applied" ? "border-green-500 text-green-600" : ""}
+                                        >
+                                        {s.status === "applying" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                        {s.status === "applied" && <CheckCircle className="mr-2 h-4 w-4 text-green-600" />}
+                                        {s.status === "error_applying" && <XCircle className="mr-2 h-4 w-4 text-destructive" />}
+                                        {s.status === "pending" && <Wand2 className="mr-2 h-4 w-4" />}
+                                        {s.status === "not_applicable" && <Info className="mr-2 h-4 w-4 text-muted-foreground" />}
+
+                                        {s.status === "applied" ? "Aplicada (Sim.)" 
+                                            : s.status === "applying" ? "Aplicando..." 
+                                            : s.status === "error_applying" ? "Reintentar Aplicar (Sim.)" 
+                                            : s.status === "not_applicable" ? "No Aplicable"
+                                            : "Aplicar Sugerencia (Sim.)"}
+                                        </Button>
+                                    </AlertDialogTrigger>
+                                    <AlertDialogContent className="max-w-3xl">
+                                        <AlertDialogHeader>
+                                        <AlertDialogTitle>¿Aplicar esta sugerencia (Simulación)?</AlertDialogTitle>
+                                        <AlertDialogDescription>
+                                            Se intentará aplicar (simuladamente) la siguiente sugerencia al archivo <strong>{s.area}</strong>:
+                                            <blockquote className="mt-2 pl-3 border-l-2 italic text-xs">
+                                            {s.suggestion}
+                                            </blockquote>
+                                            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[50vh] text-xs">
+                                                <div>
+                                                    <p className="font-semibold mb-1">Contenido Original (Fragmento):</p>
+                                                    <ScrollArea className="h-60 border rounded p-2 bg-muted/30">
+                                                        <pre className="text-xs font-mono whitespace-pre-wrap">{s.originalContent?.substring(0,1500) + (s.originalContent && s.originalContent.length > 1500 ? "..." : "")}</pre>
+                                                    </ScrollArea>
+                                                </div>
+                                                <div>
+                                                    <p className="font-semibold mb-1">Contenido Sugerido por IA (Fragmento):</p>
+                                                    <ScrollArea className="h-60 border rounded p-2 bg-muted/30">
+                                                      <pre className="text-xs font-mono whitespace-pre-wrap">{s.suggestedFullFileContent?.substring(0,1500) + (s.suggestedFullFileContent && s.suggestedFullFileContent.length > 1500 ? "..." : "")}</pre>
+                                                    </ScrollArea>
+                                                </div>
+                                            </div>
+                                            <strong className="block mt-3 text-destructive">¡Importante!</strong> Esta acción es una SIMULACIÓN y NO modificará tus archivos reales. Revisa la consola del navegador y del servidor para ver los detalles de la simulación.
+                                        </AlertDialogDescription>
+                                        </AlertDialogHeader>
+                                        <AlertDialogFooter>
+                                        <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                        <AlertDialogAction onClick={() => handleApplySuggestion(s.id)}>
+                                            Sí, aplicar (Simulación)
+                                        </AlertDialogAction>
+                                        </AlertDialogFooter>
+                                    </AlertDialogContent>
+                                </AlertDialog>
+                            </div>
+                            </li>
+                        ))}
+                        </ul>
+                    </ScrollArea>
+                    </div>
+                )}
               </CardContent>
             </Card>
           )}
@@ -354,7 +409,7 @@ export default function AutoUpdatePage() {
               <p className="text-lg text-muted-foreground">
                 {status === "loading_source" ? "Cargando código fuente..." : "Analizando el código fuente de CodeAlchemist..."}
               </p>
-              <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos.</p>
+              <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos, especialmente si el código es extenso.</p>
             </div>
           )}
           {status === "error" && !analysisResult && ( 
@@ -374,7 +429,7 @@ export default function AutoUpdatePage() {
         <CardFooter>
           <p className="text-xs text-muted-foreground">
             <strong>Nota Importante:</strong> El análisis se realiza sobre el código fuente completo de CodeAlchemist.
-            La descarga de código fuente proporciona un paquete JSON de todos los archivos detectados (excluyendo patrones de .gitignore).
+            La descarga de código fuente proporciona un archivo ZIP de todos los archivos detectados (excluyendo patrones de .gitignore).
             Las sugerencias de IA y su aplicación (simulada) siempre deben ser revisadas cuidadosamente por un desarrollador.
           </p>
         </CardFooter>

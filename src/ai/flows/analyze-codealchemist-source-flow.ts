@@ -8,21 +8,23 @@
  * - SuggestionUnit - El tipo para una única unidad de sugerencia.
  */
 
-import {z} from 'zod'; // Zod sigue siendo útil para la validación de esquemas
+import {z} from 'zod';
 import { analyzeProjectSourceWithGroq, GroqOptions, ProjectAnalysisGroqResponse } from '@/services/groq';
 
 const AnalyzeCodeAlchemistSourceInputSchema = z.object({
   sourceCode: z.string().describe('Un fragmento o colección de código fuente de la aplicación CodeAlchemist para ser analizado.'),
   groqApiKey: z.string().describe('La clave API para acceder al modelo Groq.'),
   groqModelName: z.string().describe('El nombre del modelo Groq a utilizar.'),
+  analysisPreferences: z.string().optional().describe('Preferencias o enfoque específico para el análisis de la IA, proporcionadas por el usuario.'),
 });
 export type AnalyzeCodeAlchemistSourceInput = z.infer<typeof AnalyzeCodeAlchemistSourceInputSchema>;
 
 // Definir el esquema para una única sugerencia
 const SuggestionUnitSchema = z.object({
-  area: z.string().describe('El área/componente al que se aplica la sugerencia.'),
+  area: z.string().describe('El área/componente/archivo al que se aplica la sugerencia.'),
   suggestion: z.string().describe('Una sugerencia específica para mejora o refactorización.'),
   priority: z.enum(['high', 'medium', 'low']).optional().describe('Prioridad de la sugerencia.'),
+  suggestedFullFileContent: z.string().optional().describe('El contenido completo del archivo modificado sugerido para el área especificada, si la sugerencia implica un cambio de código directo en un archivo.'),
 });
 export type SuggestionUnit = z.infer<typeof SuggestionUnitSchema>;
 
@@ -37,7 +39,6 @@ const AnalyzeCodeAlchemistSourceOutputSchema = z.object({
 export type AnalyzeCodeAlchemistSourceOutput = z.infer<typeof AnalyzeCodeAlchemistSourceOutputSchema>;
 
 
-// Esta ya no es una función de flujo de Genkit, sino una función de servidor asíncrona normal.
 export async function analyzeCodeAlchemistSource(input: AnalyzeCodeAlchemistSourceInput): Promise<AnalyzeCodeAlchemistSourceOutput> {
   const validationResult = AnalyzeCodeAlchemistSourceInputSchema.safeParse(input);
   if (!validationResult.success) {
@@ -51,15 +52,19 @@ export async function analyzeCodeAlchemistSource(input: AnalyzeCodeAlchemistSour
   };
 
   // Utilizar el servicio Groq para analizar el código fuente del proyecto
-  const analysisResult: ProjectAnalysisGroqResponse = await analyzeProjectSourceWithGroq(input.sourceCode, groqOptions);
+  const analysisResult: ProjectAnalysisGroqResponse = await analyzeProjectSourceWithGroq(
+    input.sourceCode, 
+    groqOptions,
+    input.analysisPreferences // Pasar las preferencias de análisis
+  );
   
-  // Validar la salida (opcional, pero buena práctica)
   const outputValidation = AnalyzeCodeAlchemistSourceOutputSchema.safeParse(analysisResult);
   if (!outputValidation.success) {
       console.error("Salida inválida de analyzeProjectSourceWithGroq:", outputValidation.error.format());
       // Considera manejar este caso, por ejemplo, devolviendo un error o una respuesta por defecto.
+      // Podría ser útil devolver el error de validación o un objeto de error estandarizado.
+      throw new Error("La respuesta del análisis del proyecto no cumple el esquema esperado.");
   }
   
-  // El esquema de salida del flujo es idéntico a ProjectAnalysisGroqResponse
   return analysisResult;
 }
