@@ -29,7 +29,7 @@ export function AppSidebar() {
   const pathname = usePathname();
 
   return (
-    <Sidebar collapsible="icon" variant="sidebar" side="left" defaultOpen className="border-r">
+    <Sidebar collapsible="icon" variant="sidebar" side="left" className="border-r">
       <SidebarHeader className="p-4">
         <div className="flex items-center gap-2 group-data-[collapsible=icon]:justify-center">
           <Button variant="ghost" size="icon" className="rounded-lg group-data-[collapsible=icon]:h-8 group-data-[collapsible=icon]:w-8" asChild>
