@@ -24,9 +24,15 @@ export interface GroqOptions {
    * El modelo específico de Groq a utilizar para el análisis de código.
    */
   modelName: string;
+  /**
+   * El tiempo máximo en milisegundos para esperar una respuesta de la API.
+   * Por defecto es 60000 (60 segundos).
+   */
+  timeoutMs?: number;
 }
 
 const GROQ_API_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
+const DEFAULT_TIMEOUT_MS = 60000; // 60 segundos
 
 /**
  * Analiza de forma asíncrona el código utilizando la API del modelo de lenguaje Groq
@@ -62,6 +68,9 @@ export async function analyzeCodeWithGroq(
     response_format: { type: "json_object" },
   };
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
+
   try {
     const response = await fetch(GROQ_API_ENDPOINT, {
       method: 'POST',
@@ -70,7 +79,9 @@ export async function analyzeCodeWithGroq(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestBody),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorBody = await response.text();
@@ -99,6 +110,11 @@ export async function analyzeCodeWithGroq(
     return parsedResult;
 
   } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error("Error de timeout llamando a la API de Groq (analyzeCodeWithGroq)");
+      throw new Error("La solicitud a la API de Groq excedió el tiempo límite.");
+    }
     console.error("Error llamando a la API de Groq (analyzeCodeWithGroq):", error);
     throw error; 
   }
@@ -129,7 +145,7 @@ export interface ProjectAnalysisGroqResponse {
  * @returns Una promesa que se resuelve en un objeto ProjectAnalysisGroqResponse.
  */
 export async function analyzeProjectSourceWithGroq(
-  sourceCodeChunk: string, // El nombre del parámetro cambia para reflejar que es un fragmento
+  sourceCodeChunk: string, 
   options: GroqOptions,
   analysisPreferences?: string
 ): Promise<ProjectAnalysisGroqResponse> {
@@ -160,14 +176,18 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
       },
       {
         role: "user",
-        // Ya no se hace substring aquí; el chunk ya está limitado en tamaño.
         content: `Analiza el siguiente fragmento de código fuente del proyecto:\n\n${sourceCodeChunk}`
       }
     ],
     temperature: 0.2, 
-    max_tokens: 4000, // Mantener un límite alto para permitir respuestas detalladas
+    max_tokens: 4000,
     response_format: { type: "json_object" },
   };
+
+  const controller = new AbortController();
+  // Usar un timeout más largo para análisis de proyectos, pero aún configurable
+  const timeoutForProjectAnalysis = options.timeoutMs || DEFAULT_TIMEOUT_MS * 2; // Default 120 segundos
+  const timeoutId = setTimeout(() => controller.abort(), timeoutForProjectAnalysis);
 
   try {
     const response = await fetch(GROQ_API_ENDPOINT, {
@@ -177,7 +197,9 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestBody),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorBody = await response.text();
@@ -206,6 +228,11 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
     return parsedResult;
     
   } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error("Error de timeout llamando a la API de Groq (análisis de fragmento de proyecto)");
+      throw new Error("La solicitud de análisis de fragmento de proyecto a la API de Groq excedió el tiempo límite.");
+    }
     console.error("Error llamando a la API de Groq para análisis de fragmento de proyecto:", error);
     throw new Error(`Fallo en el servicio de análisis de fragmento de proyecto de Groq: ${(error as Error).message}`);
   }
@@ -214,7 +241,7 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
 /**
  * Prueba la conexión con la API de Groq.
  * @param options Opciones de configuración para la API de Groq.
- * @returns Una promesa que se resuelve en un booleano indicando éxito o fracaso.
+ * @returns Una promesa que se resuelve en un objeto con el estado de éxito, mensaje y datos opcionales.
  */
 export async function testGroqConnection(options: GroqOptions): Promise<{success: boolean; message: string; data?: any}> {
   console.log(`Probando conexión con Groq API (modelo: ${options.modelName})...`);
@@ -225,6 +252,10 @@ export async function testGroqConnection(options: GroqOptions): Promise<{success
     max_tokens: 50,
   };
 
+  const controller = new AbortController();
+  const timeoutForTest = options.timeoutMs || 30000; // Default 30 segundos para prueba
+  const timeoutId = setTimeout(() => controller.abort(), timeoutForTest);
+
   try {
     const response = await fetch(GROQ_API_ENDPOINT, {
       method: 'POST',
@@ -233,7 +264,9 @@ export async function testGroqConnection(options: GroqOptions): Promise<{success
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(requestBody),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     const responseData = await response.json();
 
@@ -250,11 +283,13 @@ export async function testGroqConnection(options: GroqOptions): Promise<{success
     return { success: false, message: "Respuesta inesperada de Groq API durante la prueba de conexión.", data: responseData };
 
   } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error("Error de timeout probando la conexión con Groq API");
+      return { success: false, message: "La prueba de conexión a la API de Groq excedió el tiempo límite." };
+    }
     console.error("Error probando la conexión con Groq API:", error);
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     return { success: false, message: `Falló la prueba de conexión: ${errorMessage}` };
   }
 }
-
-
-    

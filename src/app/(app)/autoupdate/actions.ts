@@ -1,9 +1,10 @@
 'use server';
 
-import { analyzeCodeAlchemistSource, AnalyzeCodeAlchemistSourceInput, AnalyzeCodeAlchemistSourceOutput, SuggestionUnit } from '@/ai/flows/analyze-codealchemist-source-flow';
+import { analyzeCodeAlchemistSource, AnalyzeCodeAlchemistSourceInput, AnalyzeCodeAlchemistSourceOutput } from '@/ai/flows/analyze-codealchemist-source-flow';
 import fs from 'fs/promises';
 import path from 'path';
 import { glob } from 'glob'; 
+import type { GroqOptions } from '@/services/groq'; // Import GroqOptions
 
 interface AutoUpdateAnalysisResult {
   success: boolean;
@@ -16,6 +17,7 @@ interface AutoUpdateAnalysisResult {
 // Estimación: 1 token ~ 3 caracteres. Límite de 6000 tokens para el contenido.
 // Dejamos un margen para el prompt y la respuesta JSON.
 const MAX_CHARS_PER_CHUNK = 5500 * 3; // Aproximadamente 16500 caracteres
+const GROQ_API_TIMEOUT_MS = 60000 * 1; // 1 minuto por chunk
 
 export async function handleAutoAnalyzeAppSource(
   apiKey: string,
@@ -27,7 +29,7 @@ export async function handleAutoAnalyzeAppSource(
     return { success: false, error: "La clave API y el nombre del modelo son obligatorios. Por favor, configúralos en ajustes." };
   }
 
-  const sourceBundleResult = await getApplicationSourceBundle(false); // Obtenemos archivos individuales
+  const sourceBundleResult = await getApplicationSourceBundle(false); 
   if (!sourceBundleResult.success || !sourceBundleResult.files || sourceBundleResult.files.length === 0) {
     return { success: false, error: sourceBundleResult.error || "No se pudo obtener el código fuente para analizar." };
   }
@@ -39,23 +41,16 @@ export async function handleAutoAnalyzeAppSource(
 
   for (const file of files) {
     const fileContentMarker = `\n\n// --- Archivo: ${file.fileName} ---\n\n`;
-    const fileEffectiveContent = file.content; // Usar el contenido completo del archivo.
-                                          // La limitación de tokens se aplica a nivel de CHUNK.
+    const fileEffectiveContent = file.content; 
 
     if (fileEffectiveContent.length + fileContentMarker.length > MAX_CHARS_PER_CHUNK) {
-      // Si el archivo solo ya excede el tamaño del chunk, se procesa en trozos (o se trunca si es demasiado grande para manejarlo en trozos)
-      // Para simplificar, si un archivo es muy grande, lo enviamos como su propio chunk
-      // y confiamos en que la API de Groq lo maneje o lo truncaremos aquí si es necesario.
-      // Omitimos la división de archivos individuales por ahora para mantener la lógica manejable.
-      // La AI podría no ser capaz de proveer `suggestedFullFileContent` para archivos muy grandes.
       if (currentChunkChars > 0) {
         chunks.push(currentChunk);
         currentChunk = "";
         currentChunkChars = 0;
       }
-      // Truncar archivos individuales si son masivos, para evitar errores de API no manejados
       let processedFileContent = fileEffectiveContent;
-      if (fileEffectiveContent.length > MAX_CHARS_PER_CHUNK * 2) { // Un umbral arbitrario para truncar archivos muy grandes
+      if (fileEffectiveContent.length > MAX_CHARS_PER_CHUNK * 2) { 
         console.warn(`Archivo ${file.fileName} truncado debido a su tamaño excesivo (${fileEffectiveContent.length} caracteres). Solo se procesarán los primeros ${MAX_CHARS_PER_CHUNK * 2} caracteres.`);
         processedFileContent = fileEffectiveContent.substring(0, MAX_CHARS_PER_CHUNK * 2);
       }
@@ -84,35 +79,40 @@ export async function handleAutoAnalyzeAppSource(
   const allResults: AnalyzeCodeAlchemistSourceOutput[] = [];
   let processedChunks = 0;
 
+  const groqAPIOptions: GroqOptions = {
+    apiKey: apiKey,
+    modelName: modelName,
+    timeoutMs: GROQ_API_TIMEOUT_MS
+  };
+
   for (const chunk of chunks) {
     const input: AnalyzeCodeAlchemistSourceInput = {
       sourceCode: chunk, 
-      groqApiKey: apiKey,
-      groqModelName: modelName,
+      groqOptions: groqAPIOptions, // Pasar las opciones completas
       analysisPreferences,
     };
 
     try {
-      console.log(`Analizando fragmento ${processedChunks + 1} de ${chunks.length}... (${chunk.length} caracteres)`);
+      console.log(`Analizando fragmento ${processedChunks + 1} de ${chunks.length}... (${chunk.length} caracteres) con timeout de ${GROQ_API_TIMEOUT_MS / 1000}s`);
       const result = await analyzeCodeAlchemistSource(input);
       allResults.push(result);
       processedChunks++;
-      if (onProgress) { // Notificar progreso (esto es del lado del servidor, no se puede llamar directamente desde el cliente)
-        // Esta llamada a onProgress no funcionará como se espera si handleAutoAnalyzeAppSource se llama desde un componente de servidor
-        // y onProgress es una función del cliente. Se necesitaría un mecanismo de streaming o sondeo para el progreso real en la UI.
-        // Por ahora, esto es más un log interno.
+      if (onProgress) { 
          console.log(`Progreso: ${processedChunks}/${chunks.length}`);
       }
     } catch (error) {
       console.error(`Error analizando el fragmento ${processedChunks + 1}:`, error);
-      const errorMessage = error instanceof Error ? error.message : "Ocurrió un error desconocido durante el análisis de un fragmento.";
-      // Decidir si continuar con otros fragmentos o fallar todo el proceso
-      // Por ahora, fallamos si un fragmento falla para simplificar.
+      let errorMessage = "Ocurrió un error desconocido durante el análisis de un fragmento.";
+      if (error instanceof Error) {
+        errorMessage = error.message;
+        if (error.message.toLowerCase().includes("timeout") || error.message.toLowerCase().includes("excedió el tiempo límite")) {
+          errorMessage = `El análisis del fragmento ${processedChunks + 1} excedió el tiempo límite de ${GROQ_API_TIMEOUT_MS / 1000} segundos. Intenta de nuevo o revisa la configuración.`;
+        }
+      }
       return { success: false, error: `Falló el análisis del fragmento ${processedChunks + 1}: ${errorMessage}`, chunksProcessed: processedChunks, totalChunks: chunks.length };
     }
   }
 
-  // Agregar resultados
   if (allResults.length === 0) {
     return { success: false, error: "No se obtuvieron resultados del análisis de los fragmentos." };
   }
@@ -120,7 +120,7 @@ export async function handleAutoAnalyzeAppSource(
   const aggregatedResult: AnalyzeCodeAlchemistSourceOutput = {
     analysisTitle: allResults[0].analysisTitle || `Análisis Agregado de ${chunks.length} Fragmentos`,
     identifiedAreas: Array.from(new Set(allResults.flatMap(r => r.identifiedAreas))),
-    suggestions: allResults.flatMap(r => r.suggestions.map(s => ({...s, area: s.area || "General (Fragmento)" }))), // Asegurar que 'area' tenga un valor
+    suggestions: allResults.flatMap(r => r.suggestions.map(s => ({...s, area: s.area || "General (Fragmento)" }))), 
     overallAssessment: allResults.map(r => r.overallAssessment).join('\n\n---\n\n'),
   };
   
@@ -143,17 +143,17 @@ const ignorePatterns = [
   'node_modules/**',
   '.next/**',
   '*.lock',
-  '*.zip', // Ignorar archivos zip
+  '*.zip', 
   '.DS_Store',
   '*.log',
   'build/**',
   'dist/**',
-  '.env', // Ignorar .env general
+  '.env', 
   '.env.local', 
   '.env.development',
   '.env.production',
   '.env.test',
-  // Añade más patrones si es necesario
+  'public/mockServiceWorker.js', // Ignorar el mock service worker si existe
 ];
 
 export async function getApplicationSourceBundle(concatenate: boolean = false): Promise<AppSourceBundleResult> {
@@ -174,7 +174,6 @@ export async function getApplicationSourceBundle(concatenate: boolean = false): 
       try {
         const stats = await fs.stat(path.join(projectRoot, relativeFilePath));
         
-        // Para la concatenación (usada por la IA si no se divide en chunks manualmente)
         if (concatenate && stats.size > 500 * 1024) { 
             console.warn(`Archivo omitido de la concatenación por tamaño: ${relativeFilePath} (${(stats.size / 1024).toFixed(2)} KB)`);
             const message = `// Archivo ${relativeFilePath} omitido de la concatenación por ser demasiado grande (${(stats.size / 1024).toFixed(2)} KB).\n`;
@@ -185,24 +184,16 @@ export async function getApplicationSourceBundle(concatenate: boolean = false): 
 
 
         const fullPath = path.join(projectRoot, relativeFilePath);
-        // Intentar leer como texto, si falla, podría ser binario
         let content: string;
         try {
           content = await fs.readFile(fullPath, 'utf-8');
         } catch (readError) {
-          // Si falla la lectura como utf-8, es probable que sea binario o no legible
-          // Lo marcamos como tal en lugar de fallar toda la operación.
-          // Esto es importante para la descarga ZIP, que podría incluir binarios.
-          // Para el análisis de IA, estos archivos deberían ser ignorados o manejados de forma diferente.
           const error = readError as NodeJS.ErrnoException;
           console.warn(`No se pudo leer el archivo ${relativeFilePath} como texto (podría ser binario): ${error.message}`);
           content = `// Error: No se pudo leer el archivo ${relativeFilePath} como texto. Puede ser un archivo binario o corrupto.`;
-           // Para la descarga, es mejor no incluir contenido erróneo si es binario.
-           // Para el análisis, este mensaje está bien.
-           // Si 'concatenate' es false (para descarga ZIP), no queremos este mensaje de error como contenido.
-           if (!concatenate && (error.code === 'EILSEQ' || stats.size > 1024 * 1024) /* heurística para binarios grandes */) {
+           if (!concatenate && (error.code === 'EILSEQ' || stats.size > 1024 * 1024) ) {
              filesData.push({ fileName: relativeFilePath, content: "// Archivo binario o no legible, contenido omitido para ZIP." });
-             continue; // No añadir al concatenado si no se puede leer
+             continue; 
            }
         }
         
@@ -212,7 +203,6 @@ export async function getApplicationSourceBundle(concatenate: boolean = false): 
         }
       } catch (fileProcessingError) {
         const error = fileProcessingError as NodeJS.ErrnoException;
-        // Ignorar errores de acceso o si es un directorio que se coló
         if (error.code !== 'EACCES' && error.code !== 'EISDIR') {
             console.warn(`No se pudo procesar el archivo ${relativeFilePath} para el paquete fuente:`, error);
         }
@@ -275,5 +265,3 @@ export async function applySuggestedChange(filePath: string, originalContent: st
         return { success: false, error: errorMessage };
     }
 }
-
-    

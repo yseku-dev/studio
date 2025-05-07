@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3 } from "lucide-react";
+import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange } from './actions';
 import type { AnalyzeCodeAlchemistSourceOutput, SuggestionUnit as FlowSuggestionUnit } from '@/ai/flows/analyze-codealchemist-source-flow';
@@ -44,6 +44,7 @@ interface AnalysisProgress {
 export default function AutoUpdatePage() {
   const [status, setStatus] = useState<AutoUpdateStatus>("idle");
   const [analysisResult, setAnalysisResult] = useState<AnalyzeCodeAlchemistSourceOutput | null>(null);
+  const [currentAnalysisError, setCurrentAnalysisError] = useState<string | null>(null);
   const [suggestionsWithStatus, setSuggestionsWithStatus] = useState<SuggestionWithStatus[]>([]);
   const [isDownloading, setIsDownloading] = useState(false);
   const [projectFiles, setProjectFiles] = useState<Awaited<ReturnType<typeof getApplicationSourceBundle>>['files']>([]);
@@ -60,12 +61,12 @@ export default function AutoUpdatePage() {
   }, []);
 
   const fetchProjectFiles = async () => {
-     const bundleResult = await getApplicationSourceBundle(false); // No concatenar para la lista de archivos
+     const bundleResult = await getApplicationSourceBundle(false); 
      if (bundleResult.success && bundleResult.files) {
        setProjectFiles(bundleResult.files);
      } else {
        toast({ title: "Error", description: "No se pudieron cargar los archivos del proyecto para la referencia de sugerencias.", variant: "destructive" });
-       setProjectFiles([]); // Asegurar que sea un array vacío en caso de error
+       setProjectFiles([]); 
      }
   };
 
@@ -81,6 +82,7 @@ export default function AutoUpdatePage() {
 
     setStatus("loading_source"); 
     setAnalysisResult(null);
+    setCurrentAnalysisError(null);
     setSuggestionsWithStatus([]);
     setAnalysisProgress(null);
     toast({
@@ -91,9 +93,6 @@ export default function AutoUpdatePage() {
     await fetchProjectFiles(); 
     setStatus("analyzing"); 
 
-    // La función onProgress en handleAutoAnalyzeAppSource es principalmente para logging en el servidor.
-    // Para progreso real en UI, se necesitaría un enfoque más complejo (WebSockets, polling).
-    // Aquí simulamos el progreso basado en la finalización de la llamada.
     const result = await handleAutoAnalyzeAppSource(apiKey, modelName, analysisPreferences);
 
     if (result.success && result.data) {
@@ -101,7 +100,7 @@ export default function AutoUpdatePage() {
       const initialSuggestions = result.data.suggestions.map((s, index) => {
         const relatedFile = projectFiles?.find(f => s.area && f.fileName.toLowerCase().includes(s.area.toLowerCase()));
         let currentStatus: SuggestionStatus = "pending";
-        if (!s.suggestedFullFileContent || !relatedFile?.content) { // Verificar también relatedFile.content
+        if (!s.suggestedFullFileContent || !relatedFile?.content) { 
             currentStatus = "not_applicable";
         }
 
@@ -123,6 +122,7 @@ export default function AutoUpdatePage() {
       }
     } else {
       setStatus("error");
+      setCurrentAnalysisError(result.error || "Ocurrió un error desconocido durante el auto-análisis.");
       toast({
         title: "Error en Auto-Análisis",
         description: result.error || "Ocurrió un error desconocido.",
@@ -166,15 +166,31 @@ export default function AutoUpdatePage() {
           ...s, 
           status: "applied", 
           originalContent: result.newContent, 
-          suggestedFullFileContent: result.newContent 
+          // Update suggested content to new content, as original is now the "applied" one.
+          // This helps if user wants to re-evaluate or compare further based on the applied state.
+          // Or, keep suggestedFullFileContent as is if it's meant to be the AI's output.
+          // For simplicity, let's assume originalContent reflects the current state.
         } : s));
       toast({ title: "Sugerencia Aplicada (Simulación)", description: `El cambio para ${suggestionToApply.area} se ha simulado. Revisa la consola.`});
       
+      // Update the projectFiles state to reflect the simulated change
       setProjectFiles(prevFiles => (prevFiles || []).map(pf => pf.fileName === suggestionToApply.area ? {...pf, content: result.newContent!} : pf));
     } else {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: result.error} : s));
       toast({ title: "Error al Aplicar (Simulación)", description: result.error || `No se pudo simular la aplicación del cambio a ${suggestionToApply.area}.`, variant: "destructive"});
     }
+  };
+
+  const handleCopyError = (errorText: string | undefined) => {
+    if (!errorText) return;
+    navigator.clipboard.writeText(errorText)
+      .then(() => {
+        toast({ title: 'Error Copiado', description: 'El mensaje de error ha sido copiado al portapapeles.' });
+      })
+      .catch(err => {
+        console.error('Error al copiar el error:', err);
+        toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el error al portapapeles.', variant: 'destructive' });
+      });
   };
 
   const handleDownloadSource = async () => {
@@ -184,8 +200,6 @@ export default function AutoUpdatePage() {
       description: "Recopilando todos los archivos fuente de CodeAlchemist..."
     });
 
-    // Usar los archivos ya cargados en projectFiles si están disponibles y son recientes,
-    // o volver a cargarlos si es necesario.
     let filesToZip = projectFiles;
     if (!filesToZip || filesToZip.length === 0) {
         const bundleResult = await getApplicationSourceBundle(false);
@@ -207,7 +221,7 @@ export default function AutoUpdatePage() {
       try {
         const zip = new JSZip();
         filesToZip.forEach(file => {
-          if (file.fileName && file.fileName.trim() !== "" && !file.content.startsWith("// Archivo binario")) { // No incluir archivos binarios problemáticos en el zip
+          if (file.fileName && file.fileName.trim() !== "" && !file.content.startsWith("// Archivo binario")) { 
             zip.file(file.fileName, file.content);
           } else {
             console.warn("Archivo omitido en ZIP debido a nombre inválido o contenido binario no manejable:", file);
@@ -246,7 +260,7 @@ export default function AutoUpdatePage() {
     setIsDownloading(false);
   };
 
-  useEffect(() => { // Cargar archivos del proyecto al montar la página para la descarga y referencia
+  useEffect(() => { 
     fetchProjectFiles();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -271,6 +285,7 @@ export default function AutoUpdatePage() {
           <p className="text-muted-foreground">
             Al hacer clic en &quot;Iniciar Auto-Análisis&quot;, CodeAlchemist recopilará su código fuente, lo dividirá en fragmentos si es necesario, y lo enviará
             al modelo de IA configurado para obtener un resumen de posibles mejoras. También puedes descargar el código fuente completo.
+            Las llamadas a la API tienen un tiempo de espera para evitar bloqueos indefinidos.
           </p>
 
           <div className="space-y-2">
@@ -377,7 +392,12 @@ export default function AutoUpdatePage() {
                             <p className="text-xs text-muted-foreground mb-2">{s.suggestion}</p>
                             
                             {s.status === "error_applying" && s.errorMessage && (
-                                <p className="text-xs text-destructive mt-1 mb-1">Error al aplicar: {s.errorMessage}</p>
+                                <div className="p-2 my-1 bg-destructive/10 border border-destructive/30 rounded-md">
+                                    <p className="text-xs text-destructive ">Error al aplicar: {s.errorMessage}</p>
+                                    <Button variant="ghost" size="sm" onClick={() => handleCopyError(s.errorMessage)} className="mt-1 h-6 px-1.5 text-xs text-destructive hover:bg-destructive/20">
+                                        <Copy className="mr-1 h-3 w-3"/> Copiar Error
+                                    </Button>
+                                </div>
                             )}
                             {s.status === "not_applicable" && (
                                 <p className="text-xs text-muted-foreground mt-1 mb-1">
@@ -450,7 +470,7 @@ export default function AutoUpdatePage() {
               </CardContent>
             </Card>
           )}
-           {(status === "loading_source" || status === "analyzing" && !analysisProgress) && ( // Mostrar loader principal si no hay progreso de chunks
+           {(status === "loading_source" || status === "analyzing" && !analysisProgress) && ( 
             <div 
               data-ai-hint="code processing animation"
               className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6"
@@ -462,7 +482,7 @@ export default function AutoUpdatePage() {
               <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos, especialmente si el código es extenso.</p>
             </div>
           )}
-          {status === "error" && !analysisResult && ( 
+          {status === "error" && currentAnalysisError && ( 
              <Card className="mt-6 border-destructive bg-destructive/10">
                <CardHeader className="pb-2">
                 <CardTitle className="text-lg flex items-center gap-2 text-destructive-foreground">
@@ -470,22 +490,26 @@ export default function AutoUpdatePage() {
                   Error en el Auto-Análisis
                 </CardTitle>
               </CardHeader>
-              <CardContent>
-                <p className="text-destructive-foreground">Ocurrió un error durante el auto-análisis. Revisa la consola para más detalles o inténtalo de nuevo.</p>
+              <CardContent className="space-y-2">
+                <p className="text-destructive-foreground/90">Ocurrió un error durante el auto-análisis:</p>
+                <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50">
+                    <pre className="text-xs text-destructive-foreground whitespace-pre-wrap">{currentAnalysisError}</pre>
+                </ScrollArea>
+                <Button variant="outline" size="sm" onClick={() => handleCopyError(currentAnalysisError)} className="mt-2 text-destructive-foreground border-destructive/50 hover:bg-destructive/20">
+                    <Copy className="mr-2 h-4 w-4"/> Copiar Mensaje de Error
+                </Button>
               </CardContent>
             </Card>
           )}
         </CardContent>
         <CardFooter>
           <p className="text-xs text-muted-foreground">
-            <strong>Nota Importante:</strong> El análisis se realiza sobre el código fuente completo de CodeAlchemist, potencialmente dividido en fragmentos para manejar límites de tokens.
-            La descarga de código fuente proporciona un archivo ZIP de todos los archivos detectados (excluyendo patrones definidos y archivos binarios grandes no legibles).
-            Las sugerencias de IA y su aplicación (simulada) siempre deben ser revisadas cuidadosamente por un desarrollador.
+            <strong>Nota Importante:</strong> El análisis se realiza sobre el código fuente completo de CodeAlchemist, potencialmente dividido en fragmentos para manejar límites de tokens y timeouts.
+            La descarga de código fuente proporciona un archivo ZIP de todos los archivos detectados.
+            Las sugerencias de IA y su aplicación (simulada) siempre deben ser revisadas cuidadosamente por un desarrollador. La capacidad de "auto-reparación" se limita a aplicar estas sugerencias simuladas.
           </p>
         </CardFooter>
       </Card>
     </div>
   );
 }
-
-    

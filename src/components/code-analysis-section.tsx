@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Wand2, Save, UploadCloud, XCircle } from 'lucide-react';
+import { Loader2, Wand2, Save, UploadCloud, XCircle, AlertTriangle, Copy } from 'lucide-react';
 import { ScrollArea } from './ui/scroll-area';
 
 const formSchema = z.object({
@@ -34,6 +34,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
   const [modelName, setModelName] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [originalCode, setOriginalCode] = useState<string>('');
   const [fileName, setFileName] = useState<string | null>(null);
   const { toast } = useToast();
@@ -82,13 +83,11 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
       };
       reader.readAsText(file);
     } else {
-      // Clear if no file is selected or selection is cancelled
-      if (fileName) { // only clear if there was a file previously
+      if (fileName) { 
         setValue('code', '');
         setFileName(null);
       }
     }
-     // Reset file input to allow re-uploading the same file
     event.target.value = '';
   };
   
@@ -113,6 +112,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
     }
     setIsLoading(true);
     setAnalysisResult(null);
+    setAnalysisError(null);
     setOriginalCode(data.code);
 
     const result = await handleAnalyzeCode(data.code, apiKey, modelName);
@@ -124,9 +124,10 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
         description: 'Sugerencias generadas exitosamente.',
       });
     } else {
+      setAnalysisError(result.error || 'Ocurrió un error desconocido durante el análisis.');
       toast({
         title: 'Análisis Fallido',
-        description: result.error || 'Ocurrió un error desconocido.',
+        description: 'No se pudieron generar sugerencias. Revisa el mensaje de error.',
         variant: 'destructive',
       });
     }
@@ -149,6 +150,18 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
     }
   };
 
+  const handleCopyError = (errorText: string | undefined) => {
+    if (!errorText) return;
+    navigator.clipboard.writeText(errorText)
+      .then(() => {
+        toast({ title: 'Error Copiado', description: 'El mensaje de error ha sido copiado al portapapeles.' });
+      })
+      .catch(err => {
+        console.error('Error al copiar el error:', err);
+        toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el error al portapapeles.', variant: 'destructive' });
+      });
+  };
+
 
   return (
     <div className="space-y-6">
@@ -160,6 +173,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
           </CardTitle>
           <CardDescription>
             Pega tu código abajo o sube un archivo para obtener sugerencias de mejora potenciadas por IA.
+            Las llamadas a la API tienen un tiempo de espera para evitar bloqueos.
             {!apiKey || !modelName ? (
                 <span className="text-destructive block mt-1"> (Clave API o Modelo no configurado en Ajustes)</span>
             ) : <span className="text-muted-foreground block mt-1">(Usando modelo: {modelName})</span>}
@@ -177,7 +191,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
                         type="file" 
                         onChange={handleFileChange} 
                         className="text-base file:text-base flex-grow"
-                        accept=".py,.js,.ts,.jsx,.tsx,.java,.c,.cpp,.cs,.go,.php,.rb,.rs,.swift,.kt,.html,.css,.json,.md, .txt" // Common code file extensions
+                        accept=".py,.js,.ts,.jsx,.tsx,.java,.c,.cpp,.cs,.go,.php,.rb,.rs,.swift,.kt,.html,.css,.json,.md, .txt" 
                     />
                     {fileName && (
                         <Button variant="ghost" size="icon" onClick={clearFile} title="Eliminar archivo cargado">
@@ -215,7 +229,27 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
         </form>
       </Card>
 
-      {analysisResult && (
+      {analysisError && !isLoading && (
+        <Card className="shadow-lg border-destructive bg-destructive/10">
+          <CardHeader>
+            <CardTitle className="text-xl flex items-center gap-2 text-destructive-foreground">
+              <AlertTriangle className="h-6 w-6" />
+              Error en el Análisis
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-destructive-foreground/90">No se pudo completar el análisis del código:</p>
+            <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50">
+                <pre className="text-xs text-destructive-foreground whitespace-pre-wrap">{analysisError}</pre>
+            </ScrollArea>
+            <Button variant="outline" size="sm" onClick={() => handleCopyError(analysisError)} className="mt-2 text-destructive-foreground border-destructive/50 hover:bg-destructive/20">
+                <Copy className="mr-2 h-4 w-4"/> Copiar Mensaje de Error
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {analysisResult && !isLoading && !analysisError && (
         <Card className="shadow-lg">
           <CardHeader>
             <CardTitle className="text-2xl">Resultados del Análisis</CardTitle>

@@ -11,10 +11,16 @@
 import {z} from 'zod';
 import { analyzeProjectSourceWithGroq, GroqOptions, ProjectAnalysisGroqResponse } from '@/services/groq';
 
+// Extender GroqOptionsSchema para incluirla en el input
+const GroqOptionsSchema = z.object({
+  apiKey: z.string(),
+  modelName: z.string(),
+  timeoutMs: z.number().optional(),
+});
+
 const AnalyzeCodeAlchemistSourceInputSchema = z.object({
   sourceCode: z.string().describe('Un fragmento o colección de código fuente de la aplicación CodeAlchemist para ser analizado.'),
-  groqApiKey: z.string().describe('La clave API para acceder al modelo Groq.'),
-  groqModelName: z.string().describe('El nombre del modelo Groq a utilizar.'),
+  groqOptions: GroqOptionsSchema.describe('Opciones de configuración para la API de Groq, incluyendo clave, modelo y timeout.'),
   analysisPreferences: z.string().optional().describe('Preferencias o enfoque específico para el análisis de la IA, proporcionadas por el usuario.'),
 });
 export type AnalyzeCodeAlchemistSourceInput = z.infer<typeof AnalyzeCodeAlchemistSourceInputSchema>;
@@ -43,27 +49,24 @@ export async function analyzeCodeAlchemistSource(input: AnalyzeCodeAlchemistSour
   const validationResult = AnalyzeCodeAlchemistSourceInputSchema.safeParse(input);
   if (!validationResult.success) {
     console.error("Entrada inválida para analyzeCodeAlchemistSource:", validationResult.error.format());
-    throw new Error("Entrada inválida para el análisis del código fuente de CodeAlchemist.");
+    // Construir un mensaje de error más detallado
+    const formattedErrors = validationResult.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
+    throw new Error(`Entrada inválida para el análisis del código fuente de CodeAlchemist: ${formattedErrors}`);
   }
 
-  const groqOptions: GroqOptions = {
-    apiKey: input.groqApiKey,
-    modelName: input.groqModelName,
-  };
-
   // Utilizar el servicio Groq para analizar el código fuente del proyecto
+  // input.groqOptions ya es del tipo GroqOptions
   const analysisResult: ProjectAnalysisGroqResponse = await analyzeProjectSourceWithGroq(
     input.sourceCode, 
-    groqOptions,
-    input.analysisPreferences // Pasar las preferencias de análisis
+    input.groqOptions, // Pasar directamente el objeto de opciones
+    input.analysisPreferences 
   );
   
   const outputValidation = AnalyzeCodeAlchemistSourceOutputSchema.safeParse(analysisResult);
   if (!outputValidation.success) {
       console.error("Salida inválida de analyzeProjectSourceWithGroq:", outputValidation.error.format());
-      // Considera manejar este caso, por ejemplo, devolviendo un error o una respuesta por defecto.
-      // Podría ser útil devolver el error de validación o un objeto de error estandarizado.
-      throw new Error("La respuesta del análisis del proyecto no cumple el esquema esperado.");
+      const formattedErrors = outputValidation.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
+      throw new Error(`La respuesta del análisis del proyecto no cumple el esquema esperado: ${formattedErrors}`);
   }
   
   return analysisResult;

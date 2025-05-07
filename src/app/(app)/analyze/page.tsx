@@ -2,6 +2,7 @@
 import { CodeAnalysisSection } from '@/components/code-analysis-section';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
+import { Button } from '@/components/ui/button'; // Import Button for the action
 
 export default function AnalyzePage() {
   const { toast } = useToast();
@@ -14,21 +15,21 @@ export default function AnalyzePage() {
       
       const newSnapshot = {
         id: crypto.randomUUID(),
-        name: `Análisis ${nameSuffix} - ${new Date().toLocaleString('es-ES')}`, // Localized date
+        name: `Análisis ${nameSuffix} - ${new Date().toLocaleString('es-ES')}`, 
         code: code,
         timestamp: new Date().toISOString(),
       };
       
-      snapshots.unshift(newSnapshot); // Añadir al principio
+      snapshots.unshift(newSnapshot); 
       localStorage.setItem('codealchemist_snapshots', JSON.stringify(snapshots));
       
       toast({
         title: '¡Versión Guardada!',
         description: `${newSnapshot.name} ha sido guardada.`,
         action: (
-            <button onClick={() => router.push('/versions')} className="ml-auto rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:bg-primary/90">
+            <Button onClick={() => router.push('/versions')} variant="outline" size="sm" className="ml-auto">
                 Ver Versiones
-            </button>
+            </Button>
         ),
       });
     } catch (error) {
