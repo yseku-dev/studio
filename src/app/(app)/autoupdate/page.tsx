@@ -21,8 +21,9 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Textarea } from '@/components/ui/textarea';
-import JSZip from 'jszip'; // For zipping files
+import JSZip from 'jszip';
 import { Label } from '@/components/ui/label';
+import { Progress } from "@/components/ui/progress";
 
 
 type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "success" | "error";
@@ -33,9 +34,12 @@ interface SuggestionWithStatus extends FlowSuggestionUnit {
   status: SuggestionStatus;
   errorMessage?: string;
   originalContent?: string; 
-  // 'suggestedFullFileContent' from FlowSuggestionUnit will be used
 }
 
+interface AnalysisProgress {
+  processed: number;
+  total: number;
+}
 
 export default function AutoUpdatePage() {
   const [status, setStatus] = useState<AutoUpdateStatus>("idle");
@@ -44,6 +48,7 @@ export default function AutoUpdatePage() {
   const [isDownloading, setIsDownloading] = useState(false);
   const [projectFiles, setProjectFiles] = useState<Awaited<ReturnType<typeof getApplicationSourceBundle>>['files']>([]);
   const [analysisPreferences, setAnalysisPreferences] = useState<string>("");
+  const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress | null>(null);
   const { toast } = useToast();
 
   const [apiKey, setApiKey] = useState<string | null>(null);
@@ -55,11 +60,12 @@ export default function AutoUpdatePage() {
   }, []);
 
   const fetchProjectFiles = async () => {
-     const bundleResult = await getApplicationSourceBundle();
+     const bundleResult = await getApplicationSourceBundle(false); // No concatenar para la lista de archivos
      if (bundleResult.success && bundleResult.files) {
        setProjectFiles(bundleResult.files);
      } else {
        toast({ title: "Error", description: "No se pudieron cargar los archivos del proyecto para la referencia de sugerencias.", variant: "destructive" });
+       setProjectFiles([]); // Asegurar que sea un array vacío en caso de error
      }
   };
 
@@ -76,14 +82,18 @@ export default function AutoUpdatePage() {
     setStatus("loading_source"); 
     setAnalysisResult(null);
     setSuggestionsWithStatus([]);
+    setAnalysisProgress(null);
     toast({
       title: "Auto-Análisis Iniciado",
-      description: "Cargando y analizando el código fuente completo de CodeAlchemist..."
+      description: "Cargando y preparando el código fuente de CodeAlchemist..."
     });
 
-    await fetchProjectFiles(); // Cargar archivos para referencia ANTES de que las sugerencias se procesen
+    await fetchProjectFiles(); 
     setStatus("analyzing"); 
 
+    // La función onProgress en handleAutoAnalyzeAppSource es principalmente para logging en el servidor.
+    // Para progreso real en UI, se necesitaría un enfoque más complejo (WebSockets, polling).
+    // Aquí simulamos el progreso basado en la finalización de la llamada.
     const result = await handleAutoAnalyzeAppSource(apiKey, modelName, analysisPreferences);
 
     if (result.success && result.data) {
@@ -91,7 +101,7 @@ export default function AutoUpdatePage() {
       const initialSuggestions = result.data.suggestions.map((s, index) => {
         const relatedFile = projectFiles?.find(f => s.area && f.fileName.toLowerCase().includes(s.area.toLowerCase()));
         let currentStatus: SuggestionStatus = "pending";
-        if (!s.suggestedFullFileContent || !relatedFile) {
+        if (!s.suggestedFullFileContent || !relatedFile?.content) { // Verificar también relatedFile.content
             currentStatus = "not_applicable";
         }
 
@@ -106,8 +116,11 @@ export default function AutoUpdatePage() {
       setStatus("success");
       toast({
         title: "Auto-Análisis Completado",
-        description: "Se han generado sugerencias para CodeAlchemist."
+        description: `Se han generado sugerencias para CodeAlchemist. ${result.chunksProcessed || ''} fragmentos procesados de ${result.totalChunks || ''}.`
       });
+      if (result.totalChunks) {
+        setAnalysisProgress({ processed: result.chunksProcessed || result.totalChunks, total: result.totalChunks });
+      }
     } else {
       setStatus("error");
       toast({
@@ -115,6 +128,9 @@ export default function AutoUpdatePage() {
         description: result.error || "Ocurrió un error desconocido.",
         variant: "destructive",
       });
+       if (result.totalChunks) {
+        setAnalysisProgress({ processed: result.chunksProcessed || 0, total: result.totalChunks });
+      }
     }
   };
 
@@ -130,12 +146,12 @@ export default function AutoUpdatePage() {
         return;
     }
     if (!suggestionToApply.originalContent) {
-        toast({ title: "Error", description: `No se encontró el contenido original para ${suggestionToApply.area}.`, variant: "destructive" });
+        toast({ title: "Error", description: `No se encontró el contenido original para ${suggestionToApply.area}. Esto puede ocurrir si el archivo es muy grande o no se pudo leer.`, variant: "destructive" });
         setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: "Falta contenido original."} : s));
         return;
     }
     if (!suggestionToApply.suggestedFullFileContent) {
-        toast({ title: "No Aplicable", description: `Esta sugerencia no incluye contenido de archivo modificado para aplicar directamente a ${suggestionToApply.area}.`, variant: "default" });
+        toast({ title: "No Aplicable", description: `Esta sugerencia no incluye contenido de archivo modificado para aplicar directamente a ${suggestionToApply.area}. Revisa la descripción de la sugerencia.`, variant: "default" });
         setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "not_applicable", errorMessage: "No hay contenido de archivo sugerido."} : s));
         return;
     }
@@ -143,22 +159,17 @@ export default function AutoUpdatePage() {
     setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "applying"} : s));
     toast({ title: "Aplicando Sugerencia...", description: `Simulando aplicación de cambio a ${suggestionToApply.area}` });
     
-    // La acción applySuggestedChange ahora es principalmente para simulación y logging en consola.
-    // La lógica real de escritura de archivos está desactivada por seguridad.
     const result = await applySuggestedChange(suggestionToApply.area, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent);
     
     if (result.success) {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {
           ...s, 
           status: "applied", 
-          // Actualizamos el 'originalContent' localmente para reflejar el cambio simulado,
-          // y el 'suggestedFullFileContent' también para consistencia.
           originalContent: result.newContent, 
           suggestedFullFileContent: result.newContent 
         } : s));
       toast({ title: "Sugerencia Aplicada (Simulación)", description: `El cambio para ${suggestionToApply.area} se ha simulado. Revisa la consola.`});
       
-      // Actualizar el archivo en projectFiles localmente para futuras referencias si se aplicara realmente
       setProjectFiles(prevFiles => (prevFiles || []).map(pf => pf.fileName === suggestionToApply.area ? {...pf, content: result.newContent!} : pf));
     } else {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: result.error} : s));
@@ -173,17 +184,33 @@ export default function AutoUpdatePage() {
       description: "Recopilando todos los archivos fuente de CodeAlchemist..."
     });
 
-    const result = await getApplicationSourceBundle(false); // No concatenar para descarga
+    // Usar los archivos ya cargados en projectFiles si están disponibles y son recientes,
+    // o volver a cargarlos si es necesario.
+    let filesToZip = projectFiles;
+    if (!filesToZip || filesToZip.length === 0) {
+        const bundleResult = await getApplicationSourceBundle(false);
+        if (bundleResult.success && bundleResult.files) {
+            filesToZip = bundleResult.files;
+        } else {
+            toast({
+                title: "Error al Obtener Código Fuente",
+                description: bundleResult.error || "No se pudo obtener el paquete de código fuente para la descarga.",
+                variant: "destructive",
+            });
+            setIsDownloading(false);
+            return;
+        }
+    }
+    
 
-    if (result.success && result.files) {
+    if (filesToZip && filesToZip.length > 0) {
       try {
         const zip = new JSZip();
-        result.files.forEach(file => {
-          // Asegurarse de que no haya nombres de archivo vacíos o inválidos
-          if (file.fileName && file.fileName.trim() !== "") {
+        filesToZip.forEach(file => {
+          if (file.fileName && file.fileName.trim() !== "" && !file.content.startsWith("// Archivo binario")) { // No incluir archivos binarios problemáticos en el zip
             zip.file(file.fileName, file.content);
           } else {
-            console.warn("Archivo omitido en ZIP debido a nombre inválido:", file);
+            console.warn("Archivo omitido en ZIP debido a nombre inválido o contenido binario no manejable:", file);
           }
         });
 
@@ -212,12 +239,18 @@ export default function AutoUpdatePage() {
     } else {
       toast({
         title: "Error al Obtener Código Fuente",
-        description: result.error || "No se pudo obtener el paquete de código fuente.",
+        description: "No se encontraron archivos para empaquetar.",
         variant: "destructive",
       });
     }
     setIsDownloading(false);
   };
+
+  useEffect(() => { // Cargar archivos del proyecto al montar la página para la descarga y referencia
+    fetchProjectFiles();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
 
   return (
     <div className="flex flex-col gap-6">
@@ -236,7 +269,7 @@ export default function AutoUpdatePage() {
         </CardHeader>
         <CardContent className="space-y-6">
           <p className="text-muted-foreground">
-            Al hacer clic en &quot;Iniciar Auto-Análisis&quot;, CodeAlchemist enviará su código fuente completo
+            Al hacer clic en &quot;Iniciar Auto-Análisis&quot;, CodeAlchemist recopilará su código fuente, lo dividirá en fragmentos si es necesario, y lo enviará
             al modelo de IA configurado para obtener un resumen de posibles mejoras. También puedes descargar el código fuente completo.
           </p>
 
@@ -270,7 +303,7 @@ export default function AutoUpdatePage() {
             </Button>
             <Button 
               onClick={handleDownloadSource} 
-              disabled={isDownloading}
+              disabled={isDownloading || projectFiles === null || projectFiles.length === 0}
               variant="outline"
               className="text-base py-3 px-6"
             >
@@ -283,6 +316,19 @@ export default function AutoUpdatePage() {
             </Button>
           </div>
 
+          {(status === "analyzing" || (status === "success" && analysisProgress) || (status === "error" && analysisProgress)) && analysisProgress && (
+            <div className="mt-4 space-y-2">
+                <Label className="text-sm">
+                    {status === "analyzing" ? "Procesando fragmentos..." : status === "success" ? "Análisis completado." : "Análisis interrumpido."}
+                </Label>
+                <Progress value={(analysisProgress.processed / analysisProgress.total) * 100} className="w-full h-2" />
+                <p className="text-xs text-muted-foreground">
+                    {analysisProgress.processed} de {analysisProgress.total} fragmentos procesados.
+                </p>
+            </div>
+           )}
+
+
           {analysisResult && status === "success" && (
             <Card className="mt-6 border-accent bg-accent/5">
               <CardHeader className="pb-3">
@@ -293,13 +339,15 @@ export default function AutoUpdatePage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
-                  <h4 className="font-semibold text-accent-foreground/90 mb-1">Evaluación General:</h4>
-                  <p className="text-sm text-accent-foreground/80">{analysisResult.overallAssessment}</p>
+                  <h4 className="font-semibold text-accent-foreground/90 mb-1">Evaluación General (Agregada):</h4>
+                  <ScrollArea className="h-[100px] p-2 border rounded bg-background/50">
+                    <pre className="text-xs text-accent-foreground/80 whitespace-pre-wrap">{analysisResult.overallAssessment}</pre>
+                  </ScrollArea>
                 </div>
                 <Separator />
                 {analysisResult.identifiedAreas.length > 0 && (
                   <div>
-                    <h4 className="font-semibold text-accent-foreground/90 mb-2">Áreas Identificadas:</h4>
+                    <h4 className="font-semibold text-accent-foreground/90 mb-2">Áreas Identificadas (Agregado):</h4>
                     <div className="flex flex-wrap gap-2">
                       {analysisResult.identifiedAreas.map((area, index) => (
                         <Badge key={index} variant="secondary">{area}</Badge>
@@ -310,7 +358,7 @@ export default function AutoUpdatePage() {
                 {suggestionsWithStatus.length > 0 && <Separator />}
                 {suggestionsWithStatus.length > 0 && (
                     <div>
-                    <h4 className="font-semibold text-accent-foreground/90 mb-2">Sugerencias Detalladas:</h4>
+                    <h4 className="font-semibold text-accent-foreground/90 mb-2">Sugerencias Detalladas ({suggestionsWithStatus.length}):</h4>
                     <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1">
                         <Info className="h-3 w-3 shrink-0"/> Las sugerencias de la IA pueden proponer modificar archivos. La aplicación de cambios es una SIMULACIÓN y no modificará tus archivos reales. Revisa la consola para ver qué se habría modificado.
                         </p>
@@ -332,7 +380,9 @@ export default function AutoUpdatePage() {
                                 <p className="text-xs text-destructive mt-1 mb-1">Error al aplicar: {s.errorMessage}</p>
                             )}
                             {s.status === "not_applicable" && (
-                                <p className="text-xs text-muted-foreground mt-1 mb-1">No aplicable directamente (sin contenido de archivo sugerido).</p>
+                                <p className="text-xs text-muted-foreground mt-1 mb-1">
+                                  No aplicable directamente. {s.suggestedFullFileContent === undefined ? 'No se proporcionó contenido de archivo modificado.' : !s.originalContent ? 'Falta contenido original del archivo.' : ''}
+                                </p>
                             )}
 
                             <div className="flex items-center gap-2 mt-2">
@@ -369,13 +419,13 @@ export default function AutoUpdatePage() {
                                                 <div>
                                                     <p className="font-semibold mb-1">Contenido Original (Fragmento):</p>
                                                     <ScrollArea className="h-60 border rounded p-2 bg-muted/30">
-                                                        <pre className="text-xs font-mono whitespace-pre-wrap">{s.originalContent?.substring(0,1500) + (s.originalContent && s.originalContent.length > 1500 ? "..." : "")}</pre>
+                                                        <pre className="text-xs font-mono whitespace-pre-wrap">{s.originalContent?.substring(0,1500) + (s.originalContent && s.originalContent.length > 1500 ? "..." : "") || "No disponible"}</pre>
                                                     </ScrollArea>
                                                 </div>
                                                 <div>
                                                     <p className="font-semibold mb-1">Contenido Sugerido por IA (Fragmento):</p>
                                                     <ScrollArea className="h-60 border rounded p-2 bg-muted/30">
-                                                      <pre className="text-xs font-mono whitespace-pre-wrap">{s.suggestedFullFileContent?.substring(0,1500) + (s.suggestedFullFileContent && s.suggestedFullFileContent.length > 1500 ? "..." : "")}</pre>
+                                                      <pre className="text-xs font-mono whitespace-pre-wrap">{s.suggestedFullFileContent?.substring(0,1500) + (s.suggestedFullFileContent && s.suggestedFullFileContent.length > 1500 ? "..." : "") || "No disponible"}</pre>
                                                     </ScrollArea>
                                                 </div>
                                             </div>
@@ -400,7 +450,7 @@ export default function AutoUpdatePage() {
               </CardContent>
             </Card>
           )}
-           {(status === "loading_source" || status === "analyzing") && (
+           {(status === "loading_source" || status === "analyzing" && !analysisProgress) && ( // Mostrar loader principal si no hay progreso de chunks
             <div 
               data-ai-hint="code processing animation"
               className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6"
@@ -428,8 +478,8 @@ export default function AutoUpdatePage() {
         </CardContent>
         <CardFooter>
           <p className="text-xs text-muted-foreground">
-            <strong>Nota Importante:</strong> El análisis se realiza sobre el código fuente completo de CodeAlchemist.
-            La descarga de código fuente proporciona un archivo ZIP de todos los archivos detectados (excluyendo patrones de .gitignore).
+            <strong>Nota Importante:</strong> El análisis se realiza sobre el código fuente completo de CodeAlchemist, potencialmente dividido en fragmentos para manejar límites de tokens.
+            La descarga de código fuente proporciona un archivo ZIP de todos los archivos detectados (excluyendo patrones definidos y archivos binarios grandes no legibles).
             Las sugerencias de IA y su aplicación (simulada) siempre deben ser revisadas cuidadosamente por un desarrollador.
           </p>
         </CardFooter>
@@ -437,3 +487,5 @@ export default function AutoUpdatePage() {
     </div>
   );
 }
+
+    

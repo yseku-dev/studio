@@ -57,8 +57,8 @@ export async function analyzeCodeWithGroq(
         content: `Analiza el siguiente código y sugiere mejoras:\n\n\`\`\`\n${code}\n\`\`\``
       }
     ],
-    temperature: 0.3, // Bajo para respuestas más consistentes y menos "creativas"
-    max_tokens: 2048, // Límite razonable para sugerencia y explicación
+    temperature: 0.3, 
+    max_tokens: 2048, 
     response_format: { type: "json_object" },
   };
 
@@ -100,7 +100,7 @@ export async function analyzeCodeWithGroq(
 
   } catch (error) {
     console.error("Error llamando a la API de Groq (analyzeCodeWithGroq):", error);
-    throw error; // Re-lanzar para que el llamador lo maneje
+    throw error; 
   }
 }
 
@@ -121,34 +121,34 @@ export interface ProjectAnalysisGroqResponse {
 }
 
 /**
- * Analiza de forma asíncrona el código fuente de un proyecto utilizando la API del modelo de lenguaje Groq.
+ * Analiza de forma asíncrona el código fuente de un proyecto (o un fragmento de él) utilizando la API del modelo de lenguaje Groq.
  *
- * @param sourceCode El código fuente del proyecto a analizar (puede ser un fragmento grande o concatenación de archivos).
+ * @param sourceCodeChunk El fragmento de código fuente del proyecto a analizar.
  * @param options Opciones de configuración para la API de Groq.
  * @param analysisPreferences Preferencias o enfoque específico para el análisis de la IA.
  * @returns Una promesa que se resuelve en un objeto ProjectAnalysisGroqResponse.
  */
 export async function analyzeProjectSourceWithGroq(
-  sourceCode: string,
+  sourceCodeChunk: string, // El nombre del parámetro cambia para reflejar que es un fragmento
   options: GroqOptions,
   analysisPreferences?: string
 ): Promise<ProjectAnalysisGroqResponse> {
-  console.log(`Realizando llamada a API de Groq (modelo: ${options.modelName}) para análisis de proyecto...`);
+  console.log(`Realizando llamada a API de Groq (modelo: ${options.modelName}) para análisis de fragmento de proyecto... (${sourceCodeChunk.length} caracteres)`);
   
-  let systemPrompt = `Eres un asistente experto en análisis de código. Analiza el siguiente código fuente de un proyecto completo y proporciona:
-1. Un título conciso para el análisis (campo "analysisTitle").
-2. Una lista de nombres de archivos o áreas clave identificadas para revisión o mejora (campo "identifiedAreas").
+  let systemPrompt = `Eres un asistente experto en análisis de código. Analiza el siguiente FRAGMENTO de código fuente de un proyecto y proporciona:
+1. Un título conciso para el análisis de este fragmento (campo "analysisTitle").
+2. Una lista de nombres de archivos o áreas clave identificadas DENTRO DE ESTE FRAGMENTO para revisión o mejora (campo "identifiedAreas").
 3. Una lista de sugerencias detalladas (campo "suggestions"). Cada sugerencia debe ser un objeto con:
-    - "area": (string) El nombre del archivo o componente al que se aplica la sugerencia (ej. "src/utils/helpers.ts").
+    - "area": (string) El nombre del archivo o componente al que se aplica la sugerencia (ej. "src/utils/helpers.ts"). Este nombre debe corresponder a un archivo mencionado en el fragmento.
     - "suggestion": (string) Una descripción concisa de la mejora o el problema identificado.
     - "priority": (string, opcional) La prioridad de la sugerencia ('high', 'medium', 'low').
-    - "suggestedFullFileContent": (string, opcional) Si la sugerencia implica un cambio de código directo en el archivo especificado en "area", proporciona AQUÍ el contenido COMPLETO del archivo con la sugerencia aplicada. Si la sugerencia es más general o no implica un cambio directo de código completo, este campo puede omitirse.
-4. Una evaluación general del código (campo "overallAssessment").
+    - "suggestedFullFileContent": (string, opcional) SOLO si la sugerencia implica un cambio de código directo Y el archivo completo está contenido DENTRO de este fragmento, proporciona el contenido COMPLETO del archivo con la sugerencia aplicada. Si el archivo es más grande que este fragmento o la sugerencia no es un cambio de código completo para un archivo totalmente visible aquí, OMITE este campo y detalla los cambios en "suggestion".
+4. Una evaluación general del CÓDIGO PROPORCIONADO EN ESTE FRAGMENTO (campo "overallAssessment").
 
-Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTitle", "identifiedAreas", "suggestions", "overallAssessment". Asegúrate de que la respuesta sea un único objeto JSON.`;
+Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTitle", "identifiedAreas", "suggestions", "overallAssessment". Asegúrate de que la respuesta sea un único objeto JSON. Los nombres de archivo en "area" deben coincidir con los identificadores de archivo "// --- Archivo: nombre_del_archivo ---" presentes en el fragmento.`;
 
   if (analysisPreferences) {
-    systemPrompt += `\n\nTen en cuenta las siguientes preferencias o áreas de enfoque para tu análisis: "${analysisPreferences}".`;
+    systemPrompt += `\n\nTen en cuenta las siguientes preferencias o áreas de enfoque para tu análisis sobre este fragmento: "${analysisPreferences}".`;
   }
 
   const requestBody = {
@@ -160,11 +160,12 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
       },
       {
         role: "user",
-        content: `Analiza el siguiente código fuente del proyecto:\n\n${sourceCode.substring(0, 100000)}` // Aumentado el límite, pero Groq puede tener límites más estrictos.
+        // Ya no se hace substring aquí; el chunk ya está limitado en tamaño.
+        content: `Analiza el siguiente fragmento de código fuente del proyecto:\n\n${sourceCodeChunk}`
       }
     ],
     temperature: 0.2, 
-    max_tokens: 4000, // Aumentado para permitir respuestas más detalladas y contenido de archivo
+    max_tokens: 4000, // Mantener un límite alto para permitir respuestas detalladas
     response_format: { type: "json_object" },
   };
 
@@ -180,8 +181,8 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
 
     if (!response.ok) {
       const errorBody = await response.text();
-      console.error("Respuesta de error de la API de Groq (análisis de proyecto):", errorBody);
-      throw new Error(`Error de la API de Groq (análisis de proyecto): ${response.status} ${response.statusText}. Detalle: ${errorBody}`);
+      console.error("Respuesta de error de la API de Groq (análisis de fragmento de proyecto):", errorBody);
+      throw new Error(`Error de la API de Groq (análisis de fragmento de proyecto): ${response.status} ${response.statusText}. Detalle: ${errorBody}`);
     }
 
     const data = await response.json();
@@ -191,22 +192,22 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
         try {
             parsedResult = JSON.parse(data.choices[0].message.content);
             if (!parsedResult.analysisTitle || !parsedResult.identifiedAreas || !parsedResult.suggestions || !parsedResult.overallAssessment) {
-                console.error("Respuesta JSON de Groq incompleta (análisis de proyecto):", parsedResult);
-                throw new Error("La respuesta JSON de Groq (análisis de proyecto) no contiene todos los campos requeridos.");
+                console.error("Respuesta JSON de Groq incompleta (análisis de fragmento de proyecto):", parsedResult);
+                throw new Error("La respuesta JSON de Groq (análisis de fragmento de proyecto) no contiene todos los campos requeridos.");
             }
         } catch (parseError) {
-            console.error("Error al parsear la respuesta JSON de Groq (análisis de proyecto):", parseError, "\nContenido recibido:", data.choices[0].message.content);
-            throw new Error(`La respuesta de Groq (análisis de proyecto) no es un JSON válido o faltan campos. Error de parseo: ${(parseError as Error).message}`);
+            console.error("Error al parsear la respuesta JSON de Groq (análisis de fragmento de proyecto):", parseError, "\nContenido recibido:", data.choices[0].message.content);
+            throw new Error(`La respuesta de Groq (análisis de fragmento de proyecto) no es un JSON válido o faltan campos. Error de parseo: ${(parseError as Error).message}`);
         }
     } else {
-        console.error("Respuesta inesperada de la API de Groq (análisis de proyecto):", data);
-        throw new Error("Respuesta inesperada de la API de Groq (análisis de proyecto).");
+        console.error("Respuesta inesperada de la API de Groq (análisis de fragmento de proyecto):", data);
+        throw new Error("Respuesta inesperada de la API de Groq (análisis de fragmento de proyecto).");
     }
     return parsedResult;
     
   } catch (error) {
-    console.error("Error llamando a la API de Groq para análisis de proyecto:", error);
-    throw new Error(`Fallo en el servicio de análisis de proyecto de Groq: ${(error as Error).message}`);
+    console.error("Error llamando a la API de Groq para análisis de fragmento de proyecto:", error);
+    throw new Error(`Fallo en el servicio de análisis de fragmento de proyecto de Groq: ${(error as Error).message}`);
   }
 }
 
@@ -254,3 +255,6 @@ export async function testGroqConnection(options: GroqOptions): Promise<{success
     return { success: false, message: `Falló la prueba de conexión: ${errorMessage}` };
   }
 }
+
+
+    
