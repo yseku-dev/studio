@@ -1,14 +1,13 @@
 'use server';
 /**
- * @fileOverview Flujo de IA para analizar el código fuente de la propia aplicación CodeAlchemist.
+ * @fileOverview Flujo para analizar el código fuente de la propia aplicación CodeAlchemist.
  *
- * - analyzeCodeAlchemistSource - Una función que analiza el código fuente de CodeAlchemist.
+ * - analyzeCodeAlchemistSource - Una función que analiza el código fuente de CodeAlchemist usando la API de Groq.
  * - AnalyzeCodeAlchemistSourceInput - El tipo de entrada para la función analyzeCodeAlchemistSource.
  * - AnalyzeCodeAlchemistSourceOutput - El tipo de retorno para la función analyzeCodeAlchemistSource.
  */
 
-import {ai} from '@/ai/genkit';
-import {z} from 'genkit';
+import {z} from 'zod'; // Zod sigue siendo útil para la validación de esquemas
 import { analyzeProjectSourceWithGroq, GroqOptions, ProjectAnalysisGroqResponse } from '@/services/groq';
 
 const AnalyzeCodeAlchemistSourceInputSchema = z.object({
@@ -31,27 +30,30 @@ const AnalyzeCodeAlchemistSourceOutputSchema = z.object({
 });
 export type AnalyzeCodeAlchemistSourceOutput = z.infer<typeof AnalyzeCodeAlchemistSourceOutputSchema>;
 
+
+// Esta ya no es una función de flujo de Genkit, sino una función de servidor asíncrona normal.
 export async function analyzeCodeAlchemistSource(input: AnalyzeCodeAlchemistSourceInput): Promise<AnalyzeCodeAlchemistSourceOutput> {
-  return analyzeCodeAlchemistSourceFlow(input);
-}
-
-const analyzeCodeAlchemistSourceFlow = ai.defineFlow(
-  {
-    name: 'analyzeCodeAlchemistSourceFlow',
-    inputSchema: AnalyzeCodeAlchemistSourceInputSchema,
-    outputSchema: AnalyzeCodeAlchemistSourceOutputSchema,
-  },
-  async (input) => {
-    const groqOptions: GroqOptions = {
-      apiKey: input.groqApiKey,
-      modelName: input.groqModelName,
-    };
-
-    // Utilizar el servicio Groq (simulado por ahora) para analizar el código fuente del proyecto
-    const analysisResult: ProjectAnalysisGroqResponse = await analyzeProjectSourceWithGroq(input.sourceCode, groqOptions);
-
-    // El esquema de salida del flujo es idéntico a ProjectAnalysisGroqResponse
-    return analysisResult;
+  const validationResult = AnalyzeCodeAlchemistSourceInputSchema.safeParse(input);
+  if (!validationResult.success) {
+    console.error("Entrada inválida para analyzeCodeAlchemistSource:", validationResult.error.format());
+    throw new Error("Entrada inválida para el análisis del código fuente de CodeAlchemist.");
   }
-);
 
+  const groqOptions: GroqOptions = {
+    apiKey: input.groqApiKey,
+    modelName: input.groqModelName,
+  };
+
+  // Utilizar el servicio Groq para analizar el código fuente del proyecto
+  const analysisResult: ProjectAnalysisGroqResponse = await analyzeProjectSourceWithGroq(input.sourceCode, groqOptions);
+  
+  // Validar la salida (opcional, pero buena práctica)
+  const outputValidation = AnalyzeCodeAlchemistSourceOutputSchema.safeParse(analysisResult);
+  if (!outputValidation.success) {
+      console.error("Salida inválida de analyzeProjectSourceWithGroq:", outputValidation.error.format());
+      // Considera manejar este caso, por ejemplo, devolviendo un error o una respuesta por defecto.
+  }
+  
+  // El esquema de salida del flujo es idéntico a ProjectAnalysisGroqResponse
+  return analysisResult;
+}
