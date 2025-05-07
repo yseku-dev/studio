@@ -16,7 +16,8 @@ interface AutoUpdateAnalysisResult {
 }
 
 // Reducido para evitar "Payload Too Large". Asumiendo ~1.9 chars/token y un límite de ~5200 tokens para contenido.
-const MAX_CHARS_PER_CHUNK = 9000; 
+// Aún más reducido a 7500 para dar más margen al prompt y evitar 413.
+const MAX_CHARS_PER_CHUNK = 7500; 
 const GROQ_API_TIMEOUT_MS = 60000 * 1; // 1 minuto por chunk
 
 export async function handleAutoAnalyzeAppSource(
@@ -122,12 +123,7 @@ export async function handleAutoAnalyzeAppSource(
       console.error(`Error analizando el fragmento ${processedChunks + 1}:`, error);
       let errorMessage = "Ocurrió un error desconocido durante el análisis de un fragmento.";
       if (error instanceof Error) {
-        errorMessage = error.message;
-        if (error.message.toLowerCase().includes("timeout") || error.message.toLowerCase().includes("excedió el tiempo límite")) {
-          errorMessage = `El análisis del fragmento ${processedChunks + 1} excedió el tiempo límite de ${GROQ_API_TIMEOUT_MS / 1000} segundos. Intenta de nuevo o revisa la configuración.`;
-        } else if (error.message.includes("413") || error.message.toLowerCase().includes("payload too large") || error.message.toLowerCase().includes("request too large")) {
-          errorMessage = `El fragmento ${processedChunks + 1} (${chunk.length} caracteres) es demasiado grande para el modelo ${modelName}. Reduce el tamaño del fragmento (MAX_CHARS_PER_CHUNK) o prueba un modelo con mayor capacidad. Detalle: ${error.message}`;
-        }
+        errorMessage = error.message; // fetchWithRetry en groq.ts ya maneja timeouts y rate limits con mensajes específicos
       }
       return { success: false, error: `Falló el análisis del fragmento ${processedChunks + 1}: ${errorMessage}`, chunksProcessed: processedChunks, totalChunks: chunks.length };
     }
