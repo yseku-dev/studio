@@ -1,12 +1,11 @@
-
 'use server';
 
 import { analyzeProjectSourceChunk, type ProjectAnalysisResponse, type LLMOptions } from '@/services/groq';
 import { suggestErrorFix, SuggestErrorFixInput, SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow'; // Assuming this remains specific for now
 import fs from 'fs/promises';
 import path from 'path';
-import { glob } from 'glob'; 
-import simpleGit, { SimpleGitOptions } from 'simple-git';
+import { glob } from 'glob';
+import simpleGit, { SimpleGitOptions, SimpleGit } from 'simple-git';
 import os from 'os';
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
 
@@ -20,9 +19,9 @@ interface AutoUpdateAnalysisResult {
   detailedExecutionLogs?: string[];
 }
 
-const MAX_CHARS_PER_CHUNK = 3500; 
-const LLM_API_TIMEOUT_MS_AUTOUPDATE = 60000 * 1; 
-const INTER_CHUNK_PROCESSING_DELAY_MS = 5000; // Increased to 30s (30000) was too much, back to 5s
+const MAX_CHARS_PER_CHUNK = 3500;
+const LLM_API_TIMEOUT_MS_AUTOUPDATE = 60000 * 1; // 1 minute per chunk analysis
+const INTER_CHUNK_PROCESSING_DELAY_MS = 5000; // 5 seconds between chunks
 
 export async function handleAutoAnalyzeAppSource(
   providerId: LLMProviderId, // Expect providerId
@@ -32,14 +31,15 @@ export async function handleAutoAnalyzeAppSource(
   analysisPreferences?: string
 ): Promise<AutoUpdateAnalysisResult> {
   const executionLogs: string[] = [];
-  
-  const log = (message: string) => { 
+
+  const log = (message: string) => {
     const timestampedMessage = `[INFO ${new Date().toISOString()}] ${message}`;
-    console.log(timestampedMessage); 
-    executionLogs.push(timestampedMessage); 
+    console.log(timestampedMessage);
+    executionLogs.push(timestampedMessage);
   };
   const logDetail = (message: string) => {
     const timestampedMessage = `[DETAIL ${new Date().toISOString()}] ${message}`;
+    // console.log(timestampedMessage); // Optionally log details to console too
     executionLogs.push(timestampedMessage);
   };
   const logWarn = (message: string) => {
@@ -56,7 +56,7 @@ export async function handleAutoAnalyzeAppSource(
       } catch (e) {
         if (error instanceof Error) {
             errorDetail = error.message;
-        } else if (typeof error.toString === 'function') {
+        } else if (typeof error?.toString === 'function') {
             errorDetail = error.toString();
         }
       }
@@ -74,31 +74,34 @@ export async function handleAutoAnalyzeAppSource(
   log(`Iniciando auto-análisis de la aplicación con proveedor: ${currentProvider?.name || providerId}.`);
 
   if (!currentProvider) {
-    logError(`Proveedor LLM '${providerId}' no encontrado.`);
-    return { success: false, error: `Proveedor LLM '${providerId}' no encontrado. Por favor, configúralo en ajustes.`, detailedExecutionLogs: executionLogs };
+    const errorMsg = `Proveedor LLM '${providerId}' no encontrado.`;
+    logError(errorMsg);
+    return { success: false, error: `${errorMsg} Por favor, configúralo en ajustes.`, detailedExecutionLogs: executionLogs };
   }
   if (currentProvider.requiresApiKey && !apiKey) {
-    logError(`Configuración de API incompleta para ${currentProvider.name}. Clave API es obligatoria.`);
-    return { success: false, error: `La clave API para ${currentProvider.name} es obligatoria. Por favor, configúrala en ajustes.`, detailedExecutionLogs: executionLogs };
+    const errorMsg = `Configuración de API incompleta para ${currentProvider.name}. Clave API es obligatoria.`;
+    logError(errorMsg);
+    return { success: false, error: `${errorMsg} Por favor, configúrala en ajustes.`, detailedExecutionLogs: executionLogs };
   }
   if (!modelName) {
-    logError(`Configuración de API incompleta para ${currentProvider.name}. Nombre de modelo es obligatorio.`);
-    return { success: false, error: `El nombre del modelo para ${currentProvider.name} es obligatorio. Por favor, configúralo en ajustes.`, detailedExecutionLogs: executionLogs };
+    const errorMsg = `Configuración de API incompleta para ${currentProvider.name}. Nombre de modelo es obligatorio.`;
+    logError(errorMsg);
+    return { success: false, error: `${errorMsg} Por favor, configúralo en ajustes.`, detailedExecutionLogs: executionLogs };
   }
   log(`Usando modelo: ${modelName}. Preferencias de análisis: ${analysisPreferences || 'Ninguna'}.`);
 
   log("Obteniendo paquete de código fuente de la aplicación...");
-  const sourceBundleResult = await getApplicationSourceBundle(false, executionLogs); 
+  const sourceBundleResult = await getApplicationSourceBundle(false, executionLogs);
 
   if (!sourceBundleResult.success || !sourceBundleResult.files || sourceBundleResult.files.length === 0) {
     const errorMsg = sourceBundleResult.error || "No se pudo obtener el código fuente para analizar.";
     logError(`Fallo al obtener el código fuente: ${errorMsg}`);
-    return { 
-      success: false, 
-      error: errorMsg, 
-      chunksProcessed: 0, 
-      totalChunks: 0, 
-      detailedExecutionLogs: executionLogs 
+    return {
+      success: false,
+      error: errorMsg,
+      chunksProcessed: 0,
+      totalChunks: 0,
+      detailedExecutionLogs: executionLogs
     };
   }
   log(`Paquete de código fuente obtenido con ${sourceBundleResult.files.length} archivos.`);
@@ -107,11 +110,10 @@ export async function handleAutoAnalyzeAppSource(
   const chunks: string[] = [];
   let currentChunk = "";
   let currentChunkChars = 0;
-  let totalSourceChars = 0;
-  files.forEach(f => totalSourceChars += f.content.length);
+  let totalSourceChars = files.reduce((sum, f) => sum + f.content.length, 0);
 
   log(`Iniciando división del código fuente en fragmentos. Total de caracteres en fuente: ${totalSourceChars}. MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}.`);
-  
+
   for (const file of files) {
     logDetail(`Procesando archivo para fragmentación: ${file.fileName} (${file.content.length} caracteres).`);
     const baseFileName = file.fileName;
@@ -128,43 +130,43 @@ export async function handleAutoAnalyzeAppSource(
         currentChunk = "";
         currentChunkChars = 0;
       }
-      
+
       let offset = 0;
       let partIndex = 1;
       while(offset < fileEffectiveContent.length) {
         const partInfo = ` (parte ${partIndex})`;
         const partMarker = fileMarkerTemplate.replace("{part_info}", partInfo);
         const charsToTake = MAX_CHARS_PER_CHUNK - partMarker.length;
-        
-        if (charsToTake <= 0) { 
+
+        if (charsToTake <= 0) {
             logError(`El marcador para ${baseFileName}${partInfo} es demasiado largo (${partMarker.length}) para el tamaño del fragmento (MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}). Omitiendo esta parte del archivo.`);
-            break; 
+            break;
         }
         const part = fileEffectiveContent.substring(offset, offset + charsToTake);
         chunks.push(partMarker + part);
         logDetail(`Archivo ${baseFileName}${partInfo} creado como fragmento, tamaño de contenido ${part.length} caracteres.`);
-        offset += part.length; 
+        offset += part.length;
         partIndex++;
       }
-      continue; 
+      continue;
     }
 
     const fileContentMarker = fileMarkerTemplate.replace("{part_info}", "");
     if (currentChunkChars + fileEffectiveContent.length + fileContentMarker.length > MAX_CHARS_PER_CHUNK) {
-      if (currentChunk.length > 0) { 
+      if (currentChunk.length > 0) {
         chunks.push(currentChunk);
         logDetail(`Fragmento actual (${currentChunk.length} caracteres) añadido. Iniciando nuevo fragmento con ${baseFileName}.`);
       }
       currentChunk = fileContentMarker + fileEffectiveContent;
       currentChunkChars = fileEffectiveContent.length + fileContentMarker.length;
-    } else { 
+    } else {
       currentChunk += fileContentMarker + fileEffectiveContent;
       currentChunkChars += fileEffectiveContent.length + fileContentMarker.length;
     }
     logDetail(`Archivo ${baseFileName} (${fileEffectiveContent.length} caracteres) añadido al fragmento actual. Tamaño actual del fragmento: ${currentChunkChars}.`);
   }
 
-  if (currentChunk.length > 0) { 
+  if (currentChunk.length > 0) {
     chunks.push(currentChunk);
     logDetail(`Fragmento restante (${currentChunk.length} caracteres) añadido.`);
   }
@@ -178,15 +180,15 @@ export async function handleAutoAnalyzeAppSource(
 
   if (totalChunks === 0) {
     logWarn("No se generaron fragmentos de código para analizar. Esto puede ocurrir si no hay archivos o son muy pequeños.");
-    return { 
-      success: true, 
+    return {
+      success: true,
       data: { analysisTitle: "Sin Contenido para Analizar", identifiedAreas: [], suggestions: [], overallAssessment: "No se encontraron archivos o contenido para analizar." },
-      chunksProcessed: 0, 
-      totalChunks: 0, 
-      detailedExecutionLogs: executionLogs 
+      chunksProcessed: 0,
+      totalChunks: 0,
+      detailedExecutionLogs: executionLogs
     };
   }
-  
+
   const allResults: ProjectAnalysisResponse[] = [];
   let processedChunks = 0;
 
@@ -201,14 +203,14 @@ export async function handleAutoAnalyzeAppSource(
   for (const chunk of chunks) {
     const currentChunkNum = processedChunks + 1;
     log(`Iniciando análisis del fragmento ${currentChunkNum} de ${totalChunks}... (Tamaño: ${chunk.length} caracteres). Timeout: ${LLM_API_TIMEOUT_MS_AUTOUPDATE / 1000}s.`);
-    
+
     try {
       const result = await analyzeProjectSourceChunk(chunk, llmAPIOptions, analysisPreferences);
       allResults.push(result);
       processedChunks++;
       log(`Fragmento ${currentChunkNum}/${totalChunks} procesado exitosamente.`);
       logDetail(`Respuesta del fragmento ${currentChunkNum}: ${JSON.stringify(result).substring(0,200)}...`);
-      
+
       if (processedChunks < totalChunks) {
         log(`Esperando ${INTER_CHUNK_PROCESSING_DELAY_MS}ms antes del siguiente fragmento para gestionar los límites de TPM/RPM.`);
         await new Promise(resolve => setTimeout(resolve, INTER_CHUNK_PROCESSING_DELAY_MS));
@@ -217,7 +219,7 @@ export async function handleAutoAnalyzeAppSource(
     } catch (error) {
       let errorMessage = "Ocurrió un error desconocido durante el análisis de un fragmento.";
       if (error instanceof Error) {
-        errorMessage = error.message; 
+        errorMessage = error.message;
       } else {
         try {
             errorMessage = String(error);
@@ -231,42 +233,45 @@ export async function handleAutoAnalyzeAppSource(
         errorMessage = "Error sin mensaje detallado durante análisis de fragmento."
       }
       logError(`Error analizando el fragmento ${currentChunkNum}/${totalChunks}.`, error);
-      return { 
-        success: false, 
-        error: `Falló el análisis del fragmento ${currentChunkNum}: ${errorMessage}`, 
-        chunksProcessed: processedChunks, 
-        totalChunks: totalChunks, 
-        detailedExecutionLogs: executionLogs 
+      // Return error but include logs so far
+      return {
+        success: false,
+        error: `Falló el análisis del fragmento ${currentChunkNum}: ${errorMessage}`,
+        chunksProcessed: processedChunks,
+        totalChunks: totalChunks,
+        detailedExecutionLogs: executionLogs
       };
     }
   }
 
   if (allResults.length === 0 && totalChunks > 0) {
-    logError("No se obtuvieron resultados del análisis de los fragmentos, aunque se procesaron algunos o todos.");
-    return { 
-        success: false, 
-        error: "No se obtuvieron resultados del análisis de los fragmentos.", 
-        chunksProcessed: processedChunks, 
-        totalChunks: totalChunks, 
-        detailedExecutionLogs: executionLogs 
+     const errorMsg = "No se obtuvieron resultados del análisis de los fragmentos, aunque se procesaron algunos o todos.";
+    logError(errorMsg);
+    return {
+        success: false,
+        error: errorMsg,
+        chunksProcessed: processedChunks,
+        totalChunks: totalChunks,
+        detailedExecutionLogs: executionLogs
     };
   }
   log(`Análisis de todos los ${processedChunks} fragmentos completado. Agregando resultados...`);
 
+  // Basic aggregation: concatenate assessments, collect unique areas, combine suggestions
   const aggregatedResult: ProjectAnalysisResponse = {
     analysisTitle: allResults.length > 0 && allResults[0].analysisTitle ? `${allResults[0].analysisTitle} (Agregado)` : `Análisis Agregado de ${totalChunks} Fragmentos`,
     identifiedAreas: Array.from(new Set(allResults.flatMap(r => r.identifiedAreas || []))),
-    suggestions: allResults.flatMap(r => (r.suggestions || []).map(s => ({...s, area: s.area || "General (Fragmento)" }))), 
-    overallAssessment: allResults.map(r => r.overallAssessment || "").join('\n\n---\n\n') || "No se generó una evaluación general agregada.",
+    suggestions: allResults.flatMap(r => (r.suggestions || []).map(s => ({...s, area: s.area || "General (Fragmento)" }))),
+    overallAssessment: allResults.map(r => r.overallAssessment || "").filter(a => a.trim() !== "").join('\n\n---\n\n') || "No se generó una evaluación general agregada.",
   };
   log("Resultados agregados exitosamente.");
-  
-  return { 
-    success: true, 
-    data: aggregatedResult, 
-    chunksProcessed: processedChunks, 
-    totalChunks: totalChunks, 
-    detailedExecutionLogs: executionLogs 
+
+  return {
+    success: true,
+    data: aggregatedResult,
+    chunksProcessed: processedChunks,
+    totalChunks: totalChunks,
+    detailedExecutionLogs: executionLogs
   };
 }
 
@@ -277,38 +282,39 @@ export interface AppSourceFile {
 interface AppSourceBundleResult {
   success: boolean;
   files?: AppSourceFile[];
-  concatenatedSource?: string; 
+  concatenatedSource?: string;
   error?: string;
   logsBuilt?: string[];
 }
 
+// Adjusted ignore patterns based on user feedback for local execution
 const ignorePatterns = [
-  'node_modules/**', 
-  '.next/**',       
-  '*.zip',          
-  '.DS_Store',      
-  '*.log',          
-  'build/**',       
-  'dist/**',        
-  '.env',           
-  '.env.local',     
-  '.env.development', 
+  'node_modules/**',
+  '.next/**',
+  '*.zip',
+  '.DS_Store',
+  '*.log',
+  'build/**',
+  'dist/**',
+  //'.env', // Keep .env example maybe, but not actual secrets
+  '.env.local',
+  '.env.development',
   '.env.production',
-  '.env.test',      
-  '.git/**',        
+  '.env.test',
+  '.git/**',
 ];
 
 
 export async function getApplicationSourceBundle(
   concatenate: boolean = false,
-  parentExecutionLogs?: string[] 
+  parentExecutionLogs?: string[]
 ): Promise<AppSourceBundleResult> {
   const internalLogs: string[] = [];
   const log = (message: string, level: 'INFO' | 'DETAIL' | 'WARN' | 'ERROR' = 'INFO') => {
     const timestampedMessage = `[SourceBundle ${level} ${new Date().toISOString()}] ${message}`;
     switch(level) {
         case 'INFO': console.log(timestampedMessage); break;
-        case 'DETAIL': console.log(timestampedMessage); break; 
+        case 'DETAIL': console.log(timestampedMessage); break; // Keep details for debugging
         case 'WARN': console.warn(timestampedMessage); break;
         case 'ERROR': console.error(timestampedMessage); break;
     }
@@ -320,13 +326,13 @@ export async function getApplicationSourceBundle(
   try {
     const projectRoot = process.cwd();
     log(`Directorio raíz del proyecto: ${projectRoot}. Patrones de ignorados aplicados.`, 'DETAIL');
-    
-    const allFiles = await glob('**/*', { 
-      cwd: projectRoot, 
-      nodir: true, 
-      dot: true,   
+
+    const allFiles = await glob('**/*', {
+      cwd: projectRoot,
+      nodir: true,
+      dot: true,
       ignore: ignorePatterns,
-      follow: false, 
+      follow: false, // Don't follow symlinks
     });
     log(`Glob encontró ${allFiles.length} rutas de archivo después del filtrado inicial.`, 'INFO');
 
@@ -339,17 +345,20 @@ export async function getApplicationSourceBundle(
     let concatenatedContent = "";
 
     for (const relativeFilePath of allFiles) {
+      let fullPath: string;
       try {
-        const fullPath = path.join(projectRoot, relativeFilePath);
+        fullPath = path.join(projectRoot, relativeFilePath);
         log(`Procesando archivo: ${relativeFilePath}`, 'DETAIL');
         const stats = await fs.stat(fullPath);
         log(`Estadísticas para ${relativeFilePath}: tamaño ${stats.size} bytes.`, 'DETAIL');
 
-        if (concatenate && stats.size > 500 * 1024) { 
+        // Skip excessively large files, especially for concatenation
+        if (concatenate && stats.size > 500 * 1024) { // 500 KB limit for concatenation
             log(`Archivo omitido de la concatenación por tamaño excesivo: ${relativeFilePath} (${(stats.size / 1024).toFixed(2)} KB)`, 'WARN');
             const message = `// Archivo ${relativeFilePath} omitido de la concatenación por ser demasiado grande (${(stats.size / 1024).toFixed(2)} KB).\n`;
             concatenatedContent += `\n\n// --- Archivo: ${relativeFilePath} ---\n\n${message}`;
-            filesData.push({ fileName: relativeFilePath, content: message });
+            // Add placeholder to filesData if not concatenating, but skip content
+             if (!concatenate) filesData.push({ fileName: relativeFilePath, content: "// Archivo omitido por tamaño excesivo." });
             continue;
         }
 
@@ -359,15 +368,22 @@ export async function getApplicationSourceBundle(
           log(`Contenido de ${relativeFilePath} leído exitosamente.`, 'DETAIL');
         } catch (readError) {
           const error = readError as NodeJS.ErrnoException;
-          log(`No se pudo leer el archivo ${relativeFilePath} como texto (podría ser binario o error de permisos): ${error.message}. Código: ${error.code}`, 'WARN');
-          content = `// Error: No se pudo leer el archivo ${relativeFilePath} como texto. Causa: ${error.message}.`;
-           if (!concatenate && (error.code === 'EILSEQ' || stats.size > 1024 * 1024 * 2) ) { 
-             filesData.push({ fileName: relativeFilePath, content: "// Archivo binario o muy grande no legible, contenido omitido para ZIP." });
-             log(`Contenido de ${relativeFilePath} omitido para ZIP (binario/grande o error de lectura no concatenado).`, 'WARN');
-             continue; 
-           }
+          // Log common benign errors differently from actual read failures
+          if (error.code === 'EACCES' || error.code === 'ENOENT' || error.code === 'EISDIR') {
+              log(`Acceso/Permiso denegado o archivo no encontrado/es directorio para ${relativeFilePath}: ${error.message}. Omitiendo.`, 'DETAIL');
+              continue; // Skip this file entry entirely
+          } else {
+              log(`No se pudo leer el archivo ${relativeFilePath} como texto (podría ser binario o error desconocido): ${error.message}. Código: ${error.code}`, 'WARN');
+              content = `// Error: No se pudo leer el archivo ${relativeFilePath} como texto. Causa: ${error.message}.`;
+              // Include in bundle/zip with error message
+              filesData.push({ fileName: relativeFilePath, content: content });
+               if (concatenate) {
+                 concatenatedContent += `\n\n// --- Archivo: ${relativeFilePath} ---\n\n${content}`;
+               }
+              continue;
+          }
         }
-        
+
         filesData.push({ fileName: relativeFilePath, content });
         if (concatenate) {
           concatenatedContent += `\n\n// --- Archivo: ${relativeFilePath} ---\n\n${content}`;
@@ -375,16 +391,12 @@ export async function getApplicationSourceBundle(
         }
       } catch (fileProcessingError) {
         const error = fileProcessingError as NodeJS.ErrnoException;
-        if (error.code !== 'EACCES' && error.code !== 'EISDIR' && error.code !== 'ENOENT') { 
+        if (error.code !== 'EACCES' && error.code !== 'EISDIR' && error.code !== 'ENOENT') {
             log(`Error al procesar el archivo ${relativeFilePath} para el paquete fuente: ${error.message}. Código: ${error.code}`, 'WARN');
         } else {
             log(`Error de acceso/directorio omitido para ${relativeFilePath}: ${error.message}. Código: ${error.code}`, 'DETAIL');
         }
-        const errorMessage = `// Error: No se pudo procesar completamente el archivo ${relativeFilePath}. Causa: ${error.message}`;
-        filesData.push({ fileName: relativeFilePath, content: errorMessage });
-         if (concatenate) {
-          concatenatedContent += `\n\n// --- Archivo: ${relativeFilePath} ---\n\n${errorMessage}`;
-        }
+        // Don't add files with processing errors to the list
       }
     }
 
@@ -393,11 +405,11 @@ export async function getApplicationSourceBundle(
         return { success: false, error: "No se pudieron recopilar datos de archivos fuente.", logsBuilt: internalLogs };
     }
     log(`Procesamiento del paquete de código fuente finalizado. Total de entradas de archivo: ${filesData.length}.`, 'INFO');
-    return { 
-        success: true, 
-        files: filesData, 
-        concatenatedSource: concatenate ? concatenatedContent : undefined, 
-        logsBuilt: internalLogs 
+    return {
+        success: true,
+        files: filesData,
+        concatenatedSource: concatenate ? concatenatedContent : undefined,
+        logsBuilt: internalLogs
     };
   } catch (error) {
     let errorMessage: string;
@@ -419,51 +431,66 @@ export async function getApplicationSourceBundle(
     if (error instanceof Error && error.stack) {
         log(`Stack del error crítico: ${error.stack}`, 'ERROR');
     }
-    return { 
-        success: false, 
-        error: `Falló la obtención del paquete de código fuente: ${errorMessage}`, 
-        logsBuilt: internalLogs 
+    return {
+        success: false,
+        error: `Falló la obtención del paquete de código fuente: ${errorMessage}`,
+        logsBuilt: internalLogs
     };
   }
 }
 
 export async function applySuggestedChange(
-    filePath: string, 
-    originalContent: string, 
+    filePath: string,
+    originalContent: string, // Maybe not needed if we read fresh
     suggestedContent: string,
     executionLogs?: string[]
 ): Promise<{success: boolean, error?: string, newContent?: string}> {
-    const log = (message: string, level: 'INFO' | 'ERROR' = 'INFO') => {
+    const log = (message: string, level: 'INFO' | 'ERROR' | 'DETAIL' = 'INFO') => {
         const timestampedMessage = `[ApplyChange ${level} ${new Date().toISOString()}] ${message}`;
         if (level === 'INFO') console.log(timestampedMessage);
-        else console.error(timestampedMessage);
+        else if (level === 'ERROR') console.error(timestampedMessage);
+        else console.log(timestampedMessage); // Log details too
         if (executionLogs) executionLogs.push(timestampedMessage);
     };
 
     log(`Intentando aplicar cambio al archivo: ${filePath}`, 'INFO');
-    
+
+    let fullPath: string;
     try {
         const projectRoot = process.cwd();
-        const fullPath = path.join(projectRoot, filePath);
+        fullPath = path.resolve(projectRoot, filePath); // Use resolve for absolute path
+        log(`Ruta absoluta del archivo para escritura: ${fullPath}`, 'DETAIL');
 
-        log(`Ruta completa del archivo para escritura: ${fullPath}`, 'INFO');
-        
-        if (!fullPath.startsWith(projectRoot)) {
-            log(`Intento de escritura fuera del directorio del proyecto denegado: ${filePath}`, 'ERROR');
+        // Security check: Ensure the path is within the project directory
+        if (!fullPath.startsWith(projectRoot + path.sep) && fullPath !== projectRoot) {
+             // Check if it starts with project root + separator OR is exactly project root (e.g., for root files like README)
+            log(`Intento de escritura fuera del directorio del proyecto denegado: ${filePath} (Resuelto a: ${fullPath})`, 'ERROR');
             return { success: false, error: `Acceso denegado: La ruta del archivo está fuera de los límites permitidos.` };
         }
-        
+
+        // Ensure the directory exists
         const dirName = path.dirname(fullPath);
-        try {
-            await fs.mkdir(dirName, { recursive: true });
-            log(`Directorio ${dirName} asegurado/creado.`, 'INFO');
-        } catch (mkdirError) {
-            const errorMsg = mkdirError instanceof Error ? mkdirError.message : String(mkdirError);
-            log(`Error al crear directorio ${dirName}: ${errorMsg}`, 'ERROR');
-            return { success: false, error: `No se pudo crear el directorio base para ${filePath}: ${errorMsg}` };
-        }
-        
-        log(`Escribiendo ${suggestedContent.length} caracteres en ${filePath}.`, 'INFO');
+        log(`Asegurando que el directorio existe: ${dirName}`, 'DETAIL');
+        await fs.mkdir(dirName, { recursive: true });
+        log(`Directorio ${dirName} asegurado/creado.`, 'INFO');
+
+
+        // Optionally: Read current content to compare (to avoid writing if no change or for more complex merging later)
+        // let currentContent = '';
+        // try {
+        //     currentContent = await fs.readFile(fullPath, 'utf-8');
+        // } catch (readError: any) {
+        //     if (readError.code !== 'ENOENT') { // Ignore if file doesn't exist yet
+        //         log(`Advertencia: No se pudo leer el contenido actual de ${filePath} antes de escribir: ${readError.message}`, 'WARN');
+        //     }
+        // }
+        // if (currentContent === suggestedContent) {
+        //     log(`Contenido sugerido es idéntico al actual en ${filePath}. No se requiere escritura.`, 'INFO');
+        //     return { success: true, newContent: suggestedContent }; // Indicate success without writing
+        // }
+
+
+        log(`Escribiendo ${suggestedContent.length} caracteres en ${filePath}.`, 'DETAIL');
         await fs.writeFile(fullPath, suggestedContent, 'utf-8');
         log(`ARCHIVO ACTUALIZADO: El archivo ${filePath} ha sido actualizado con el contenido sugerido.`, 'INFO');
         return { success: true, newContent: suggestedContent };
@@ -503,7 +530,7 @@ export async function handleGetErrorFixSuggestion(
   modelName: string,
   apiUrl?: string,
   executionLogs?: string[],
-  customContext?: string 
+  customContext?: string
 ): Promise<AutoFixSuggestionResult> {
    const log = (message: string, level: 'INFO' | 'ERROR' = 'INFO') => {
         const timestampedMessage = `[AutoFix ${level} ${new Date().toISOString()}] ${message}`;
@@ -514,18 +541,21 @@ export async function handleGetErrorFixSuggestion(
 
   const currentProvider = LLM_PROVIDERS.find(p => p.id === providerId);
   log(`Solicitando sugerencia de auto-corrección para error: "${errorMessage.substring(0,150)}..." con proveedor ${currentProvider?.name || providerId}`, 'INFO');
-  
+
   if (!currentProvider) {
-    log(`Proveedor LLM '${providerId}' no encontrado para auto-corrección.`, 'ERROR');
-    return { success: false, error: `Proveedor LLM '${providerId}' no encontrado.` };
+    const errorMsg = `Proveedor LLM '${providerId}' no encontrado para auto-corrección.`;
+    log(errorMsg, 'ERROR');
+    return { success: false, error: errorMsg };
   }
   if (currentProvider.requiresApiKey && !apiKey) {
-    log(`Configuración de API incompleta para auto-corrección con ${currentProvider.name}.`, 'ERROR');
-    return { success: false, error: `La clave API y el nombre del modelo son obligatorios para la auto-corrección con ${currentProvider.name}.` };
+    const errorMsg = `Configuración de API incompleta para auto-corrección con ${currentProvider.name}. Falta la clave API.`;
+    log(errorMsg, 'ERROR');
+    return { success: false, error: errorMsg };
   }
    if (!modelName) {
-    log(`Nombre de modelo no proporcionado para auto-corrección con ${currentProvider.name}.`, 'ERROR');
-    return { success: false, error: `El nombre del modelo es obligatorio para la auto-corrección con ${currentProvider.name}.` };
+    const errorMsg = `Nombre de modelo no proporcionado para auto-corrección con ${currentProvider.name}.`;
+    log(errorMsg, 'ERROR');
+    return { success: false, error: errorMsg };
   }
 
   const llmOptions: LLMOptions = { // Using LLMOptions for suggestErrorFix
@@ -533,14 +563,13 @@ export async function handleGetErrorFixSuggestion(
     apiKey,
     modelName,
     apiUrl: apiUrl || currentProvider.apiUrl,
-    timeoutMs: LLM_API_TIMEOUT_MS_AUTOUPDATE, 
+    timeoutMs: LLM_API_TIMEOUT_MS_AUTOUPDATE, // Use autoupdate timeout for fixing
   };
 
   const contextForIA = customContext || "Error ocurrido durante la función AutoUpdate (análisis del propio código de CodeAlchemist). Por favor, proporciona un análisis de causa raíz y sugerencias de solución específicas. Si el error es por límites de API, explica cómo mitigar el problema (ej. reducir payloads, ajustar timeouts, fragmentar datos, etc.).";
   log(`Contexto para la IA (AutoFix): "${contextForIA.substring(0,100)}..."`, 'INFO');
 
-  // Assuming suggestErrorFix is adapted or a new generic function is created
-  // For now, we'll keep using suggestErrorFix but pass LLMOptions
+  // Pass LLMOptions to suggestErrorFix
   const input: SuggestErrorFixInput = {
     error_message: errorMessage,
     context: contextForIA,
@@ -548,9 +577,7 @@ export async function handleGetErrorFixSuggestion(
   };
 
   try {
-    // This function call needs to be adapted if suggestErrorFix doesn't take LLMOptions
-    // or if we create a generic "suggestLLMErrorFix"
-    const result = await suggestErrorFix(input); // Critical: Ensure suggestErrorFix handles LLMOptions correctly
+    const result = await suggestErrorFix(input); // Ensure suggestErrorFix handles LLMOptions correctly
     log("Sugerencia de auto-corrección recibida exitosamente.", 'INFO');
     return { success: true, data: result };
   } catch (error) {
@@ -591,18 +618,21 @@ interface GitUploadResult {
 
 export async function handleUploadToGit(
     gitConfig: GitUploadConfig,
-    commitMessage: string, 
+    commitMessage: string,
     parentExecutionLogs?: string[]
 ): Promise<GitUploadResult> {
     const internalLogs: string[] = [];
     const log = (message: string, level: 'INFO' | 'DETAIL' | 'WARN' | 'ERROR' = 'INFO') => {
         const timestampedMessage = `[GitUpload ${level} ${new Date().toISOString()}] ${message}`;
-        console.log(timestampedMessage); 
+        if (level !== 'DETAIL') { // Avoid too much noise in console for details
+             console.log(timestampedMessage);
+        }
         internalLogs.push(timestampedMessage);
         if (parentExecutionLogs) parentExecutionLogs.push(timestampedMessage);
     };
-    
-    log(`Iniciando subida a Git para el repositorio: ${gitConfig.repoUrl.replace(gitConfig.pat, '********')}. Commit: "${commitMessage}"`, 'INFO');
+
+    const redactedRepoUrl = gitConfig.repoUrl.replace(gitConfig.pat, '********');
+    log(`Iniciando subida a Git para el repositorio: ${redactedRepoUrl}. Commit: "${commitMessage}"`, 'INFO');
 
     if (!gitConfig.repoUrl || !gitConfig.username || !gitConfig.email || !gitConfig.pat) {
         const errMsg = "Configuración de Git incompleta. Se requieren URL, nombre de usuario, email y PAT.";
@@ -611,7 +641,7 @@ export async function handleUploadToGit(
     }
 
     let tempRepoPath: string | undefined;
-    const defaultBranch = 'main'; 
+    const defaultBranch = 'main'; // Or 'master', adjust if needed
 
     try {
         log("Paso 1: Obtener el paquete de código fuente más reciente...", 'INFO');
@@ -622,7 +652,7 @@ export async function handleUploadToGit(
             return { success: false, message: errorMsg, logs: internalLogs };
         }
         log(`Paquete de código fuente obtenido con ${sourceBundle.files.length} archivos.`, 'INFO');
-        
+
         log("Paso 2: Creando un directorio temporal para el repositorio...", 'DETAIL');
         tempRepoPath = await fs.mkdtemp(path.join(os.tmpdir(), 'codealchemist-gitsync-'));
         log(`Directorio temporal creado: ${tempRepoPath}`, 'INFO');
@@ -632,25 +662,37 @@ export async function handleUploadToGit(
             binary: 'git',
             maxConcurrentProcesses: 1,
         };
-        const git = simpleGit(gitOptions);
+        const git: SimpleGit = simpleGit(gitOptions);
 
         log("Paso 3: Inicializando repositorio Git...", 'INFO');
         await git.init();
         log("Repositorio Git inicializado.", 'INFO');
 
         log(`Paso 3.1: Asegurando que la rama local sea '${defaultBranch}'...`, 'INFO');
-        const currentBranchSummary = await git.branchLocal();
-        if (currentBranchSummary.current !== defaultBranch) {
-            if (currentBranchSummary.all.includes(defaultBranch)) { 
-                 await git.checkout(defaultBranch);
-                 log(`Cambiado a la rama local existente '${defaultBranch}'.`, 'INFO');
-            } else { 
-                 await git.branch(['-M', defaultBranch]);
-                 log(`Rama actual renombrada a '${defaultBranch}'.`, 'INFO');
+        try {
+            await git.checkoutLocalBranch(defaultBranch);
+            log(`Rama local '${defaultBranch}' creada o ya existente.`, 'INFO');
+        } catch (branchError: any) {
+             // If branch already exists, checkout might fail. Try switching.
+            if (branchError.message && branchError.message.includes('already exists')) {
+                log(`La rama local '${defaultBranch}' ya existe. Intentando cambiar a ella.`, 'DETAIL');
+                try {
+                    await git.checkout(defaultBranch);
+                    log(`Cambiado a la rama local existente '${defaultBranch}'.`, 'INFO');
+                } catch (checkoutError: any) {
+                    log(`Error al cambiar a la rama '${defaultBranch}': ${checkoutError.message}`, 'ERROR');
+                    throw checkoutError; // Rethrow if checkout also fails
+                }
+            } else if (branchError.message && branchError.message.includes('is not a commit')) {
+                // Handle case where repo is initialized but has no commits yet
+                log(`El repositorio está vacío. La rama '${defaultBranch}' se creará en el primer commit.`, 'INFO');
             }
-        } else {
-            log(`La rama local actual ya es '${defaultBranch}'.`, 'INFO');
+             else {
+                log(`Error inesperado al gestionar la rama '${defaultBranch}': ${branchError.message}`, 'ERROR');
+                throw branchError;
+            }
         }
+
 
         log("Paso 4: Configurando usuario y email de Git...", 'INFO');
         await git.addConfig('user.name', gitConfig.username);
@@ -661,19 +703,25 @@ export async function handleUploadToGit(
         for (const file of sourceBundle.files) {
            const filePath = path.join(tempRepoPath, file.fileName);
            const dirForFile = path.dirname(filePath);
-           await fs.mkdir(dirForFile, { recursive: true });
-           await fs.writeFile(filePath, file.content, 'utf-8');
+           try {
+               await fs.mkdir(dirForFile, { recursive: true });
+               await fs.writeFile(filePath, file.content, 'utf-8');
+               log(`Archivo copiado: ${file.fileName}`, 'DETAIL');
+           } catch(writeError: any) {
+               log(`Error al escribir el archivo ${file.fileName} en el repositorio temporal: ${writeError.message}`, 'WARN');
+               // Decide if this should be fatal or just a warning
+           }
         }
         log("Archivos copiados al repositorio temporal.", 'INFO');
 
         log("Paso 6: Añadiendo todos los archivos al staging de Git...", 'INFO');
-        await git.add('./*'); 
+        await git.add('./*');
         log("Archivos añadidos al staging.", 'INFO');
 
         log(`Paso 7: Realizando commit con mensaje: "${commitMessage}"`, 'INFO');
         const commitResult = await git.commit(commitMessage);
 
-        if (!commitResult.commit && commitResult.summary.changes === 0) { 
+        if (!commitResult.commit && commitResult.summary.changes === 0) {
              log("No hay cambios para hacer commit. La subida a Git se considera exitosa sin push.", 'WARN');
              return { success: true, message: "No se detectaron cambios en el código fuente para subir a Git.", logs: internalLogs };
         }
@@ -681,7 +729,7 @@ export async function handleUploadToGit(
 
         log("Paso 8: Configurando repositorio remoto 'origin'...", 'INFO');
         const authenticatedRepoUrl = gitConfig.repoUrl.replace("https://", `https://${encodeURIComponent(gitConfig.username)}:${encodeURIComponent(gitConfig.pat)}@`);
-        
+
         const remotes = await git.getRemotes(true);
         if (remotes.find(r => r.name === 'origin')) {
             await git.remote(['set-url', 'origin', authenticatedRepoUrl]);
@@ -690,34 +738,41 @@ export async function handleUploadToGit(
             await git.addRemote('origin', authenticatedRepoUrl);
             log(`Remoto 'origin' añadido.`, 'INFO');
         }
-        log(`Repositorio remoto 'origin' configurado para ${gitConfig.repoUrl.replace(gitConfig.pat, '********')}`, 'INFO');
-        
-        log(`Paso 9: Realizando push a la rama '${defaultBranch}'...`, 'INFO');
-        await git.push(['-u', 'origin', defaultBranch, '--force']); 
+        log(`Repositorio remoto 'origin' configurado para ${redactedRepoUrl}`, 'INFO');
+
+        log(`Paso 9: Realizando push a la rama remota '${defaultBranch}'...`, 'INFO');
+        // Use --force cautiously, consider --force-with-lease if applicable, or handle divergence more gracefully
+        await git.push(['-u', 'origin', defaultBranch, '--force']);
         log(`Push a la rama '${defaultBranch}' completado.`, 'INFO');
 
-        const successMsg = `Subida a Git completada exitosamente al repositorio ${gitConfig.repoUrl.replace(gitConfig.pat, '********')}.`;
+        const successMsg = `Subida a Git completada exitosamente al repositorio ${redactedRepoUrl}.`;
         log(successMsg, 'INFO');
         return { success: true, message: successMsg, logs: internalLogs };
 
-    } catch (error) {
-        let errorMsg: string;
-        if (error instanceof Error) {
-            errorMsg = error.message;
-             if ((error as any).stack) log(`Stack del error de Git: ${(error as any).stack}`, 'ERROR');
-        } else {
-            try {
-                errorMsg = String(error);
-            } catch(e) {
-                errorMsg = "Error desconocido durante la subida a Git.";
-            }
+    } catch (error: any) {
+        let errorMsg = "Error desconocido durante la subida a Git.";
+        let errorDetails = error instanceof Error ? error.stack : '';
+
+        if (error.message) {
+             errorMsg = error.message;
+             // Add specific checks for common Git errors
+             if (error.message.includes("Authentication failed")) {
+                 errorMsg = "Falló la autenticación Git. Verifica tu nombre de usuario y PAT.";
+             } else if (error.message.includes("repository not found")) {
+                 errorMsg = "Repositorio Git no encontrado. Verifica la URL.";
+             } else if (error.message.includes("src refspec") && error.message.includes("does not match any")) {
+                 errorMsg = `La rama local '${defaultBranch}' no existe o no coincide con ninguna rama remota. Verifica el nombre de la rama.`;
+             } else if (error.message.includes("could not read Username")) {
+                  errorMsg = "Falló la autenticación Git (no se pudo leer el nombre de usuario). Verifica tu PAT y permisos.";
+             }
+             // Add more specific error handling as needed
         }
-        if (!errorMsg && errorMsg !== '') {
-            errorMsg = "Error desconocido durante la subida a Git.";
-        } else if (errorMsg === '') {
-            errorMsg = "Error sin mensaje detallado durante la subida a Git."
-        }
+
         log(`Error crítico durante la subida a Git: ${errorMsg}`, 'ERROR');
+        if (errorDetails) {
+            log(`Stack/Detalles del error de Git: ${errorDetails}`, 'ERROR');
+        }
+
         return { success: false, message: `Falló la subida a Git: ${errorMsg}`, logs: internalLogs };
     } finally {
         if (tempRepoPath) {
@@ -725,9 +780,9 @@ export async function handleUploadToGit(
             try {
                 await fs.rm(tempRepoPath, { recursive: true, force: true });
                 log("Directorio temporal eliminado.", 'INFO');
-            } catch (cleanupError) {
-                const cleanupErrorMsg = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-                log(`Error al limpiar el directorio temporal ${tempRepoPath}: ${cleanupErrorMsg}`, 'ERROR');
+            } catch (cleanupError: any) {
+                log(`Error al limpiar el directorio temporal ${tempRepoPath}: ${cleanupError.message}`, 'ERROR');
+                // Log cleanup error but don't override the primary error message if one occurred
             }
         }
     }

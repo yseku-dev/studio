@@ -13,11 +13,11 @@ import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
 
 // Schema for LLMOptions, required as part of the input
 const LLMOptionsSchema = z.object({
-  providerId: z.custom<LLMProviderId>(val => typeof val === 'string', { message: "Invalid Provider ID" }),
+  providerId: z.custom<LLMProviderId>(val => LLM_PROVIDERS.some(p => p.id === val), { message: "Invalid Provider ID" }),
   apiKey: z.string(),
   modelName: z.string(),
   apiUrl: z.string().url().optional(),
-  timeoutMs: z.number().optional(),
+  timeoutMs: z.number().int().positive().optional(),
 });
 
 const SuggestErrorFixInputSchema = z.object({
@@ -44,44 +44,47 @@ export async function suggestErrorFix(input: SuggestErrorFixInput): Promise<Sugg
   const { error_message, context, llmOptions } = input;
   const providerConfig = LLM_PROVIDERS.find(p => p.id === llmOptions.providerId);
 
-  console.log(`Llamando a ${providerConfig?.name || llmOptions.providerId} para corregir error (modelo: ${llmOptions.modelName}): "${error_message.substring(0,100)}..."`);
+  console.log(`[SuggestErrorFix] Llamando a ${providerConfig?.name || llmOptions.providerId} (modelo: ${llmOptions.modelName}): "${error_message.substring(0,100)}..."`);
 
   const systemPrompt = `Eres un ingeniero de software experto en depuración y resolución de problemas.
 Analiza el siguiente mensaje de error y el contexto proporcionado.
 Tu objetivo es identificar la causa raíz más probable y ofrecer sugerencias claras y accionables para solucionarlo.
 
-Responde ÚNICAMENTE en formato JSON con las siguientes claves:
+Responde ÚNICAMENTE en formato JSON válido con las siguientes claves:
 - "root_cause_analysis": (string) Un análisis detallado de la causa raíz más probable del error.
 - "solution_suggestions": (string) Una explicación paso a paso de cómo solucionar el error. Si implica cambios de código, sé específico sobre qué cambiar y por qué. Si implica configuraciones, detalla los pasos.
 
 Considera que el error puede estar relacionado con límites de API, configuración incorrecta, problemas de código, dependencias, etc.
-Si el error menciona límites de API (ej. TPM, RPM, "Payload Too Large", "Rate limit exceeded"), explica qué significa el límite y cómo el usuario puede ajustar su uso o configuración para respetarlo (ej. reducir tamaño de payload, añadir reintentos con backoff, espaciar las solicitudes, considerar actualizar plan si es una opción).`;
+Si el error menciona límites de API (ej. TPM, RPM, "Payload Too Large", "Rate limit exceeded"), explica qué significa el límite y cómo el usuario puede ajustar su uso o configuración para respetarlo (ej. reducir tamaño de payload, añadir reintentos con backoff, espaciar las solicitudes, considerar actualizar plan si es una opción).
+No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
 
   let userPromptContent = `Mensaje de Error:\n\`\`\`\n${error_message}\n\`\`\`\n`;
   if (context) {
     userPromptContent += `Contexto del Error:\n${context}\n`;
   }
-  
+
   const messages: ChatMessage[] = [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPromptContent }
   ];
 
   try {
-    // Use the generic chatWithLLM function
+    // Use the generic chatWithLLM function from the service layer
     const chatPayload: ChatLLMPayload = {
         messages: messages,
-        options: llmOptions
+        options: llmOptions // Pass the validated and complete LLMOptions
     };
-    const chatResponse: ChatLLMResponse = await chatWithLLM(chatPayload);
+    // Expect chatWithLLM to handle JSON parsing internally based on prompt instructions
+    const chatResponse = await chatWithLLM(chatPayload);
 
-    // Parse the JSON response
+    // Parse the JSON response from the content string
     let result: SuggestErrorFixOutput;
     try {
+        // Attempt to parse the response content as JSON
         result = JSON.parse(chatResponse.content);
     } catch (parseError) {
         console.error("Error al parsear la respuesta JSON de LLM (suggestErrorFix):", parseError, "\nContenido recibido:", chatResponse.content);
-        throw new Error(`La respuesta de LLM (suggestErrorFix) no es un JSON válido. Error: ${(parseError as Error).message}`);
+        throw new Error(`La respuesta de LLM (suggestErrorFix) no es un JSON válido o está malformada. Error: ${(parseError as Error).message}`);
     }
 
     // Validate the structure received from the LLM
@@ -94,8 +97,7 @@ Si el error menciona límites de API (ej. TPM, RPM, "Payload Too Large", "Rate l
     return result;
   } catch (error) {
     console.error(`Error al procesar la sugerencia de corrección de error con ${providerConfig?.name || llmOptions.providerId}:`, error);
-    // Re-throw the error which should already contain provider context from makeLLMRequest
+    // Re-throw the error which should already be an Error instance from makeLLMRequest/fetchWithRetry
     throw error;
   }
 }
-

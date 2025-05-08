@@ -1,4 +1,3 @@
-
 import {
   LLM_PROVIDERS,
   MODELS_BY_PROVIDER,
@@ -28,11 +27,11 @@ export interface CodeSuggestionResponse {
 export interface ProjectAnalysisResponse {
   analysisTitle: string;
   identifiedAreas: string[];
-  suggestions: Array<{ 
-    area: string; 
-    suggestion: string; 
+  suggestions: Array<{
+    area: string;
+    suggestion: string;
     priority?: 'high' | 'medium' | 'low';
-    suggestedFullFileContent?: string; 
+    suggestedFullFileContent?: string;
   }>;
   overallAssessment: string;
 }
@@ -94,55 +93,65 @@ async function fetchWithRetry(
         return response;
       }
 
-      const errorBodyText = await response.text(); 
+      let errorBodyText = 'No se pudo leer el cuerpo del error.';
+      try {
+          errorBodyText = await response.text();
+      } catch (readError) {
+          console.warn(`No se pudo leer el cuerpo del error de ${providerName} (${response.status})`);
+      }
 
-      if (response.status === 429) { 
-        lastError = new Error(`Error de la API de ${providerName}: Límite de tasa excedido (429). Detalle: ${errorBodyText}`);
-        
+
+      if (response.status === 429) {
+        lastError = new Error(`Error de la API de ${providerName}: Límite de tasa excedido (429). Detalle: ${errorBodyText.substring(0, 500)}`);
+
         if (attempt >= maxRetries) {
           console.error(`Máximos reintentos (${maxRetries}) alcanzados para ${providerName} después de error 429. Último error:`, errorBodyText);
           throw lastError;
         }
 
-        let waitMs = initialDelayMs * Math.pow(2, attempt - 1); 
+        let waitMs = initialDelayMs * Math.pow(2, attempt - 1);
         const retryAfterMatch = errorBodyText.match(/try again in (\d+\.?\d*)\s*s/i);
         if (retryAfterMatch && retryAfterMatch[1]) {
           const suggestedSeconds = parseFloat(retryAfterMatch[1]);
-          const suggestedWaitMs = Math.ceil(suggestedSeconds * 1000) + (Math.random() * 1000); 
-          waitMs = Math.max(waitMs, suggestedWaitMs); 
+          const suggestedWaitMs = Math.ceil(suggestedSeconds * 1000) + (Math.random() * 1000);
+          waitMs = Math.max(waitMs, suggestedWaitMs);
           console.warn(`${providerName} 429: Reintentando después del retraso sugerido/calculado de ${waitMs / 1000}s. Intento ${attempt}/${maxRetries}. Error: ${errorBodyText.substring(0, 200)}`);
         } else {
           console.warn(`${providerName} 429: Límite de tasa excedido. Reintentando en ${waitMs / 1000}s (intento ${attempt}/${maxRetries}). Error: ${errorBodyText.substring(0,200)}`);
         }
-        
+
         await new Promise(resolve => setTimeout(resolve, waitMs));
-        continue; 
-      } else if (response.status === 413) { 
-        lastError = new Error(`Error de la API de ${providerName}: Payload Too Large (413). Detalle: ${errorBodyText}`);
+        continue;
+      } else if (response.status === 413) {
+        lastError = new Error(`Error de la API de ${providerName}: Payload Too Large (413). Detalle: ${errorBodyText.substring(0, 500)}`);
         console.error(`Error de Payload Too Large (413) en ${providerName}. El payload es demasiado grande para el modelo. Error: ${errorBodyText}`);
         throw lastError;
+      } else {
+         lastError = new Error(`Error HTTP de ${providerName}: ${response.status} ${response.statusText}. Detalle: ${errorBodyText.substring(0, 500)}`);
+         // Throw immediately for non-retryable HTTP errors other than 429/413
+         console.error(`Respuesta de error HTTP ${response.status} de ${providerName}:`, errorBodyText);
+         throw lastError;
       }
 
-      console.error(`Respuesta de error HTTP de ${providerName} - ${response.status}:`, errorBodyText);
-      throw new Error(`Error HTTP de ${providerName}: ${response.status} ${response.statusText}. Detalle: ${errorBodyText}`);
-
-    } catch (error) { 
+    } catch (error) {
       lastError = error as Error;
       if (error instanceof Error && error.name === 'AbortError') {
         console.error(`Error de timeout llamando a ${providerName} en intento ${attempt}`);
-        throw error; 
+        // Throw immediately, timeout shouldn't be retried by this logic
+        throw new Error(`La solicitud a ${providerName} excedió el tiempo límite en el intento ${attempt}.`);
       }
-      
+
       if (attempt >= maxRetries) {
         console.error(`Máximos reintentos (${maxRetries}) alcanzados para ${providerName}. Último error:`, error);
         throw new Error(`Falló la solicitud a ${providerName} después de ${maxRetries} intentos. Último error: ${lastError.message}`);
       }
-      
+
       const waitMs = (initialDelayMs * Math.pow(2, attempt - 1)) + (Math.random() * 1000);
       console.warn(`${providerName}: Error en intento ${attempt}. Reintentando en ${waitMs / 1000}s. Error: ${lastError.message}`);
       await new Promise(resolve => setTimeout(resolve, waitMs));
     }
   }
+  // Should theoretically not be reached if all paths throw or return, but satisfies TypeScript
   throw new Error(`Falló la solicitud a ${providerName} después de ${maxRetries} intentos. Último error: ${lastError ? lastError.message : "Error desconocido"}`);
 }
 
@@ -173,8 +182,8 @@ async function makeLLMRequest<TResponse>(
   } else {
     throw new Error(`El proveedor ${providerConfig.name} no tiene una configuración de endpoint compatible definida.`);
   }
-  
-  console.log(`Realizando llamada a API de ${providerConfig.name} (modelo: ${options.modelName}) para ${serviceNameSuffix}...`);
+
+  console.log(`[${providerConfig.name} - ${serviceNameSuffix}] Llamando a ${endpoint} con modelo ${options.modelName}`);
 
   const headers: HeadersInit = { 'Content-Type': 'application/json' };
   if (providerConfig.requiresApiKey && options.apiKey && providerConfig.apiKeyName) {
@@ -185,7 +194,7 @@ async function makeLLMRequest<TResponse>(
       headers['Authorization'] = `Bearer ${options.apiKey}`;
     }
   }
-  
+
   let requestBody: any;
   if (providerConfig.isGroqCompatible || (providerConfig.id === 'ollama' && !providerConfig.isOllamaCompatible) ) {
     requestBody = {
@@ -194,6 +203,7 @@ async function makeLLMRequest<TResponse>(
       temperature: temperature,
       max_tokens: max_tokens,
       response_format: expectedResponseFormat === "json_object" ? { type: "json_object" } : undefined,
+      // stream: false, // Ensure streaming is off for standard requests
     };
   } else if (providerConfig.isAnthropicCompatible) {
     // Anthropic needs system message separately if present
@@ -205,8 +215,7 @@ async function makeLLMRequest<TResponse>(
       system: systemMessage?.content,
       temperature: temperature,
       max_tokens: max_tokens,
-      // Anthropic doesn't have a direct 'response_format' like OpenAI for JSON mode in the /messages API.
-      // You need to instruct it via the prompt to return JSON.
+      // stream: false,
     };
   } else if (providerConfig.isOllamaCompatible && providerConfig.id === 'ollama') {
     requestBody = {
@@ -252,26 +261,32 @@ async function makeLLMRequest<TResponse>(
     if (contentToParse) {
       if (expectedResponseFormat === "json_object") {
         try {
-          return JSON.parse(contentToParse) as TResponse;
+          // Clean potential markdown code block fences if present
+          const cleanedContent = contentToParse.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+          return JSON.parse(cleanedContent) as TResponse;
         } catch (parseError) {
           console.error(`Error al parsear la respuesta JSON de ${providerConfig.name} (${serviceNameSuffix}):`, parseError, "\nContenido recibido:", contentToParse);
-          throw new Error(`La respuesta de ${providerConfig.name} (${serviceNameSuffix}) no es un JSON válido. Error: ${(parseError as Error).message}`);
+          throw new Error(`La respuesta de ${providerConfig.name} (${serviceNameSuffix}) no es un JSON válido o está malformado. Error: ${(parseError as Error).message}`);
         }
       } else {
         // For text responses, we assume TResponse is { content: string } or similar
-        return { content: contentToParse } as unknown as TResponse; 
+        return { content: contentToParse } as unknown as TResponse;
       }
     } else {
-      console.error(`Respuesta inesperada de la API de ${providerConfig.name} (${serviceNameSuffix}):`, data);
-      throw new Error(`Respuesta inesperada de la API de ${providerConfig.name} (${serviceNameSuffix}). No se encontró contenido.`);
+      console.error(`Respuesta inesperada o vacía de la API de ${providerConfig.name} (${serviceNameSuffix}):`, data);
+      throw new Error(`Respuesta inesperada de la API de ${providerConfig.name} (${serviceNameSuffix}). No se encontró contenido interpretable.`);
     }
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      console.error(`Error de timeout final llamando a la API de ${providerConfig.name} (${serviceNameSuffix})`);
-      throw new Error(`La solicitud a la API de ${providerConfig.name} (${serviceNameSuffix}) excedió el tiempo límite general.`);
-    }
-    console.error(`Error procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}):`, error);
-    throw error;
+     // Ensure errors propagated from fetchWithRetry or thrown here are Error instances with messages
+     if (error instanceof Error) {
+       console.error(`Error procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}): ${error.message}`);
+       // Re-throw the existing error if it's already an Error instance
+       throw error;
+     } else {
+       // Wrap unknown errors
+       console.error(`Error desconocido procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}):`, error);
+       throw new Error(`Error desconocido durante la solicitud a ${providerConfig.name} (${serviceNameSuffix}).`);
+     }
   } finally {
     clearTimeout(timeoutId);
   }
@@ -287,16 +302,16 @@ export async function analyzeCode(
   const systemPrompt = `Eres un asistente experto en análisis de código. Analiza el siguiente fragmento de código y proporciona:
 1. Una sugerencia de código mejorado (campo "codeSuggestion").
 2. Una explicación concisa de las mejoras (campo "explanation").
-Responde ÚNICAMENTE en formato JSON con las claves exactas: "codeSuggestion" y "explanation". Asegúrate de que la respuesta sea un único objeto JSON.`;
-  
+Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "codeSuggestion" y "explanation". Asegúrate de que la respuesta sea un único objeto JSON válido. No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
+
   const messages: ChatMessage[] = [
     { role: "system", content: systemPrompt },
     { role: "user", content: `Analiza el siguiente código y sugiere mejoras:\n\n\`\`\`\n${code}\n\`\`\`` }
   ];
 
   const result = await makeLLMRequest<CodeSuggestionResponse>(
-    options, 
-    messages, 
+    options,
+    messages,
     "json_object",
     0.3, // temperature
     2048, // max_tokens
@@ -304,8 +319,8 @@ Responde ÚNICAMENTE en formato JSON con las claves exactas: "codeSuggestion" y 
   );
 
   if (!result.codeSuggestion || typeof result.explanation === 'undefined') { // Check for explanation existence, even if empty string
-    console.error("Respuesta JSON de LLM incompleta (analyzeCode):", result);
-    throw new Error("La respuesta JSON del LLM (analyzeCode) no contiene los campos 'codeSuggestion' o 'explanation'.");
+    console.error("Respuesta JSON de LLM incompleta o malformada (analyzeCode):", result);
+    throw new Error("La respuesta JSON del LLM (analyzeCode) no contiene los campos 'codeSuggestion' o 'explanation' esperados.");
   }
   return result;
 }
@@ -315,21 +330,21 @@ Responde ÚNICAMENTE en formato JSON con las claves exactas: "codeSuggestion" y 
  * Analiza un fragmento de código fuente de un proyecto.
  */
 export async function analyzeProjectSourceChunk(
-  sourceCodeChunk: string, 
+  sourceCodeChunk: string,
   options: LLMOptions,
   analysisPreferences?: string
 ): Promise<ProjectAnalysisResponse> {
   let systemPrompt = `Eres un asistente experto en análisis de código. Analiza el siguiente FRAGMENTO de código fuente de un proyecto y proporciona:
 1. Un título conciso para el análisis de este fragmento (campo "analysisTitle").
-2. Una lista de nombres de archivos o áreas clave identificadas DENTRO DE ESTE FRAGMENTO para revisión o mejora (campo "identifiedAreas").
-3. Una lista de sugerencias detalladas (campo "suggestions"). Cada sugerencia debe ser un objeto con:
-    - "area": (string) El nombre del archivo o componente al que se aplica la sugerencia (ej. "src/utils/helpers.ts"). Este nombre debe corresponder a un archivo mencionado en el fragmento.
+2. Una lista de nombres de archivos o áreas clave identificadas DENTRO DE ESTE FRAGMENTO para revisión o mejora (campo "identifiedAreas", debe ser un array de strings).
+3. Una lista de sugerencias detalladas (campo "suggestions", debe ser un array de objetos). Cada sugerencia debe ser un objeto con:
+    - "area": (string) El nombre del archivo o componente al que se aplica la sugerencia (ej. "src/utils/helpers.ts"). Este nombre debe corresponder a un identificador de archivo "// --- Archivo: nombre_del_archivo ---" presente en el fragmento. Si no se aplica a un archivo específico, usa "General".
     - "suggestion": (string) Una descripción concisa de la mejora o el problema identificado.
     - "priority": (string, opcional) La prioridad de la sugerencia ('high', 'medium', 'low').
-    - "suggestedFullFileContent": (string, opcional) SOLO si la sugerencia implica un cambio de código directo Y el archivo completo está contenido DENTRO de este fragmento, proporciona el contenido COMPLETO del archivo con la sugerencia aplicada. Si el archivo es más grande que este fragmento o la sugerencia no es un cambio de código completo para un archivo totalmente visible aquí, OMITE este campo y detalla los cambios en "suggestion".
+    - "suggestedFullFileContent": (string, opcional) SOLO si la sugerencia implica un cambio de código directo Y el archivo completo está contenido DENTRO de este fragmento, proporciona el contenido COMPLETO del archivo con la sugerencia aplicada. Si el archivo es más grande que este fragmento, la sugerencia no es un cambio de código completo para un archivo totalmente visible aquí, o no aplica a un archivo específico, OMITE este campo y detalla los cambios en "suggestion".
 4. Una evaluación general del CÓDIGO PROPORCIONADO EN ESTE FRAGMENTO (campo "overallAssessment").
 
-Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTitle", "identifiedAreas", "suggestions", "overallAssessment". Asegúrate de que la respuesta sea un único objeto JSON. Los nombres de archivo en "area" deben coincidir con los identificadores de archivo "// --- Archivo: nombre_del_archivo ---" presentes en el fragmento.`;
+Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTitle", "identifiedAreas", "suggestions", "overallAssessment". Asegúrate de que la respuesta sea un único objeto JSON válido y que "identifiedAreas" y "suggestions" sean arrays. No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
 
   if (analysisPreferences) {
     systemPrompt += `\n\nTen en cuenta las siguientes preferencias o áreas de enfoque para tu análisis sobre este fragmento: "${analysisPreferences}".`;
@@ -339,7 +354,7 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
     { role: "system", content: systemPrompt },
     { role: "user", content: `Analiza el siguiente fragmento de código fuente del proyecto:\n\n${sourceCodeChunk}` }
   ];
-  
+
   const result = await makeLLMRequest<ProjectAnalysisResponse>(
       options,
       messages,
@@ -349,10 +364,24 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
       "analyzeProjectSourceChunk"
   );
 
-  if (!result.analysisTitle || !result.identifiedAreas || !result.suggestions || typeof result.overallAssessment === 'undefined') {
-    console.error("Respuesta JSON de LLM incompleta (analyzeProjectSourceChunk):", result);
-    throw new Error("La respuesta JSON del LLM (analyzeProjectSourceChunk) no contiene todos los campos requeridos.");
-  }
+  // Robust validation of the response structure
+   if (
+      typeof result.analysisTitle !== 'string' ||
+      !Array.isArray(result.identifiedAreas) ||
+      !Array.isArray(result.suggestions) ||
+      typeof result.overallAssessment !== 'string'
+    ) {
+      console.error("Respuesta JSON de LLM incompleta o con tipos incorrectos (analyzeProjectSourceChunk):", result);
+      throw new Error("La respuesta JSON del LLM (analyzeProjectSourceChunk) no tiene la estructura o tipos esperados.");
+    }
+    // Optional: Validate suggestion items structure
+    for (const sug of result.suggestions) {
+        if (typeof sug.area !== 'string' || typeof sug.suggestion !== 'string') {
+             console.error("Item de sugerencia inválido en analyzeProjectSourceChunk:", sug, "\nRespuesta completa:", result);
+             throw new Error("La respuesta JSON del LLM (analyzeProjectSourceChunk) contiene un item de sugerencia inválido.");
+        }
+    }
+
   return result;
 }
 
@@ -367,9 +396,10 @@ export async function generateCodeFromPrompt(
 Proporciona:
 1. El código generado (campo "generatedCode").
 2. Una breve explicación del código, si es relevante (campo "explanation", opcional).
-Responde ÚNICAMENTE en formato JSON con las claves "generatedCode" y, opcionalmente, "explanation".
+Responde ÚNICAMENTE en formato JSON válido con la clave "generatedCode" y, opcionalmente, "explanation".
 Asegúrate de que el código sea funcional y siga las mejores prácticas.
-Si el prompt pide un lenguaje específico, úsalo. Si no, Python es una buena opción por defecto.`;
+Si el prompt pide un lenguaje específico, úsalo. Si no, Python es una buena opción por defecto.
+No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
 
   const messages: ChatMessage[] = [
     { role: "system", content: systemMessage },
@@ -384,10 +414,10 @@ Si el prompt pide un lenguaje específico, úsalo. Si no, Python es una buena op
     3000, // max_tokens
     "generateCodeFromPrompt"
   );
-  
-  if (!result.generatedCode) {
-    console.error("Respuesta JSON de LLM incompleta (generateCodeFromPrompt):", result);
-    throw new Error("La respuesta JSON del LLM (generateCodeFromPrompt) no contiene el campo 'generatedCode'.");
+
+  if (typeof result.generatedCode !== 'string') { // Check type as well
+    console.error("Respuesta JSON de LLM incompleta o malformada (generateCodeFromPrompt):", result);
+    throw new Error("La respuesta JSON del LLM (generateCodeFromPrompt) no contiene el campo 'generatedCode' como string.");
   }
   return result;
 }
@@ -407,14 +437,15 @@ Proporciona:
     -   "projectName": (string, opcional) Un nombre corto y descriptivo para el directorio raíz del proyecto (ej: "mi-api-express").
     -   "files": (array de objetos) Cada objeto representa un archivo y debe tener:
         -   "path": (string) La ruta completa del archivo desde la raíz del proyecto (ej: "src/index.ts", "public/style.css", "package.json"). Usa barras inclinadas '/' como separadores de directorio.
-        -   "content": (string) El contenido inicial para ese archivo. Puede ser código de ejemplo, configuración básica, o un placeholder si el contenido es muy extenso o complejo para este paso inicial. Para archivos como README.md, incluye contenido útil.
+        -   "content": (string) El contenido inicial para ese archivo. Puede ser código de ejemplo, configuración básica, o un placeholder si el contenido es muy extenso o complejo. Para archivos como README.md, incluye contenido útil.
 2.  "notes": (string, opcional) Notas adicionales, como los próximos pasos sugeridos, tecnologías clave usadas, o cómo ejecutar el proyecto si es simple.
 
-Responde ÚNICAMENTE en formato JSON con las claves "projectStructure" y, opcionalmente, "notes".
-Asegúrate de que "projectStructure.files" sea un array.
+Responde ÚNICAMENTE en formato JSON válido con las claves "projectStructure" y, opcionalmente, "notes".
+Asegúrate de que "projectStructure.files" sea un array válido de objetos, cada uno con "path" y "content" como strings.
 Genera una estructura de directorios lógica y común para el tipo de proyecto descrito.
 Incluye archivos de configuración comunes si son relevantes (ej: package.json, tsconfig.json, .gitignore).
-El contenido de los archivos debe ser coherente con sus extensiones y propósitos.`;
+El contenido de los archivos debe ser coherente con sus extensiones y propósitos.
+No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
 
   const messages: ChatMessage[] = [
     { role: "system", content: systemMessage },
@@ -430,16 +461,22 @@ El contenido de los archivos debe ser coherente con sus extensiones y propósito
     "generateProjectStructure"
   );
 
-  if (!result.projectStructure || !Array.isArray(result.projectStructure.files)) {
-    console.error("Respuesta JSON de LLM incompleta o malformada (generateProjectStructure):", result);
-    throw new Error("La respuesta JSON de LLM (generateProjectStructure) no contiene 'projectStructure' o 'projectStructure.files' no es un array.");
+  // Robust validation
+  if (
+      !result.projectStructure ||
+      typeof result.projectStructure !== 'object' ||
+      !Array.isArray(result.projectStructure.files)
+     ) {
+      console.error("Respuesta JSON de LLM incompleta o malformada (generateProjectStructure - structure):", result);
+      throw new Error("La respuesta JSON de LLM (generateProjectStructure) no contiene 'projectStructure' o 'projectStructure.files' no es un array.");
   }
   for (const file of result.projectStructure.files) {
       if (typeof file.path !== 'string' || typeof file.content !== 'string') {
-          console.error("Objeto de archivo inválido en la respuesta de LLM (generateProjectStructure):", file);
+          console.error("Objeto de archivo inválido en la respuesta de LLM (generateProjectStructure):", file, "\nRespuesta completa:", result);
           throw new Error("La respuesta JSON de LLM (generateProjectStructure) contiene un objeto de archivo inválido (falta 'path' o 'content' como string).");
       }
   }
+
   return result;
 }
 
@@ -448,15 +485,19 @@ El contenido de los archivos debe ser coherente con sus extensiones y propósito
  */
 export async function chatWithLLM(payload: ChatLLMPayload): Promise<ChatLLMResponse> {
   const { messages, options } = payload;
-  // System message for chat can be more generic or passed by the caller.
-  // For now, assume messages array is complete.
   const providerConfig = LLM_PROVIDERS.find(p => p.id === options.providerId);
   if (!providerConfig) {
     throw new Error(`Proveedor LLM no configurado: ${options.providerId}`);
   }
 
+  // Define a default timeout specific to chat if not provided in options
+  const chatOptions = {
+    ...options,
+    timeoutMs: options.timeoutMs || CHAT_COMPLETION_TIMEOUT_MS,
+  };
+
   const result = await makeLLMRequest<ChatLLMResponse>(
-    options,
+    chatOptions,
     messages,
     "text", // Chat typically expects text response
     0.7, // temperature, can be higher for chat
@@ -464,9 +505,9 @@ export async function chatWithLLM(payload: ChatLLMPayload): Promise<ChatLLMRespo
     "chatWithLLM"
   );
 
-  if (typeof result.content === 'undefined') {
-    console.error(`Respuesta de LLM incompleta (chatWithLLM) para ${providerConfig.name}:`, result);
-    throw new Error(`Respuesta de LLM (chatWithLLM) para ${providerConfig.name} no contiene contenido.`);
+  if (typeof result.content !== 'string') { // Check type as well
+    console.error(`Respuesta de LLM incompleta o inválida (chatWithLLM) para ${providerConfig.name}:`, result);
+    throw new Error(`Respuesta de LLM (chatWithLLM) para ${providerConfig.name} no contiene contenido textual.`);
   }
   return result;
 }
