@@ -59,7 +59,7 @@ export default function DashboardPage() {
             <div>
               <CardTitle className="text-3xl font-bold text-primary">Bienvenido a YskCodeAlchemist</CardTitle>
               <CardDescription className="text-lg text-muted-foreground mt-1">
-                Tu asistente potenciado por IA para análisis de código, refactorización y gestión de versiones.
+                Tu asistente potenciado por IA para generación de código, análisis de código, refactorización y gestión de versiones.
               </CardDescription>
             </div>
           </div>
@@ -67,7 +67,7 @@ export default function DashboardPage() {
         <CardContent>
           <p className="text-base text-foreground/80">
             Explora las funcionalidades de YskCodeAlchemist para optimizar tu flujo de trabajo de desarrollo.
-            Desde análisis detallados de fragmentos hasta la auto-mejora de la propia aplicación,
+            Desde la generación de código nuevo, análisis detallados de fragmentos hasta la auto-mejora de la propia aplicación,
             YskCodeAlchemist está diseñado para potenciar tu código.
           </p>
         </CardContent>
@@ -118,5 +118,6 @@ export default function DashboardPage() {
     </div>
   );
 }
+
 
 
