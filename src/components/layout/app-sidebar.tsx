@@ -87,7 +87,7 @@ export function AppSidebar() {
             size="icon"
             onClick={toggleCollapse}
             className={cn(isCollapsed ? "block" : "hidden md:block")}
-            aria-label={isCollapsed ? "Expandir sidebar" : "Colapsar sidebar"}
+            aria-label={isCollapsed ? "Mostrar sidebar" : "Ocultar sidebar"}
           >
             {isCollapsed ? <ChevronsRight className="h-5 w-5" /> : <ChevronsLeft className="h-5 w-5" />}
           </Button>
@@ -156,10 +156,10 @@ export function AppSidebar() {
                 size={isCollapsed ? "icon" : "default"}
                 onClick={toggleCollapse}
                 className={cn("w-full flex items-center", isCollapsed ? "justify-center" : "justify-start gap-2")}
-                aria-label={isCollapsed ? "Expandir sidebar" : "Colapsar sidebar"}
+                aria-label={isCollapsed ? "Mostrar sidebar" : "Ocultar sidebar"}
             >
                 {isCollapsed ? <ChevronsRight className="h-5 w-5" /> : <ChevronsLeft className="h-5 w-5" />}
-                {!isCollapsed && <span>Colapsar</span>}
+                {!isCollapsed && <span>Ocultar</span>}
             </Button>
          </div>
        )}
