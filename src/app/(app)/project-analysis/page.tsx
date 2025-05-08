@@ -13,8 +13,8 @@ import { useToast } from '@/hooks/use-toast';
 type AnalysisStatus = "idle" | "loading" | "success" | "error";
 
 export default function ProjectAnalysisPage() {
-  const [activeTab, setActiveTab] = useState<"zip" | "git">("zip");
-  const [zipFile, setZipFile] = useState<File | null>(null);
+  const [activeTab, setActiveTab] = useState<"upload" | "git">("upload"); // Changed "zip" to "upload"
+  const [projectFile, setProjectFile] = useState<File | null>(null); // Renamed from zipFile
   const [gitUrl, setGitUrl] = useState<string>("");
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>("idle");
   const [analysisResult, setAnalysisResult] = useState<string | null>(null);
@@ -22,17 +22,28 @@ export default function ProjectAnalysisPage() {
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files[0]) {
-      setZipFile(event.target.files[0]);
+      const file = event.target.files[0];
+      if (file.type === 'application/zip' || file.type === 'application/json' || file.name.endsWith('.zip') || file.name.endsWith('.json')) {
+        setProjectFile(file);
+      } else {
+        toast({
+          title: "Tipo de Archivo Inválido",
+          description: "Por favor, selecciona un archivo .zip o .json.",
+          variant: "destructive",
+        });
+        setProjectFile(null);
+        event.target.value = ''; // Clear the input
+      }
     } else {
-      setZipFile(null);
+      setProjectFile(null);
     }
   };
 
   const handleAnalyzeProject = async () => {
-    if (activeTab === "zip" && !zipFile) {
+    if (activeTab === "upload" && !projectFile) {
       toast({
         title: "Archivo Faltante",
-        description: "Por favor, selecciona un archivo ZIP para analizar.",
+        description: "Por favor, selecciona un archivo ZIP o JSON para analizar.",
         variant: "destructive",
       });
       return;
@@ -54,9 +65,9 @@ export default function ProjectAnalysisPage() {
 
     // TODO: Implementar la lógica real de análisis del proyecto
     // Esto implicaría enviar el archivo o la URL a un backend/flujo de IA
-    if (activeTab === "zip" && zipFile) {
-      console.log("Analizando archivo ZIP:", zipFile.name);
-      setAnalysisResult(`Análisis simulado para ${zipFile.name} completado. \n- Se encontraron 5 problemas de estilo. \n- Se sugieren 2 refactorizaciones para mejorar la eficiencia.`);
+    if (activeTab === "upload" && projectFile) {
+      console.log("Analizando archivo:", projectFile.name);
+      setAnalysisResult(`Análisis simulado para ${projectFile.name} completado. \n- Se encontraron 5 problemas de estilo. \n- Se sugieren 2 refactorizaciones para mejorar la eficiencia.`);
     } else if (activeTab === "git") {
       console.log("Analizando repositorio Git:", gitUrl);
       setAnalysisResult(`Análisis simulado para ${gitUrl} completado. \n- Cubertura de pruebas del 75%. \n- 3 dependencias desactualizadas.`);
@@ -65,7 +76,7 @@ export default function ProjectAnalysisPage() {
     setAnalysisStatus("success");
     toast({
       title: "Análisis de Proyecto Iniciado",
-      description: `El análisis para ${activeTab === "zip" ? zipFile?.name : gitUrl} ha comenzado. Los resultados se mostrarán abajo. (Simulado)`,
+      description: `El análisis para ${activeTab === "upload" ? projectFile?.name : gitUrl} ha comenzado. Los resultados se mostrarán abajo. (Simulado)`,
     });
   };
 
@@ -77,25 +88,25 @@ export default function ProjectAnalysisPage() {
             <FolderSearch className="h-8 w-8" />
             Analizar Proyecto Completo
           </CardTitle>
-          <CardDescription className="text-lg">
-            Sube un archivo ZIP de tu proyecto o proporciona la URL de un repositorio Git para un análisis exhaustivo.
+          <CardDescription className="text-lg text-foreground">
+            Sube un archivo ZIP o JSON de tu proyecto o proporciona la URL de un repositorio Git para un análisis exhaustivo.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "zip" | "git")} className="w-full">
+          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "upload" | "git")} className="w-full">
             <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="zip" className="gap-2">
-                <UploadCloud className="h-5 w-5" /> Subir Archivo ZIP
+              <TabsTrigger value="upload" className="gap-2">
+                <UploadCloud className="h-5 w-5" /> Subir Archivo (ZIP/JSON)
               </TabsTrigger>
               <TabsTrigger value="git" className="gap-2">
                 <GitFork className="h-5 w-5" /> Desde Repositorio Git
               </TabsTrigger>
             </TabsList>
-            <TabsContent value="zip" className="mt-6">
+            <TabsContent value="upload" className="mt-6">
               <div className="space-y-2">
-                <Label htmlFor="zip-file" className="text-base">Archivo del Proyecto (.zip)</Label>
-                <Input id="zip-file" type="file" accept=".zip" onChange={handleFileChange} className="text-base file:text-base" />
-                {zipFile && <p className="text-sm text-muted-foreground">Archivo seleccionado: {zipFile.name}</p>}
+                <Label htmlFor="project-file" className="text-base">Archivo del Proyecto (.zip o .json)</Label>
+                <Input id="project-file" type="file" accept=".zip,.json,application/zip,application/json" onChange={handleFileChange} className="text-base file:text-base" />
+                {projectFile && <p className="text-sm text-muted-foreground">Archivo seleccionado: {projectFile.name}</p>}
               </div>
             </TabsContent>
             <TabsContent value="git" className="mt-6">
@@ -125,22 +136,25 @@ export default function ProjectAnalysisPage() {
             <div className="mt-6 space-y-4">
               <h3 className="text-xl font-semibold">Resultados del Análisis</h3>
               {analysisStatus === "loading" && (
-                <div className="flex items-center justify-center p-8 bg-muted/50 rounded-lg min-h-[150px]">
+                <div 
+                  data-ai-hint="project analysis loading"
+                  className="flex items-center justify-center p-8 bg-muted/50 rounded-lg min-h-[150px]"
+                >
                   <Loader2 className="h-10 w-10 animate-spin text-primary" />
-                  <p className="ml-4 text-lg text-muted-foreground">Analizando proyecto, por favor espera...</p>
+                  <p className="ml-4 text-lg text-foreground">Analizando proyecto, por favor espera...</p>
                 </div>
               )}
               {analysisStatus === "success" && analysisResult && (
                 <Card className="bg-card">
                   <CardContent className="p-6">
-                    <pre className="whitespace-pre-wrap text-sm font-mono">{analysisResult}</pre>
+                    <pre className="whitespace-pre-wrap text-sm font-mono text-foreground">{analysisResult}</pre>
                   </CardContent>
                 </Card>
               )}
               {analysisStatus === "error" && (
                  <Card className="bg-destructive/10 border-destructive">
                   <CardContent className="p-6">
-                    <p className="text-destructive-foreground">Ocurrió un error durante el análisis. Por favor, inténtalo de nuevo.</p>
+                    <p className="text-destructive">Ocurrió un error durante el análisis. Por favor, inténtalo de nuevo.</p>
                   </CardContent>
                 </Card>
               )}

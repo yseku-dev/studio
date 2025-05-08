@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2 } from "lucide-react";
+import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion } from './actions';
 import type { AnalyzeCodeAlchemistSourceOutput, SuggestionUnit as FlowSuggestionUnit } from '@/ai/flows/analyze-codealchemist-source-flow';
@@ -54,6 +54,7 @@ export default function AutoUpdatePage() {
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ processed: 0, total: 0 });
   const [autoFixSuggestion, setAutoFixSuggestion] = useState<SuggestErrorFixOutput | null>(null);
   const [isAutoFixModalOpen, setIsAutoFixModalOpen] = useState(false);
+  const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
 
   const { toast } = useToast();
 
@@ -89,8 +90,9 @@ export default function AutoUpdatePage() {
     setAnalysisResult(null);
     setCurrentAnalysisError(null);
     setSuggestionsWithStatus([]);
-    setAnalysisProgress({ processed: 0, total: 0 }); // Initialize progress
+    setAnalysisProgress({ processed: 0, total: 0 }); 
     setAutoFixSuggestion(null);
+    setDetailedLogs(["Iniciando auto-análisis..."]);
     toast({
       title: "Auto-Análisis Iniciado",
       description: "Cargando y preparando el código fuente de YskCodeAlchemist..."
@@ -101,9 +103,11 @@ export default function AutoUpdatePage() {
 
     const result = await handleAutoAnalyzeAppSource(apiKey, modelName, analysisPreferences);
     
+    setDetailedLogs(prevLogs => [...prevLogs, ...(result.detailedExecutionLogs || [])]);
+
     setAnalysisProgress({ 
         processed: result.chunksProcessed || 0, 
-        total: result.totalChunks || 1 // Ensure total is at least 1 to avoid division by zero if 0 chunks processed
+        total: result.totalChunks || 1 
     });
 
     if (result.success && result.data) {
@@ -133,16 +137,17 @@ export default function AutoUpdatePage() {
         title: "Auto-Análisis Completado",
         description: `Se han generado sugerencias para YskCodeAlchemist. ${result.chunksProcessed || 0} fragmentos procesados de ${result.totalChunks || 0}.`
       });
+      setDetailedLogs(prevLogs => [...prevLogs, "Análisis completado y resultados procesados."]);
     } else {
       setStatus("error");
       setCurrentAnalysisError(result.error || "Ocurrió un error desconocido durante el auto-análisis.");
-      // analysisProgress is already set with the state at the time of error by the server action
       toast({
         title: "Error en Auto-Análisis",
         description: result.error || "Ocurrió un error desconocido.",
         variant: "destructive",
         duration: 10000, 
       });
+       setDetailedLogs(prevLogs => [...prevLogs, `Error en auto-análisis: ${result.error || "Desconocido"}`]);
     }
   };
   
@@ -157,6 +162,7 @@ export default function AutoUpdatePage() {
     }
     setStatus("fixing_error");
     setAutoFixSuggestion(null);
+    setDetailedLogs(prevLogs => [...prevLogs, `Intentando auto-corrección para el error: ${currentAnalysisError.substring(0, 100)}...`]);
     toast({ title: "Intentando Auto-Corrección", description: "Consultando a la IA para una posible solución..." });
 
     const fixResult = await handleGetErrorFixSuggestion(currentAnalysisError, apiKey, modelName);
@@ -165,12 +171,14 @@ export default function AutoUpdatePage() {
       setAutoFixSuggestion(fixResult.data);
       setIsAutoFixModalOpen(true); 
       toast({ title: "Sugerencia de Corrección Recibida", description: "La IA ha proporcionado una sugerencia." });
+      setDetailedLogs(prevLogs => [...prevLogs, "Sugerencia de corrección recibida de la IA."]);
     } else {
       toast({
         title: "Error en Auto-Corrección",
         description: fixResult.error || "No se pudo obtener una sugerencia de la IA.",
         variant: "destructive"
       });
+      setDetailedLogs(prevLogs => [...prevLogs, `Error al obtener sugerencia de corrección: ${fixResult.error || "Desconocido"}`]);
     }
     setStatus("error"); 
   };
@@ -200,6 +208,7 @@ export default function AutoUpdatePage() {
 
     setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "applying"} : s));
     toast({ title: "Aplicando Sugerencia...", description: `Simulando aplicación de cambio a ${suggestionToApply.area}` });
+    setDetailedLogs(prevLogs => [...prevLogs, `Simulando aplicación de sugerencia a: ${suggestionToApply.area}`]);
     
     const baseFilePath = suggestionToApply.area.includes(" (parte ") ? suggestionToApply.area.split(" (parte ")[0] : suggestionToApply.area;
 
@@ -212,11 +221,13 @@ export default function AutoUpdatePage() {
           originalContent: result.newContent, 
         } : s));
       toast({ title: "Sugerencia Aplicada (Simulación)", description: `El cambio para ${baseFilePath} se ha simulado. Revisa la consola.`});
+      setDetailedLogs(prevLogs => [...prevLogs, `Sugerencia aplicada (simulada) a ${baseFilePath}. El contenido interno del archivo se ha actualizado para la descarga.`]);
       
       setProjectFiles(prevFiles => (prevFiles || []).map(pf => pf.fileName === baseFilePath ? {...pf, content: result.newContent!} : pf));
     } else {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: result.error} : s));
       toast({ title: "Error al Aplicar (Simulación)", description: result.error || `No se pudo simular la aplicación del cambio a ${baseFilePath}.`, variant: "destructive"});
+      setDetailedLogs(prevLogs => [...prevLogs, `Error al aplicar sugerencia (simulada) a ${baseFilePath}: ${result.error}`]);
     }
   };
 
@@ -234,6 +245,7 @@ export default function AutoUpdatePage() {
 
   const handleDownloadSource = async () => {
     setIsDownloading(true);
+    setDetailedLogs(prevLogs => [...prevLogs, "Iniciando preparación para descarga de código fuente."]);
     toast({
       title: "Preparando Descarga",
       description: "Recopilando todos los archivos fuente de YskCodeAlchemist..."
@@ -241,7 +253,7 @@ export default function AutoUpdatePage() {
 
     let filesToZip = projectFiles;
     if (!filesToZip || filesToZip.length === 0) {
-        const bundleResult = await getApplicationSourceBundle(false);
+        const bundleResult = await getApplicationSourceBundle(false, detailedLogs); // Pass logs
         if (bundleResult.success && bundleResult.files) {
             filesToZip = bundleResult.files;
         } else {
@@ -251,10 +263,12 @@ export default function AutoUpdatePage() {
                 variant: "destructive",
             });
             setIsDownloading(false);
+            setDetailedLogs(prevLogs => [...prevLogs, `Error al obtener código fuente para ZIP: ${bundleResult.error || "Desconocido"}`]);
             return;
         }
     }
     
+    setDetailedLogs(prevLogs => [...prevLogs, `Se empaquetarán ${filesToZip?.length || 0} archivos.`]);
 
     if (filesToZip && filesToZip.length > 0) {
       try {
@@ -262,8 +276,10 @@ export default function AutoUpdatePage() {
         filesToZip.forEach(file => {
           if (file.fileName && file.fileName.trim() !== "" && !file.content.startsWith("// Archivo binario")) { 
             zip.file(file.fileName, file.content);
+            setDetailedLogs(prevLogs => [...prevLogs, `Añadido al ZIP: ${file.fileName}`]);
           } else {
             console.warn("Archivo omitido en ZIP debido a nombre inválido o contenido binario no manejable:", file);
+            setDetailedLogs(prevLogs => [...prevLogs, `Omitido en ZIP: ${file.fileName} (nombre inválido o binario)`]);
           }
         });
 
@@ -280,6 +296,7 @@ export default function AutoUpdatePage() {
           title: "Descarga Iniciada",
           description: "El paquete completo de código fuente (yskcodealchemist-full-source.zip) se está descargando."
         });
+        setDetailedLogs(prevLogs => [...prevLogs, "Descarga ZIP iniciada."]);
       } catch (e) {
          const error = e instanceof Error ? e.message : "Error desconocido";
          toast({
@@ -288,6 +305,7 @@ export default function AutoUpdatePage() {
           variant: "destructive",
         });
         console.error("Error al crear ZIP:", e);
+        setDetailedLogs(prevLogs => [...prevLogs, `Error al crear ZIP: ${error}`]);
       }
     } else {
       toast({
@@ -295,6 +313,7 @@ export default function AutoUpdatePage() {
         description: "No se encontraron archivos para empaquetar.",
         variant: "destructive",
       });
+      setDetailedLogs(prevLogs => [...prevLogs, "Error: No se encontraron archivos para empaquetar en ZIP."]);
     }
     setIsDownloading(false);
   };
@@ -317,7 +336,7 @@ export default function AutoUpdatePage() {
             Esta sección permite a la IA analizar el propio código fuente completo de la aplicación YskCodeAlchemist para proponer mejoras y optimizaciones.
              {!apiKey || !modelName ? (
                 <span className="text-destructive block mt-1"> (Clave API o Modelo no configurado en Ajustes)</span>
-            ) : <span className="text-muted-foreground block mt-1">(Usando modelo Groq: {modelName})</span>}
+            ) : <span className="text-foreground block mt-1">(Usando modelo Groq: {modelName})</span>}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -390,26 +409,43 @@ export default function AutoUpdatePage() {
             </div>
            )}
 
+           {detailedLogs.length > 0 && (
+             <Card className="mt-6 border-primary/30">
+               <CardHeader className="pb-2">
+                 <CardTitle className="text-lg flex items-center gap-2 text-primary">
+                   <ListOrdered className="h-5 w-5"/> Logs de Ejecución Detallados
+                 </CardTitle>
+               </CardHeader>
+               <CardContent>
+                 <ScrollArea className="h-[200px] p-2 border rounded bg-muted/30">
+                   <pre className="text-xs text-foreground whitespace-pre-wrap">
+                     {detailedLogs.join('\n')}
+                   </pre>
+                 </ScrollArea>
+               </CardContent>
+             </Card>
+           )}
+
 
           {analysisResult && status === "success" && (
             <Card className="mt-6 border-accent bg-accent/5">
               <CardHeader className="pb-3">
-                <CardTitle className="text-xl flex items-center gap-2 text-accent-foreground">
+                <CardTitle className="text-xl flex items-center gap-2 text-accent">
                   <FileCode className="h-6 w-6" />
                   {analysisResult.analysisTitle}
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
-                  <h4 className="font-semibold text-accent-foreground/90 mb-1">Evaluación General (Agregada):</h4>
+                  <h4 className="font-semibold text-foreground mb-1">Evaluación General (Agregada):</h4>
                   <ScrollArea className="h-[100px] p-2 border rounded bg-background/50">
-                    <pre className="text-xs text-accent-foreground/80 whitespace-pre-wrap">{analysisResult.overallAssessment}</pre>
+                    <pre className="text-xs text-foreground/80 whitespace-pre-wrap">{analysisResult.overallAssessment}</pre>
                   </ScrollArea>
                 </div>
                 <Separator />
                 {analysisResult.identifiedAreas.length > 0 && (
                   <div>
-                    <h4 className="font-semibold text-accent-foreground/90 mb-2">Áreas Identificadas (Agregado):</h4>
+                    <h4 className="font-semibold text-foreground mb-2">Áreas Identificadas (Agregado):</h4>
                     <div className="flex flex-wrap gap-2">
                       {analysisResult.identifiedAreas.map((area, index) => (
                         <Badge key={index} variant="secondary" className="text-foreground">{area}</Badge>
@@ -420,7 +456,7 @@ export default function AutoUpdatePage() {
                 {suggestionsWithStatus.length > 0 && <Separator />}
                 {suggestionsWithStatus.length > 0 && (
                     <div>
-                    <h4 className="font-semibold text-accent-foreground/90 mb-2">Sugerencias Detalladas ({suggestionsWithStatus.length}):</h4>
+                    <h4 className="font-semibold text-foreground mb-2">Sugerencias Detalladas ({suggestionsWithStatus.length}):</h4>
                     <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1">
                         <Info className="h-3 w-3 shrink-0"/> Las sugerencias de la IA pueden proponer modificar archivos. La aplicación de cambios es una SIMULACIÓN y no modificará tus archivos reales. Revisa la consola para ver qué se habría modificado.
                         </p>
@@ -523,7 +559,7 @@ export default function AutoUpdatePage() {
               className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6"
             >
               <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
-              <p className="text-lg text-muted-foreground">
+              <p className="text-lg text-foreground">
                 {status === "loading_source" ? "Cargando código fuente..." : "Analizando el código fuente de YskCodeAlchemist..."}
               </p>
               <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos, especialmente si el código es extenso.</p>
@@ -538,12 +574,12 @@ export default function AutoUpdatePage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                <p className="text-destructive-foreground">Ocurrió un error durante el auto-análisis:</p> 
+                <p className="text-destructive">Ocurrió un error durante el auto-análisis:</p> 
                 <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50">
                     <pre className="text-xs text-foreground whitespace-pre-wrap">{currentAnalysisError}</pre> 
                 </ScrollArea>
                 <div className="flex gap-2 mt-2">
-                    <Button variant="outline" size="sm" onClick={() => handleCopyError(currentAnalysisError)} className="text-destructive-foreground border-destructive/50 hover:bg-destructive/20">
+                    <Button variant="outline" size="sm" onClick={() => handleCopyError(currentAnalysisError)} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground">
                         <Copy className="mr-2 h-4 w-4"/> Copiar Mensaje de Error
                     </Button>
                     <Button 
@@ -551,7 +587,7 @@ export default function AutoUpdatePage() {
                         size="sm" 
                         onClick={handleAttemptAutoFix} 
                         disabled={status === "fixing_error" || !apiKey || !modelName}
-                        className="text-accent-foreground border-accent/50 hover:bg-accent/20"
+                        className="text-accent border-accent/50 hover:bg-accent/20 hover:text-accent-foreground"
                     >
                         {status === "fixing_error" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Settings2 className="mr-2 h-4 w-4"/>}
                          Auto-Fix (Experimental)
@@ -563,7 +599,7 @@ export default function AutoUpdatePage() {
           {status === "fixing_error" && (
              <div className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[150px] mt-6">
               <Loader2 className="h-10 w-10 animate-spin text-accent mb-4" />
-              <p className="text-lg text-muted-foreground">Intentando obtener sugerencia de Auto-Corrección...</p>
+              <p className="text-lg text-foreground">Intentando obtener sugerencia de Auto-Corrección...</p>
              </div>
           )}
 
@@ -581,7 +617,7 @@ export default function AutoUpdatePage() {
       <AlertDialog open={isAutoFixModalOpen} onOpenChange={setIsAutoFixModalOpen}>
           <AlertDialogContent className="max-w-2xl">
               <AlertDialogHeader>
-                  <AlertDialogTitle className="flex items-center gap-2 text-accent-foreground">
+                  <AlertDialogTitle className="flex items-center gap-2 text-accent">
                       <Settings2 className="h-6 w-6 text-accent"/>
                       Sugerencia de Auto-Corrección de Error
                   </AlertDialogTitle>

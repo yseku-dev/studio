@@ -90,18 +90,19 @@ export default function DashboardPage() {
 
       <Card className="bg-accent/5 border-accent/30">
         <CardHeader>
-          <CardTitle className="text-2xl flex items-center gap-2 text-accent-foreground">
+          <CardTitle className="text-2xl flex items-center gap-2 text-accent">
             <Lightbulb className="h-7 w-7"/>
             Guía Rápida de Inicio
           </CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3 text-accent-foreground/90">
-          <p><strong>1. Configura tus Ajustes:</strong> Ve a la sección de <Link href="/settings" className="font-semibold hover:underline">Configuración</Link> para ingresar tu clave API de Groq y seleccionar el modelo de IA que prefieras. ¡No olvides probar la conexión!</p>
-          <p><strong>2. Analiza tu Código:</strong> Dirígete a <Link href="/analyze" className="font-semibold hover:underline">Analizar Código</Link>. Pega tu código o sube un archivo para recibir análisis detallados y sugerencias de refactorización.</p>
-          <p><strong>3. Explora el AutoUpdate:</strong> En la sección de <Link href="/autoupdate" className="font-semibold hover:underline">AutoUpdate</Link>, permite que YskCodeAlchemist analice su propio código fuente. Puedes guiar el análisis con tus preferencias.</p>
-          <p><strong>4. Gestiona tus Versiones:</strong> Utiliza <Link href="/versions" className="font-semibold hover:underline">Versiones Guardadas</Link> para almacenar, comparar y revertir diferentes estados de tu código a lo largo del tiempo.</p>
+        <CardContent className="space-y-3 text-foreground">
+          <p><strong>1. Configura tus Ajustes:</strong> Ve a la sección de <Link href="/settings" className="font-semibold text-primary hover:underline">Configuración</Link> para ingresar tu clave API de Groq y seleccionar el modelo de IA que prefieras. ¡No olvides probar la conexión!</p>
+          <p><strong>2. Analiza tu Código:</strong> Dirígete a <Link href="/analyze" className="font-semibold text-primary hover:underline">Analizar Código</Link>. Pega tu código o sube un archivo para recibir análisis detallados y sugerencias de refactorización.</p>
+          <p><strong>3. Explora el AutoUpdate:</strong> En la sección de <Link href="/autoupdate" className="font-semibold text-primary hover:underline">AutoUpdate</Link>, permite que YskCodeAlchemist analice su propio código fuente. Puedes guiar el análisis con tus preferencias.</p>
+          <p><strong>4. Gestiona tus Versiones:</strong> Utiliza <Link href="/versions" className="font-semibold text-primary hover:underline">Versiones Guardadas</Link> para almacenar, comparar y revertir diferentes estados de tu código a lo largo del tiempo.</p>
         </CardContent>
       </Card>
     </div>
   );
 }
+

@@ -176,7 +176,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
             Las llamadas a la API tienen un tiempo de espera para evitar bloqueos.
             {!apiKey || !modelName ? (
                 <span className="text-destructive block mt-1"> (Clave API o Modelo no configurado en Ajustes)</span>
-            ) : <span className="text-muted-foreground block mt-1">(Usando modelo: {modelName})</span>}
+            ) : <span className="text-foreground block mt-1">(Usando modelo: {modelName})</span>}
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit(onSubmit)}>
@@ -238,11 +238,11 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            <p className="text-destructive-foreground">No se pudo completar el análisis del código:</p>
+            <p className="text-destructive">No se pudo completar el análisis del código:</p>
             <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50">
                 <pre className="text-xs text-foreground whitespace-pre-wrap">{analysisError}</pre>
             </ScrollArea>
-            <Button variant="outline" size="sm" onClick={() => handleCopyError(analysisError)} className="mt-2 text-destructive-foreground border-destructive/50 hover:bg-destructive/20">
+            <Button variant="outline" size="sm" onClick={() => handleCopyError(analysisError)} className="mt-2 text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground">
                 <Copy className="mr-2 h-4 w-4"/> Copiar Mensaje de Error
             </Button>
           </CardContent>

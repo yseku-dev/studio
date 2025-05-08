@@ -14,6 +14,7 @@ interface AutoUpdateAnalysisResult {
   error?: string;
   chunksProcessed?: number;
   totalChunks?: number;
+  detailedExecutionLogs?: string[];
 }
 
 // Reducido para evitar "Payload Too Large". Asumiendo ~1.9 chars/token y un límite de ~5200 tokens para contenido.
@@ -26,20 +27,43 @@ export async function handleAutoAnalyzeAppSource(
   modelName: string,
   analysisPreferences?: string
 ): Promise<AutoUpdateAnalysisResult> {
+  const executionLogs: string[] = [];
+  const log = (message: string) => { 
+    const timestampedMessage = `[${new Date().toISOString()}] ${message}`;
+    console.log(timestampedMessage); 
+    executionLogs.push(timestampedMessage); 
+  };
+  const logError = (message: string) => {
+    const timestampedMessage = `[ERROR ${new Date().toISOString()}] ${message}`;
+    console.error(timestampedMessage);
+    executionLogs.push(timestampedMessage);
+  };
+
+
   if (!apiKey || !modelName) {
-    return { success: false, error: "La clave API y el nombre del modelo son obligatorios. Por favor, configúralos en ajustes.", chunksProcessed: 0, totalChunks: 0 };
+    logError("La clave API y el nombre del modelo son obligatorios.");
+    return { success: false, error: "La clave API y el nombre del modelo son obligatorios. Por favor, configúralos en ajustes.", chunksProcessed: 0, totalChunks: 0, detailedExecutionLogs: executionLogs };
   }
 
-  const sourceBundleResult = await getApplicationSourceBundle(false); 
-  if (!sourceBundleResult.success || !sourceBundleResult.files || sourceBundleResult.files.length === 0) {
-    return { success: false, error: sourceBundleResult.error || "No se pudo obtener el código fuente para analizar.", chunksProcessed: 0, totalChunks: 0 };
+  log("Iniciando obtención del paquete de código fuente de la aplicación.");
+  const sourceBundleResult = await getApplicationSourceBundle(false, executionLogs); 
+  if (sourceBundleResult.logs) { // Merge logs from getApplicationSourceBundle
+    // executionLogs.push(...sourceBundleResult.logs); // Already passed and modified by reference
   }
+
+  if (!sourceBundleResult.success || !sourceBundleResult.files || sourceBundleResult.files.length === 0) {
+    const errorMsg = sourceBundleResult.error || "No se pudo obtener el código fuente para analizar.";
+    logError(`Error al obtener el código fuente: ${errorMsg}`);
+    return { success: false, error: errorMsg, chunksProcessed: 0, totalChunks: 0, detailedExecutionLogs: executionLogs };
+  }
+  log(`Paquete de código fuente obtenido con ${sourceBundleResult.files.length} archivos.`);
 
   const files = sourceBundleResult.files;
   const chunks: string[] = [];
   let currentChunk = "";
   let currentChunkChars = 0;
 
+  log("Iniciando división del código fuente en fragmentos.");
   for (const file of files) {
     const baseFileName = file.fileName;
     let fileEffectiveContent = file.content;
@@ -48,53 +72,58 @@ export async function handleAutoAnalyzeAppSource(
     if (fileEffectiveContent.length + `\n\n// --- Archivo: ${baseFileName} ---\n\n`.length > MAX_CHARS_PER_CHUNK) {
       if (currentChunk.length > 0) { // Push any existing partial chunk
         chunks.push(currentChunk);
+        log(`Fragmento parcial anterior (${currentChunk.length} caracteres) añadido antes de dividir archivo grande.`);
         currentChunk = "";
         currentChunkChars = 0;
       }
       
       let offset = 0;
       let partIndex = 1;
+      log(`Archivo ${baseFileName} (${fileEffectiveContent.length} caracteres) es demasiado grande, dividiendo...`);
       while(offset < fileEffectiveContent.length) {
         const partMarker = `\n\n// --- Archivo: ${baseFileName} (parte ${partIndex}) ---\n\n`;
         const charsToTake = MAX_CHARS_PER_CHUNK - partMarker.length;
-        if (charsToTake <=0) { // Marker itself is too long, highly unlikely but a safeguard
-            console.error(`El marcador para ${baseFileName} es demasiado largo para el tamaño del fragmento.`);
+        if (charsToTake <=0) { 
+            logError(`El marcador para ${baseFileName} (parte ${partIndex}) es demasiado largo (${partMarker.length}) para el tamaño del fragmento (MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}). Omitiendo parte.`);
             break; 
         }
         const part = fileEffectiveContent.substring(offset, offset + charsToTake);
         chunks.push(partMarker + part);
-        offset += part.length; // Use part.length because substring might return less if at end
+        log(`Archivo ${baseFileName} (parte ${partIndex}) creado, tamaño ${part.length} caracteres.`);
+        offset += part.length; 
         partIndex++;
-        console.warn(`Archivo ${baseFileName} dividido en múltiples fragmentos. Fragmento procesado de ${part.length} caracteres.`);
       }
-      continue; // Move to the next file
+      continue; 
     }
 
-    // If adding this file (which is not too large by itself) would make the current chunk too large
     const fileContentMarker = `\n\n// --- Archivo: ${baseFileName} ---\n\n`;
     if (currentChunkChars + fileEffectiveContent.length + fileContentMarker.length > MAX_CHARS_PER_CHUNK) {
-      if (currentChunk.length > 0) { // Push the current chunk before starting a new one
+      if (currentChunk.length > 0) { 
         chunks.push(currentChunk);
+        log(`Fragmento actual (${currentChunk.length} caracteres) añadido, iniciando nuevo fragmento con ${baseFileName}.`);
       }
       currentChunk = fileContentMarker + fileEffectiveContent;
       currentChunkChars = fileEffectiveContent.length + fileContentMarker.length;
-    } else { // Add to the current chunk
+    } else { 
       currentChunk += fileContentMarker + fileEffectiveContent;
       currentChunkChars += fileEffectiveContent.length + fileContentMarker.length;
+      log(`Archivo ${baseFileName} (${fileEffectiveContent.length} caracteres) añadido al fragmento actual. Tamaño actual del fragmento: ${currentChunkChars}.`);
     }
   }
 
-  if (currentChunk.length > 0) { // Push any remaining chunk
+  if (currentChunk.length > 0) { 
     chunks.push(currentChunk);
+    log(`Fragmento restante (${currentChunk.length} caracteres) añadido.`);
   }
 
   const totalChunks = chunks.length;
   if (totalChunks === 0) {
-    return { success: false, error: "No se generaron fragmentos de código para analizar.", chunksProcessed: 0, totalChunks: 0 };
+    logError("No se generaron fragmentos de código para analizar.");
+    return { success: false, error: "No se generaron fragmentos de código para analizar.", chunksProcessed: 0, totalChunks: 0, detailedExecutionLogs: executionLogs };
   }
   
-  console.log(`Código fuente dividido en ${totalChunks} fragmentos para análisis. MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}`);
-  chunks.forEach((c, i) => console.log(`Fragmento ${i+1} tamaño: ${c.length} caracteres`));
+  log(`Código fuente dividido en ${totalChunks} fragmentos para análisis. MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}`);
+  chunks.forEach((c, i) => log(`Fragmento ${i+1} tamaño: ${c.length} caracteres`));
 
   const allResults: AnalyzeCodeAlchemistSourceOutput[] = [];
   let processedChunks = 0;
@@ -113,35 +142,36 @@ export async function handleAutoAnalyzeAppSource(
     };
 
     try {
-      console.log(`Analizando fragmento ${processedChunks + 1} de ${totalChunks}... (${chunk.length} caracteres) con timeout de ${GROQ_API_TIMEOUT_MS / 1000}s y modelo ${modelName}`);
+      log(`Analizando fragmento ${processedChunks + 1} de ${totalChunks}... (${chunk.length} caracteres) con timeout de ${GROQ_API_TIMEOUT_MS / 1000}s y modelo ${modelName}`);
       const result = await analyzeCodeAlchemistSource(input);
       allResults.push(result);
       processedChunks++;
-      // No direct onProgress callback here for server actions; progress is reported at the end or on error.
-      console.log(`Progreso: ${processedChunks}/${totalChunks}`);
+      log(`Progreso: ${processedChunks}/${totalChunks} fragmentos procesados. Fragmento ${processedChunks} completado.`);
     } catch (error) {
-      console.error(`Error analizando el fragmento ${processedChunks + 1}:`, error);
       let errorMessage = "Ocurrió un error desconocido durante el análisis de un fragmento.";
       if (error instanceof Error) {
         errorMessage = error.message; 
       }
-      return { success: false, error: `Falló el análisis del fragmento ${processedChunks + 1}: ${errorMessage}`, chunksProcessed: processedChunks, totalChunks: totalChunks };
+      logError(`Error analizando el fragmento ${processedChunks + 1}: ${errorMessage}`);
+      return { success: false, error: `Falló el análisis del fragmento ${processedChunks + 1}: ${errorMessage}`, chunksProcessed: processedChunks, totalChunks: totalChunks, detailedExecutionLogs: executionLogs };
     }
   }
 
   if (allResults.length === 0) {
-    return { success: false, error: "No se obtuvieron resultados del análisis de los fragmentos.", chunksProcessed: processedChunks, totalChunks: totalChunks };
+    logError("No se obtuvieron resultados del análisis de los fragmentos.");
+    return { success: false, error: "No se obtuvieron resultados del análisis de los fragmentos.", chunksProcessed: processedChunks, totalChunks: totalChunks, detailedExecutionLogs: executionLogs };
   }
+  log(`Análisis de todos los ${processedChunks} fragmentos completado. Agregando resultados.`);
 
-  // Agregación de resultados
   const aggregatedResult: AnalyzeCodeAlchemistSourceOutput = {
     analysisTitle: allResults[0].analysisTitle || `Análisis Agregado de ${totalChunks} Fragmentos`,
     identifiedAreas: Array.from(new Set(allResults.flatMap(r => r.identifiedAreas))),
     suggestions: allResults.flatMap(r => r.suggestions.map(s => ({...s, area: s.area || "General (Fragmento)" }))), 
     overallAssessment: allResults.map(r => r.overallAssessment).join('\n\n---\n\n'),
   };
+  log("Resultados agregados exitosamente.");
   
-  return { success: true, data: aggregatedResult, chunksProcessed: processedChunks, totalChunks: totalChunks };
+  return { success: true, data: aggregatedResult, chunksProcessed: processedChunks, totalChunks: totalChunks, detailedExecutionLogs: executionLogs };
 }
 
 
@@ -154,6 +184,7 @@ interface AppSourceBundleResult {
   files?: AppSourceFile[];
   concatenatedSource?: string; 
   error?: string;
+  logs?: string[]; // Logs generated by this function
 }
 
 const ignorePatterns = [
@@ -173,9 +204,34 @@ const ignorePatterns = [
   'public/mockServiceWorker.js', 
 ];
 
-export async function getApplicationSourceBundle(concatenate: boolean = false): Promise<AppSourceBundleResult> {
+export async function getApplicationSourceBundle(
+  concatenate: boolean = false,
+  executionLogs?: string[] // Optional: pass array to append logs
+): Promise<AppSourceBundleResult> {
+  const internalLogs: string[] = [];
+  const log = (message: string) => {
+    const logMsg = `[SourceBundle] ${message}`;
+    console.log(logMsg);
+    internalLogs.push(logMsg);
+    if (executionLogs) executionLogs.push(logMsg);
+  };
+  const warnLog = (message: string) => {
+    const logMsg = `[SourceBundle_WARN] ${message}`;
+    console.warn(logMsg);
+    internalLogs.push(logMsg);
+    if (executionLogs) executionLogs.push(logMsg);
+  };
+   const errorLog = (message: string) => {
+    const logMsg = `[SourceBundle_ERROR] ${message}`;
+    console.error(logMsg);
+    internalLogs.push(logMsg);
+    if (executionLogs) executionLogs.push(logMsg);
+  };
+
+
   try {
     const projectRoot = process.cwd();
+    log(`Obteniendo lista de archivos desde: ${projectRoot} con patrones de ignorados.`);
     const allFiles = await glob('**/*', { 
       cwd: projectRoot, 
       nodir: true, 
@@ -183,33 +239,37 @@ export async function getApplicationSourceBundle(concatenate: boolean = false): 
       ignore: ignorePatterns,
       follow: false, 
     });
+    log(`Se encontraron ${allFiles.length} archivos después del filtrado inicial.`);
 
     const filesData: AppSourceFile[] = [];
     let concatenatedContent = "";
 
     for (const relativeFilePath of allFiles) {
       try {
-        const stats = await fs.stat(path.join(projectRoot, relativeFilePath));
+        const fullPath = path.join(projectRoot, relativeFilePath);
+        const stats = await fs.stat(fullPath);
         
+        log(`Procesando archivo: ${relativeFilePath}, tamaño: ${stats.size} bytes.`);
+
         if (concatenate && stats.size > 500 * 1024) { 
-            console.warn(`Archivo omitido de la concatenación por tamaño: ${relativeFilePath} (${(stats.size / 1024).toFixed(2)} KB)`);
+            warnLog(`Archivo omitido de la concatenación por tamaño: ${relativeFilePath} (${(stats.size / 1024).toFixed(2)} KB)`);
             const message = `// Archivo ${relativeFilePath} omitido de la concatenación por ser demasiado grande (${(stats.size / 1024).toFixed(2)} KB).\n`;
             concatenatedContent += `\n\n// --- Archivo: ${relativeFilePath} ---\n\n${message}`;
             filesData.push({ fileName: relativeFilePath, content: message });
             continue;
         }
 
-
-        const fullPath = path.join(projectRoot, relativeFilePath);
         let content: string;
         try {
           content = await fs.readFile(fullPath, 'utf-8');
+          log(`Contenido de ${relativeFilePath} leído exitosamente.`);
         } catch (readError) {
           const error = readError as NodeJS.ErrnoException;
-          console.warn(`No se pudo leer el archivo ${relativeFilePath} como texto (podría ser binario): ${error.message}`);
+          warnLog(`No se pudo leer el archivo ${relativeFilePath} como texto (podría ser binario): ${error.message}`);
           content = `// Error: No se pudo leer el archivo ${relativeFilePath} como texto. Puede ser un archivo binario o corrupto.`;
-           if (!concatenate && (error.code === 'EILSEQ' || stats.size > 1024 * 1024) ) {
+           if (!concatenate && (error.code === 'EILSEQ' || stats.size > 1024 * 1024) ) { // 1MB limit for non-concatenated binary content in ZIP
              filesData.push({ fileName: relativeFilePath, content: "// Archivo binario o no legible, contenido omitido para ZIP." });
+             warnLog(`Contenido de ${relativeFilePath} omitido para ZIP (binario/grande no concatenado).`);
              continue; 
            }
         }
@@ -217,11 +277,12 @@ export async function getApplicationSourceBundle(concatenate: boolean = false): 
         filesData.push({ fileName: relativeFilePath, content });
         if (concatenate) {
           concatenatedContent += `\n\n// --- Archivo: ${relativeFilePath} ---\n\n${content}`;
+          log(`Contenido de ${relativeFilePath} añadido a la concatenación.`);
         }
       } catch (fileProcessingError) {
         const error = fileProcessingError as NodeJS.ErrnoException;
-        if (error.code !== 'EACCES' && error.code !== 'EISDIR') {
-            console.warn(`No se pudo procesar el archivo ${relativeFilePath} para el paquete fuente:`, error);
+        if (error.code !== 'EACCES' && error.code !== 'EISDIR') { // Filter out common access/dir errors
+            warnLog(`No se pudo procesar el archivo ${relativeFilePath} para el paquete fuente: ${error.message}`);
         }
         const errorMessage = `// Error: No se pudo procesar el archivo. (${error.message})`;
         filesData.push({ fileName: relativeFilePath, content: errorMessage });
@@ -232,14 +293,15 @@ export async function getApplicationSourceBundle(concatenate: boolean = false): 
     }
 
     if (filesData.length === 0) {
-        return { success: false, error: "No se pudieron leer archivos fuente para el paquete." };
+        warnLog("No se pudieron leer archivos fuente para el paquete después del procesamiento.");
+        return { success: false, error: "No se pudieron leer archivos fuente para el paquete.", logs: internalLogs };
     }
-
-    return { success: true, files: filesData, concatenatedSource: concatenate ? concatenatedContent : undefined };
+    log(`Paquete de código fuente finalizado con ${filesData.length} entradas de archivo.`);
+    return { success: true, files: filesData, concatenatedSource: concatenate ? concatenatedContent : undefined, logs: internalLogs };
   } catch (error) {
-    console.error("Error empaquetando el código fuente de la aplicación:", error);
     const errorMessage = error instanceof Error ? error.message : "Ocurrió un error desconocido.";
-    return { success: false, error: `Falló la obtención del paquete de código fuente: ${errorMessage}` };
+    errorLog(`Error empaquetando el código fuente de la aplicación: ${errorMessage}`);
+    return { success: false, error: `Falló la obtención del paquete de código fuente: ${errorMessage}`, logs: internalLogs };
   }
 }
 
@@ -323,3 +385,4 @@ export async function handleGetErrorFixSuggestion(
     return { success: false, error: `Falló la obtención de sugerencia para corrección: ${specificErrorMessage}` };
   }
 }
+
