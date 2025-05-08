@@ -46,7 +46,7 @@ type LogEntry = {
 export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: WorkgroupExecutionModalProps) {
   const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
-  const [currentTurn, setCurrentTurn] = useState(0);
+  const [currentTurnInternal, setCurrentTurnInternal] = useState(0); // Use internal state for tracking
   const [conversationHistory, setConversationHistory] = useState<ChatMessage[]>([]);
   const [executionError, setExecutionError] = useState<string | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
@@ -98,8 +98,9 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
    }, [logMessage]);
 
 
-  const runExecutionTurn = useCallback(async (signal: AbortSignal) => {
-    logMessage({ type: 'system', message: `Iniciando turno ${currentTurn + 1}/${MAX_TURNS}...` });
+  const runExecutionTurn = useCallback(async (turnNumber: number, currentHistory: ChatMessage[], signal: AbortSignal) => {
+    // Use passed turnNumber and currentHistory instead of possibly stale state
+    logMessage({ type: 'system', message: `Iniciando turno ${turnNumber}/${MAX_TURNS}...` });
 
      if (!orchestrator) {
         logMessage({ type: 'error', message: 'Error crítico: Agente Orquestrador no encontrado.' });
@@ -137,7 +138,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
     const payload: WorkgroupTurnPayload = {
       workgroupName: workgroup.name,
       task: workgroup.task,
-      conversationHistory: conversationHistory,
+      conversationHistory: currentHistory, // Use the passed history
       orchestrator: {
           id: orchestrator.id,
           name: orchestrator.name,
@@ -148,11 +149,11 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
           llmApiUrl: orchestratorLlmOptions.apiUrl
       },
       participantAgentConfigs: participantAgentConfigs,
-      currentTurn: currentTurn + 1,
+      currentTurn: turnNumber, // Use the passed turn number
       maxTurns: MAX_TURNS
     };
 
-    logMessage({ type: 'debug', message: `Enviando payload al servidor para el turno ${currentTurn + 1}`, llmRequest: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
+    logMessage({ type: 'debug', message: `Enviando payload al servidor para el turno ${turnNumber}`, llmRequest: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
 
 
     try {
@@ -178,37 +179,43 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
 
 
         if (result.error) {
-          logMessage({ type: 'error', message: `Error en el servidor durante el turno ${currentTurn + 1}: ${result.error}` });
+          logMessage({ type: 'error', message: `Error en el servidor durante el turno ${turnNumber}: ${result.error}` });
           setExecutionError(result.error);
           setIsExecuting(false);
           return; // Stop execution on server error
         }
 
         // Update conversation history from server response
-        setConversationHistory(result.updatedHistory || conversationHistory);
+        const nextHistory = result.updatedHistory || currentHistory;
+        setConversationHistory(nextHistory); // Update the state for the UI and the next potential start
 
         // Log the detailed interactions if provided (optional, could make logs very long)
          if (result.orchestratorDecision) {
-             logMessage({ type: 'orchestrator', agentName: orchestrator.name, message: `Decisión: ${result.orchestratorDecision.reason}. Próximo agente: ${getAgentById(result.orchestratorDecision.nextAgentId)?.name || result.orchestratorDecision.nextAgentId}.`, llmResponse: { raw: result.orchestratorDecision.rawOutput } });
+             logMessage({ type: 'orchestrator', agentName: orchestrator.name, message: `Decisión: ${result.orchestratorDecision.reason}. Próximo agente: ${getAgentById(result.orchestratorDecision.nextAgentId)?.name || result.orchestratorDecision.nextAgentId}.`, llmResponse: { raw: result.orchestratorDecision.rawOutput?.substring(0,100) } });
          }
          if (result.agentResponse) {
-             logMessage({ type: 'agent', agentName: getAgentById(result.agentResponse.agentId)?.name || result.agentResponse.agentId, message: `Respuesta: ${result.agentResponse.content.substring(0, 200)}...`, llmResponse: { raw: result.agentResponse.content } });
+             logMessage({ type: 'agent', agentName: getAgentById(result.agentResponse.agentId)?.name || result.agentResponse.agentId, message: `Respuesta: ${result.agentResponse.content.substring(0, 200)}...`, llmResponse: { raw: result.agentResponse.rawOutput?.substring(0,100) } });
          }
 
-        setCurrentTurn(prev => prev + 1);
+        // Update the internal turn state for the UI
+        setCurrentTurnInternal(turnNumber);
 
-        if (result.isComplete || (currentTurn + 1) >= MAX_TURNS) {
+        if (result.isComplete || turnNumber >= MAX_TURNS) {
             logMessage({ type: 'system', message: `Ejecución completada (Razón: ${result.isComplete ? 'Tarea completada por orquestador' : 'Límite de turnos alcanzado'}).` });
             setIsExecuting(false);
         } else if (!signal.aborted) {
             // Schedule next turn after a short delay
              await new Promise(resolve => setTimeout(resolve, 1500)); // Delay between turns
              if (!signal.aborted) {
-                 runExecutionTurn(signal); // Recursive call for next turn
+                 // Make the recursive call with the *next* turn number and the *updated* history
+                 runExecutionTurn(turnNumber + 1, nextHistory, signal);
              } else {
                   logMessage({ type: 'system', message: 'Ejecución cancelada por el usuario.' });
                   setIsExecuting(false);
              }
+        } else {
+             logMessage({ type: 'system', message: 'Ejecución cancelada por el usuario durante la espera.' });
+             setIsExecuting(false);
         }
 
     } catch (error) {
@@ -216,21 +223,22 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
             logMessage({ type: 'system', message: 'Ejecución cancelada por el usuario.' });
         } else {
             const errorMsg = error instanceof Error ? error.message : 'Error desconocido al procesar el turno.';
-            logMessage({ type: 'error', message: `Error en el cliente durante el turno ${currentTurn + 1}: ${errorMsg}` });
+            logMessage({ type: 'error', message: `Error en el cliente durante el turno ${turnNumber}: ${errorMsg}` });
             setExecutionError(errorMsg);
         }
         setIsExecuting(false); // Stop execution on client error or cancellation
     }
 
-  }, [currentTurn, orchestrator, resolveAgentLLMOptions, participantAgents, workgroup.name, workgroup.task, conversationHistory, logMessage, getAgentById]);
+  }, [orchestrator, resolveAgentLLMOptions, participantAgents, workgroup.name, workgroup.task, logMessage, getAgentById]); // Removed conversationHistory and currentTurn from deps
 
 
   const startExecution = useCallback(() => {
     if (isExecuting) return;
     setIsExecuting(true);
     setExecutionLogs([]);
-    setConversationHistory([]); // Start with empty history, task is passed separately
-    setCurrentTurn(0);
+    const initialHistory: ChatMessage[] = []; // Start with empty history
+    setConversationHistory(initialHistory);
+    setCurrentTurnInternal(0); // Reset internal turn counter
     setExecutionError(null);
     executionControllerRef.current = new AbortController(); // Create new controller for this run
 
@@ -240,7 +248,8 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
     logMessage({ type: 'info', message: `Participantes: ${participantAgents.map(a => a.name).join(', ')}` });
     logMessage({ type: 'info', message: `Máximo de turnos: ${MAX_TURNS}` });
 
-    runExecutionTurn(executionControllerRef.current.signal);
+    // Start the first turn, passing turn number 1 and the initial empty history
+    runExecutionTurn(1, initialHistory, executionControllerRef.current.signal);
 
   }, [isExecuting, workgroup.name, workgroup.task, orchestrator, participantAgents, logMessage, runExecutionTurn]);
 
@@ -292,7 +301,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
         <DialogHeader className="p-6 pb-4 border-b">
           <DialogTitle className="flex items-center gap-2">
             {isExecuting ? <Loader2 className="h-5 w-5 text-primary animate-spin" /> : <Play className="h-5 w-5 text-primary" />}
-            Ejecución del Grupo: {workgroup.name} {isExecuting ? `(Turno ${currentTurn + 1}/${MAX_TURNS})` : '(Finalizado)'}
+            Ejecución del Grupo: {workgroup.name} {isExecuting ? `(Turno ${currentTurnInternal}/${MAX_TURNS})` : '(Finalizado)'}
           </DialogTitle>
           <DialogDescription>
             Observa el flujo de trabajo entre los agentes mientras colaboran en la tarea.
@@ -359,8 +368,8 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
                         })}
                         {isExecuting && <div className="flex items-center gap-2 mt-2"><Loader2 className="h-4 w-4 animate-spin text-primary inline-block" /><span className='text-sm text-muted-foreground'>Procesando turno...</span></div>}
                          {!isExecuting && executionError && <div className="mt-2 p-2 rounded bg-destructive/10 text-destructive text-sm font-medium">Ejecución detenida debido a un error.</div>}
-                         {!isExecuting && !executionError && currentTurn >= MAX_TURNS && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución completada (Límite de turnos alcanzado).</div>}
-                         {!isExecuting && !executionError && currentTurn < MAX_TURNS && executionLogs.length > 0 && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución completada o detenida antes del límite de turnos.</div>}
+                         {!isExecuting && !executionError && currentTurnInternal >= MAX_TURNS && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución completada (Límite de turnos alcanzado).</div>}
+                         {!isExecuting && !executionError && currentTurnInternal < MAX_TURNS && executionLogs.length > 0 && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución completada o detenida antes del límite de turnos.</div>}
                     </pre>
                 </ScrollArea>
            </div>
