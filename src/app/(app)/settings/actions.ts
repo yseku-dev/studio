@@ -1,57 +1,129 @@
 
 'use server';
 
-import { testGroqConnection, GroqOptions } from '@/services/groq';
+import { LLM_PROVIDERS, type LLMProviderId, MODELS_BY_PROVIDER } from '@/config/llm-config';
 import simpleGit, { SimpleGit, SimpleGitOptions } from 'simple-git';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 
-
-interface TestConnectionResult {
+interface LLMTestConnectionResult {
   success: boolean;
   message: string;
-  data?: any;
+  data?: any; // Could be model response or other relevant data
 }
 
-export async function handleTestGroqConnection(
+// Unified function to test LLM connection
+export async function handleTestLLMConnection(
+  providerId: LLMProviderId,
   apiKey: string,
-  modelName: string
-): Promise<TestConnectionResult> {
-  if (!apiKey || !modelName) {
-    return { success: false, message: "La Clave API de Groq y el Nombre del Modelo son obligatorios." };
+  modelName: string,
+  apiUrl?: string // Optional for local LLMs
+): Promise<LLMTestConnectionResult> {
+  const provider = LLM_PROVIDERS.find(p => p.id === providerId);
+  if (!provider) {
+    return { success: false, message: "Proveedor LLM no válido." };
   }
 
-  const options: GroqOptions = {
-    apiKey,
-    modelName,
-  };
+  if (provider.requiresApiKey && !apiKey) {
+    return { success: false, message: `La Clave API para ${provider.name} es obligatoria.` };
+  }
+  if (!modelName) {
+    return { success: false, message: `El Nombre del Modelo para ${provider.name} es obligatorio.` };
+  }
+
+  const effectiveApiUrl = apiUrl || provider.apiUrl;
+  let endpoint = effectiveApiUrl;
+
+  if (provider.isGroqCompatible || provider.id === 'ollama') { // Ollama can use /v1/chat for OpenAI compatibility
+    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/chat/completions`;
+  } else if (provider.isAnthropicCompatible) {
+    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/messages`;
+  }
+  // Add other provider-specific endpoint logic if necessary
+
+  console.log(`Probando conexión con ${provider.name} (modelo: ${modelName}) en endpoint: ${endpoint}...`);
+  
+  let requestBody: any;
+  const headers: HeadersInit = { 'Content-Type': 'application/json' };
+
+  if (provider.requiresApiKey && provider.apiKeyName) {
+    if(provider.id === 'anthropic') {
+      headers['x-api-key'] = apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+    } else { // OpenAI, Groq
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+  }
+
+  if (provider.isGroqCompatible || provider.id === 'ollama') {
+    requestBody = {
+      model: modelName,
+      messages: [{ role: "user", content: "Hola. ¿Estás funcionando?" }],
+      temperature: 0.1,
+      max_tokens: 50,
+    };
+  } else if (provider.isAnthropicCompatible) {
+    requestBody = {
+      model: modelName,
+      messages: [{ role: "user", content: "Hola. ¿Estás funcionando?" }],
+      max_tokens: 50,
+      temperature: 0.1,
+    };
+  } else {
+    // Basic ping or specific test for other providers if needed
+    // For now, assume we need to send a simple request for others too.
+    // This part might need custom logic per provider if they don't fit the above.
+     return { success: false, message: `El proveedor ${provider.name} no tiene un método de prueba de conexión implementado actualmente.`};
+  }
+
+
+  const controller = new AbortController();
+  const timeoutForTest = 30000; // 30 seconds for test
+  const timeoutId = setTimeout(() => controller.abort(), timeoutForTest);
 
   try {
-    const result = await testGroqConnection(options);
-    // testGroqConnection already returns a serializable structure
-    return result; 
-  } catch (error) {
-    // This catch block might be redundant if testGroqConnection itself handles all its errors and returns a TestConnectionResult.
-    // However, it's here as a safeguard for unexpected errors thrown by testGroqConnection that aren't caught internally.
-    console.error("Error en handleTestGroqConnection (capa de acción):", error); // Log the raw error
+    const fetchRequestOptions: RequestInit = {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    };
 
-    let errorMessage: string;
-    if (error instanceof Error) {
-        errorMessage = error.message;
-    } else {
-        try {
-            errorMessage = String(error);
-        } catch (e) {
-            errorMessage = "Ocurrió un error desconocido durante la prueba de conexión.";
-        }
+    // No retry for test connection, we want immediate feedback.
+    const response = await fetch(endpoint, fetchRequestOptions);
+    
+    if (!response.ok) {
+        const errorBody = await response.text();
+        console.error(`Error de ${provider.name} API (${response.status}):`, errorBody);
+        return { success: false, message: `Error de ${provider.name} API (${response.status}): ${errorBody.substring(0,200)}...`};
     }
-    if (!errorMessage && errorMessage !== '') {
-        errorMessage = "Ocurrió un error desconocido durante la prueba de conexión.";
-    } else if (errorMessage === '') {
-        errorMessage = "Error sin mensaje detallado.";
+
+    const responseData = await response.json();
+    
+    let content = "";
+    if (provider.isGroqCompatible || provider.id === 'ollama') {
+        content = responseData.choices?.[0]?.message?.content;
+    } else if (provider.isAnthropicCompatible) {
+        content = responseData.content?.[0]?.text;
     }
-    return { success: false, message: `Falló la prueba de conexión (capa de acción): ${errorMessage}` };
+    
+    if (content) {
+        return { success: true, message: `Conexión con ${provider.name} API exitosa.`, data: content };
+    }
+    console.warn(`Respuesta inesperada de ${provider.name} API durante la prueba de conexión, aunque la llamada fue exitosa:`, responseData);
+    return { success: false, message: `Respuesta inesperada de ${provider.name} API durante la prueba de conexión.`, data: responseData };
+
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error(`Error de timeout probando la conexión con ${provider.name} API`);
+      return { success: false, message: `La prueba de conexión a la API de ${provider.name} excedió el tiempo límite.` };
+    }
+    console.error(`Error probando la conexión con ${provider.name} API:`, error);
+    const errorMessage = error instanceof Error ? error.message : "Error desconocido";
+    return { success: false, message: `Falló la prueba de conexión con ${provider.name}: ${errorMessage}` };
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
@@ -91,8 +163,6 @@ export async function handleTestGitConnection(config: GitTestConnectionConfig): 
         const authenticatedRepoUrl = repoUrl.replace("https://", `https://${encodeURIComponent(username)}:${encodeURIComponent(pat)}@`);
         
         console.log(`[GitTest] Intentando listar remotos para ${authenticatedRepoUrl.replace(pat, '********')}`);
-        // Attempt to list remote refs as a basic connectivity and authentication test.
-        // This command doesn't require a local repository to be fully initialized or cloned.
         const lsRemoteOutput = await git.listRemote(['--heads', authenticatedRepoUrl]);
         
         console.log(`[GitTest] 'git ls-remote' exitoso. Salida (primeras líneas): ${lsRemoteOutput.substring(0, 200)}...`);
@@ -117,19 +187,17 @@ export async function handleTestGitConnection(config: GitTestConnectionConfig): 
             }
         }
         
-        // Attempt to get more details from stderr if available (simple-git often includes it)
         if (error.stderr) {
             errorDetails = error.stderr;
         } else if (error.message) {
             errorDetails = error.message;
         }
 
-
         console.error(`[GitTest] Error en la prueba de conexión Git: ${errorMessage}`, errorDetails ? `Detalles: ${errorDetails}` : '', error);
         return { 
             success: false, 
             message: `Falló la prueba de conexión Git: ${errorMessage}`,
-            details: errorDetails.substring(0, 500) // Limit detail length
+            details: errorDetails.substring(0, 500) 
         };
     } finally {
         if (tempRepoPath) {

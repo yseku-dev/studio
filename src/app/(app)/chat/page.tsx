@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
@@ -11,11 +11,22 @@ import { Loader2, Send, User, Sparkles, AlertTriangle, Copy, Trash2 } from 'luci
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { handleChatCompletion } from './actions';
-import type { ChatMessage } from '@/services/groq'; // Re-use ChatMessage type
+import type { ChatMessage } from '@/services/groq'; 
+import {
+  DEFAULT_LLM_PROVIDER,
+  LLM_PROVIDERS,
+  type LLMProviderId,
+  getLocalStorageApiKeyName,
+  getLocalStorageModelName,
+  LOCALSTORAGE_PROVIDER_ID_KEY
+} from '@/config/llm-config';
 
 export default function ChatPage() {
+  // LLM settings state
+  const [llmProviderId, setLlmProviderId] = useState<LLMProviderId>(DEFAULT_LLM_PROVIDER);
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [modelName, setModelName] = useState<string | null>(null);
+  const [apiUrl, setApiUrl] = useState<string | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
   const [currentMessage, setCurrentMessage] = useState('');
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
@@ -24,14 +35,30 @@ export default function ChatPage() {
 
   const { toast } = useToast();
 
-  useEffect(() => {
-    setApiKey(localStorage.getItem('codealchemist_groq_api_key'));
-    setModelName(localStorage.getItem('codealchemist_groq_model_name'));
-    // Consider loading chat history from localStorage if persistence is desired
+  const loadLLMSettings = useCallback(() => {
+    const storedProviderId = localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null;
+    const provider = LLM_PROVIDERS.find(p => p.id === (storedProviderId || DEFAULT_LLM_PROVIDER)) || LLM_PROVIDERS.find(p => p.id === DEFAULT_LLM_PROVIDER)!;
+    setLlmProviderId(provider.id);
+    
+    setApiKey(localStorage.getItem(getLocalStorageApiKeyName(provider.id)));
+    setModelName(localStorage.getItem(getLocalStorageModelName(provider.id)));
+    setApiUrl(localStorage.getItem(`codealchemist_apiurl_${provider.id}`) || provider.apiUrl);
   }, []);
 
   useEffect(() => {
-    // Scroll to bottom when new messages are added
+    loadLLMSettings();
+    // Consider loading chat history from localStorage if persistence is desired
+    // Listen for storage changes to update settings if modified in another tab
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key?.startsWith('codealchemist_')) {
+        loadLLMSettings();
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [loadLLMSettings]);
+
+  useEffect(() => {
     if (scrollAreaRef.current) {
       const scrollViewport = scrollAreaRef.current.querySelector('div[data-radix-scroll-area-viewport]');
       if (scrollViewport) {
@@ -42,13 +69,18 @@ export default function ChatPage() {
 
   const handleSendMessage = async () => {
     if (!currentMessage.trim()) return;
+    const currentProviderConfig = LLM_PROVIDERS.find(p => p.id === llmProviderId);
 
-    if (!apiKey || !modelName) {
-      toast({
-        title: 'Configuración Faltante',
-        description: 'Por favor, establece tu Clave API de Groq y Nombre de Modelo en Configuración.',
-        variant: 'destructive',
-      });
+    if (!currentProviderConfig) {
+      toast({ title: 'Error de Configuración', description: 'Proveedor LLM no encontrado.', variant: 'destructive' });
+      return;
+    }
+    if (currentProviderConfig.requiresApiKey && !apiKey) {
+      toast({ title: 'Configuración Faltante', description: `Por favor, establece tu Clave API para ${currentProviderConfig.name} en Configuración.`, variant: 'destructive' });
+      return;
+    }
+    if (!modelName) {
+      toast({ title: 'Configuración Faltante', description: `Por favor, establece el Nombre de Modelo para ${currentProviderConfig.name} en Configuración.`, variant: 'destructive' });
       return;
     }
 
@@ -59,10 +91,8 @@ export default function ChatPage() {
     setChatError(null);
 
     const messagesForApi = [...chatHistory, newUserMessage];
-    // Optional: Trim history if it gets too long for API context window
-    // const trimmedMessages = messagesForApi.slice(-10); // Example: keep last 10 messages
 
-    const result = await handleChatCompletion(messagesForApi, apiKey, modelName);
+    const result = await handleChatCompletion(messagesForApi, llmProviderId, apiKey!, modelName!, apiUrl);
 
     if (result.success && result.data) {
       const assistantMessage: ChatMessage = { role: 'assistant', content: result.data.content };
@@ -71,12 +101,9 @@ export default function ChatPage() {
       setChatError(result.error || 'Ocurrió un error desconocido durante la respuesta del chat.');
       toast({
         title: 'Error en el Chat',
-        description: result.error || 'No se pudo obtener una respuesta de la IA.',
+        description: result.error || `No se pudo obtener una respuesta de ${currentProviderConfig.name}.`,
         variant: 'destructive',
       });
-      // Optionally, add the user message back to the input if sending failed
-      // setCurrentMessage(newUserMessage.content);
-      // setChatHistory(prev => prev.slice(0, -1)); // Remove user message if API call failed entirely
     }
     setIsLoading(false);
   };
@@ -98,6 +125,9 @@ export default function ChatPage() {
     setChatError(null);
     toast({ title: 'Chat Borrado', description: 'El historial de chat ha sido limpiado.' });
   };
+  
+  const currentProviderConfig = LLM_PROVIDERS.find(p => p.id === llmProviderId);
+  const isConfigComplete = currentProviderConfig && modelName && (!currentProviderConfig.requiresApiKey || apiKey);
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] md:h-[calc(100vh-10rem)] gap-6">
@@ -109,9 +139,9 @@ export default function ChatPage() {
           </CardTitle>
           <CardDescription>
             Interactúa con el asistente de IA. Puedes hacer preguntas, pedir explicaciones de código, generar ideas, etc.
-            {!apiKey || !modelName ? (
-                <span className="text-destructive block mt-1"> (Clave API o Modelo no configurado en Ajustes)</span>
-            ) : <span className="text-foreground block mt-1">(Usando modelo: {modelName})</span>}
+            {!isConfigComplete ? (
+                <span className="text-destructive block mt-1"> (Configuración de LLM incompleta en Ajustes)</span>
+            ) : <span className="text-foreground block mt-1">(Usando Proveedor: {currentProviderConfig?.name}, Modelo: {modelName})</span>}
           </CardDescription>
         </CardHeader>
         
@@ -189,12 +219,12 @@ export default function ChatPage() {
               placeholder="Escribe tu mensaje aquí... (Shift+Enter para nueva línea)"
               rows={1}
               className="flex-1 resize-none min-h-[40px] max-h-[120px] text-sm bg-card"
-              disabled={isLoading || !apiKey || !modelName}
+              disabled={isLoading || !isConfigComplete}
             />
             <Button onClick={handleClearChat} variant="ghost" size="icon" disabled={isLoading || chatHistory.length === 0} title="Limpiar Chat">
               <Trash2 className="h-5 w-5 text-muted-foreground hover:text-destructive"/>
             </Button>
-            <Button onClick={handleSendMessage} disabled={isLoading || !currentMessage.trim() || !apiKey || !modelName} className="h-10">
+            <Button onClick={handleSendMessage} disabled={isLoading || !currentMessage.trim() || !isConfigComplete} className="h-10">
               {isLoading ? (
                 <Loader2 className="h-5 w-5 animate-spin" />
               ) : (

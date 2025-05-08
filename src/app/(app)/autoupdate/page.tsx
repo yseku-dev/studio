@@ -1,14 +1,14 @@
 
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork, Trash2, Expand, Minimize } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion, handleUploadToGit } from './actions';
-import type { AnalyzeCodeAlchemistSourceOutput, SuggestionUnit as FlowSuggestionUnit } from '@/ai/flows/analyze-codealchemist-source-flow';
-import type { SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
+import type { ProjectAnalysisResponse } from '@/services/groq'; 
+import type { SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow'; // Keep this if it's still specific
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -27,12 +27,23 @@ import JSZip from 'jszip';
 import { Label } from '@/components/ui/label';
 import { Progress } from "@/components/ui/progress";
 import { cn } from '@/lib/utils';
-
+import {
+  DEFAULT_LLM_PROVIDER,
+  LLM_PROVIDERS,
+  type LLMProviderId,
+  getLocalStorageApiKeyName,
+  getLocalStorageModelName,
+  LOCALSTORAGE_PROVIDER_ID_KEY,
+  LOCALSTORAGE_GIT_REPO_URL_KEY,
+  LOCALSTORAGE_GIT_USERNAME_KEY,
+  LOCALSTORAGE_GIT_EMAIL_KEY,
+  LOCALSTORAGE_GIT_PAT_KEY
+} from '@/config/llm-config';
 
 type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "success" | "error" | "fixing_error" | "uploading_git" | "fixing_git_error";
 type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
 
-interface SuggestionWithStatus extends FlowSuggestionUnit {
+interface SuggestionWithStatus extends ProjectAnalysisResponse['suggestions'][0] {
   id: string;
   status: SuggestionStatus;
   errorMessage?: string;
@@ -53,7 +64,7 @@ interface GitConfig {
 
 export default function AutoUpdatePage() {
   const [status, setStatus] = useState<AutoUpdateStatus>("idle");
-  const [analysisResult, setAnalysisResult] = useState<AnalyzeCodeAlchemistSourceOutput | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<ProjectAnalysisResponse | null>(null);
   const [currentAnalysisError, setCurrentAnalysisError] = useState<string | null>(null);
   const [suggestionsWithStatus, setSuggestionsWithStatus] = useState<SuggestionWithStatus[]>([]);
   const [isDownloading, setIsDownloading] = useState(false);
@@ -67,24 +78,52 @@ export default function AutoUpdatePage() {
 
   const { toast } = useToast();
 
+  // LLM settings state
+  const [llmProviderId, setLlmProviderId] = useState<LLMProviderId>(DEFAULT_LLM_PROVIDER);
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [modelName, setModelName] = useState<string | null>(null);
+  const [apiUrl, setApiUrl] = useState<string | undefined>(undefined);
+
   const [gitConfig, setGitConfig] = useState<GitConfig>({ repoUrl: null, username: null, email: null, pat: null });
 
   const [gitUploadRetryCount, setGitUploadRetryCount] = useState(0);
   const MAX_GIT_UPLOAD_RETRIES = 5;
 
+  const loadLLMSettings = useCallback(() => {
+    const storedProviderId = localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null;
+    const provider = LLM_PROVIDERS.find(p => p.id === (storedProviderId || DEFAULT_LLM_PROVIDER)) || LLM_PROVIDERS.find(p => p.id === DEFAULT_LLM_PROVIDER)!;
+    setLlmProviderId(provider.id);
+    
+    setApiKey(localStorage.getItem(getLocalStorageApiKeyName(provider.id)));
+    setModelName(localStorage.getItem(getLocalStorageModelName(provider.id)));
+    setApiUrl(localStorage.getItem(`codealchemist_apiurl_${provider.id}`) || provider.apiUrl);
+  }, []);
 
   useEffect(() => {
-    setApiKey(localStorage.getItem('codealchemist_groq_api_key'));
-    setModelName(localStorage.getItem('codealchemist_groq_model_name'));
+    loadLLMSettings();
+    
     setGitConfig({
-        repoUrl: localStorage.getItem('codealchemist_git_repository_url'),
-        username: localStorage.getItem('codealchemist_git_username'),
-        email: localStorage.getItem('codealchemist_git_email'),
-        pat: localStorage.getItem('codealchemist_git_pat'),
+        repoUrl: localStorage.getItem(LOCALSTORAGE_GIT_REPO_URL_KEY),
+        username: localStorage.getItem(LOCALSTORAGE_GIT_USERNAME_KEY),
+        email: localStorage.getItem(LOCALSTORAGE_GIT_EMAIL_KEY),
+        pat: localStorage.getItem(LOCALSTORAGE_GIT_PAT_KEY),
     });
-  }, []);
+
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key?.startsWith('codealchemist_')) {
+        loadLLMSettings(); // Reload LLM settings if any relevant item changes
+         setGitConfig({ // Reload Git settings too
+            repoUrl: localStorage.getItem(LOCALSTORAGE_GIT_REPO_URL_KEY),
+            username: localStorage.getItem(LOCALSTORAGE_GIT_USERNAME_KEY),
+            email: localStorage.getItem(LOCALSTORAGE_GIT_EMAIL_KEY),
+            pat: localStorage.getItem(LOCALSTORAGE_GIT_PAT_KEY),
+        });
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+
+  }, [loadLLMSettings]);
 
   const fetchProjectFiles = async (targetLogs?: string[]) => {
      const bundleResult = await getApplicationSourceBundle(false, targetLogs); 
@@ -99,21 +138,27 @@ export default function AutoUpdatePage() {
   };
 
   const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
-    if (!apiKey || !modelName) {
-      toast({
-        title: 'Configuración Faltante',
-        description: 'Por favor, establece tu Clave API de Groq y Nombre de Modelo en Configuración.',
-        variant: 'destructive',
-      });
+    const currentProviderConfig = LLM_PROVIDERS.find(p => p.id === llmProviderId);
+    if (!currentProviderConfig) {
+      toast({title: 'Error de Configuración', description: 'Proveedor LLM no encontrado.', variant: 'destructive'});
+      return;
+    }
+    if (currentProviderConfig.requiresApiKey && !apiKey) {
+      toast({ title: 'Configuración Faltante', description: `Por favor, establece tu Clave API para ${currentProviderConfig.name} en Configuración.`, variant: 'destructive' });
+      return;
+    }
+    if (!modelName) {
+      toast({ title: 'Configuración Faltante', description: `Por favor, establece el Nombre de Modelo para ${currentProviderConfig.name} en Configuración.`, variant: 'destructive' });
       return;
     }
 
-    const initialLogs = isRetry ? [...detailedLogs] : []; // Start fresh logs if not a retry, else append
-    initialLogs.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? 'Reintentando' : 'Iniciando'} auto-análisis...`);
+
+    const initialLogs = isRetry ? [...detailedLogs] : []; 
+    initialLogs.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? 'Reintentando' : 'Iniciando'} auto-análisis con ${currentProviderConfig.name}...`);
     setStatus("loading_source"); 
     setAnalysisResult(null);
-    setCurrentAnalysisError(null); // Clear previous analysis error
-    setCurrentGitError(null); // Clear previous git error
+    setCurrentAnalysisError(null); 
+    setCurrentGitError(null); 
     setSuggestionsWithStatus([]);
     setAnalysisProgress({ processed: 0, total: 0 }); 
     setAutoFixSuggestion(null);
@@ -121,14 +166,15 @@ export default function AutoUpdatePage() {
 
     toast({
       title: isRetry ? "Reintentando Auto-Análisis" : "Auto-Análisis Iniciado",
-      description: "Cargando y preparando el código fuente de CodeAlchemist..."
+      description: `Cargando y preparando el código fuente de CodeAlchemist con ${currentProviderConfig.name}...`
     });
 
     await fetchProjectFiles(initialLogs); 
     initialLogs.push(`[CLIENT ${new Date().toISOString()}] Estado cambiado a 'analyzing'. Llamando a handleAutoAnalyzeAppSource.`);
     setStatus("analyzing"); 
 
-    const result = await handleAutoAnalyzeAppSource(apiKey, modelName, analysisPreferences);
+    // Pass the LLM config to the server action
+    const result = await handleAutoAnalyzeAppSource(llmProviderId, apiKey!, modelName!, apiUrl, analysisPreferences);
     
     setDetailedLogs(prevLogs => [...prevLogs, ...(result.detailedExecutionLogs || [`[CLIENT ${new Date().toISOString()}] Llamada a handleAutoAnalyzeAppSource completada.`])]);
 
@@ -169,7 +215,7 @@ export default function AutoUpdatePage() {
     } else {
       setStatus("error");
       setCurrentAnalysisError(result.error || "Ocurrió un error desconocido durante el auto-análisis.");
-      setCurrentGitError(null); // Clear git error if analysis fails
+      setCurrentGitError(null); 
       toast({
         title: "Error en Auto-Análisis",
         description: result.error || "Ocurrió un error desconocido.",
@@ -182,16 +228,23 @@ export default function AutoUpdatePage() {
   
   const handleAttemptAutoFix = async (errorToFix?: string | null, errorContext?: string) => {
     const targetError = errorToFix || currentAnalysisError || currentGitError;
-    if (!targetError || !apiKey || !modelName) {
-      toast({
-        title: "Información Faltante",
-        description: "No hay error actual para corregir o falta configuración de API.",
-        variant: "destructive"
-      });
+    const currentProviderConfig = LLM_PROVIDERS.find(p => p.id === llmProviderId);
+
+    if (!targetError || !currentProviderConfig) {
+      toast({ title: "Información Faltante", description: "No hay error actual para corregir o proveedor LLM no configurado.", variant: "destructive"});
       return;
     }
+    if (currentProviderConfig.requiresApiKey && !apiKey) {
+      toast({ title: "Configuración Faltante", description: `Clave API para ${currentProviderConfig.name} no configurada.`, variant: "destructive"});
+      return;
+    }
+    if (!modelName) {
+      toast({ title: "Configuración Faltante", description: `Modelo para ${currentProviderConfig.name} no configurado.`, variant: "destructive"});
+      return;
+    }
+
     const newLogs = [...detailedLogs];
-    newLogs.push(`[CLIENT ${new Date().toISOString()}] Intentando auto-corrección para el error: ${targetError.substring(0, 100)}...`);
+    newLogs.push(`[CLIENT ${new Date().toISOString()}] Intentando auto-corrección para el error: ${targetError.substring(0, 100)}... con ${currentProviderConfig.name}`);
     const prevStatus = status;
     
     let fixingStatus: AutoUpdateStatus = "fixing_error";
@@ -201,29 +254,27 @@ export default function AutoUpdatePage() {
     setStatus(fixingStatus);
     setAutoFixSuggestion(null);
     setDetailedLogs(newLogs);
-    toast({ title: "Intentando Auto-Corrección", description: "Consultando a la IA para una posible solución..." });
+    toast({ title: "Intentando Auto-Corrección", description: `Consultando a ${currentProviderConfig.name} para una posible solución...` });
 
-    const fixResult = await handleGetErrorFixSuggestion(targetError, apiKey, modelName, newLogs, errorContext);
+    const fixResult = await handleGetErrorFixSuggestion(targetError, llmProviderId, apiKey!, modelName!, apiUrl, newLogs, errorContext);
     setDetailedLogs(newLogs);
 
     if (fixResult.success && fixResult.data) {
       setAutoFixSuggestion(fixResult.data);
       setIsAutoFixModalOpen(true); 
-      toast({ title: "Sugerencia de Corrección Recibida", description: "La IA ha proporcionado una sugerencia." });
+      toast({ title: "Sugerencia de Corrección Recibida", description: `La IA (${currentProviderConfig.name}) ha proporcionado una sugerencia.` });
       newLogs.push(`[CLIENT ${new Date().toISOString()}] Sugerencia de corrección recibida de la IA.`);
     } else {
       toast({
         title: "Error en Auto-Corrección",
-        description: fixResult.error || "No se pudo obtener una sugerencia de la IA.",
+        description: fixResult.error || `No se pudo obtener una sugerencia de ${currentProviderConfig.name}.`,
         variant: "destructive"
       });
       newLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener sugerencia de corrección: ${fixResult.error || "Desconocido"}`);
     }
-    // Revert to previous error state or success if analysis was successful before fix attempt
     setStatus(prevStatus === "fixing_error" || prevStatus === "fixing_git_error" ? (currentGitError || currentAnalysisError ? "error" : (analysisResult ? "success" : "idle")) : prevStatus ); 
     setDetailedLogs(newLogs);
   };
-
 
   const handleApplySuggestion = async (suggestionId: string) => {
     const currentLogsCopy = [...detailedLogs];
@@ -406,16 +457,18 @@ export default function AutoUpdatePage() {
             description: "Por favor, completa la configuración de Git en Ajustes (URL, Usuario, Email y PAT).",
             variant: "destructive",
         });
-        setStatus("error"); // Or back to previous relevant status
+        setStatus(analysisResult ? "success" : "idle"); // Back to previous relevant status
         return;
     }
 
-    setCurrentGitError(null); // Clear previous Git error
-    setCurrentAnalysisError(null); // Clear previous analysis error
+    setCurrentGitError(null); 
+    setCurrentAnalysisError(null); 
     setStatus("uploading_git");
     const currentLogsCopy = [...detailedLogs];
 
-    const attemptNumber = isRetry ? gitUploadRetryCount : 1;
+    const attemptNumber = isRetry ? gitUploadRetryCount + 1 : 1; // Increment retry count here
+    if (isRetry) setGitUploadRetryCount(attemptNumber);
+
     const commitMsg = `CodeAlchemist: AutoUpdate Sync (Attempt ${attemptNumber})`;
     
     currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? `Retrying (${attemptNumber}/${MAX_GIT_UPLOAD_RETRIES})` : 'Initiating'} Git upload to: ${repoUrl.replace(pat, '********')}`);
@@ -441,7 +494,7 @@ export default function AutoUpdatePage() {
             description: result.message,
             variant: "destructive",
             duration: 10000,
-             action: (gitUploadRetryCount < MAX_GIT_UPLOAD_RETRIES || !isRetry) ? ( // Show Auto-Fix only if retries are left or it's the first attempt
+             action: (attemptNumber < MAX_GIT_UPLOAD_RETRIES) ? ( 
                 <Button 
                     variant="outline" 
                     size="sm"
@@ -457,7 +510,7 @@ export default function AutoUpdatePage() {
   };
 
   const handleInitialGitUpload = () => {
-    setGitUploadRetryCount(1); // Set to 1 for the first attempt
+    setGitUploadRetryCount(0); // Start count from 0 for the first attempt logic in performGitUpload
     performGitUpload(false);
   };
 
@@ -468,7 +521,7 @@ export default function AutoUpdatePage() {
         return;
     }
     setIsAutoFixModalOpen(false);
-    setGitUploadRetryCount(prev => prev + 1);
+    // Retry count increment is handled inside performGitUpload when isRetry=true
     performGitUpload(true);
   };
 
@@ -486,6 +539,7 @@ export default function AutoUpdatePage() {
 
   const isGitConfigured = gitConfig.repoUrl && gitConfig.username && gitConfig.email && gitConfig.pat;
   const isProcessing = status === "analyzing" || status === "loading_source" || status === "fixing_error" || status === "uploading_git" || status === "fixing_git_error";
+  const currentProviderConfig = LLM_PROVIDERS.find(p => p.id === llmProviderId);
 
 
   return (
@@ -498,9 +552,9 @@ export default function AutoUpdatePage() {
           </CardTitle>
           <CardDescription className="text-lg text-foreground">
             Esta sección permite a la IA analizar el propio código fuente completo de la aplicación CodeAlchemist para proponer mejoras y optimizaciones.
-             {!apiKey || !modelName ? (
-                <span className="text-destructive block mt-1"> (Clave API o Modelo no configurado en Ajustes)</span>
-            ) : <span className="text-foreground block mt-1">(Usando modelo Groq: {modelName})</span>}
+             {!currentProviderConfig || (currentProviderConfig.requiresApiKey && !apiKey) || !modelName ? (
+                <span className="text-destructive block mt-1"> (Configuración de LLM incompleta en Ajustes)</span>
+            ) : <span className="text-foreground block mt-1">(Usando Proveedor: {currentProviderConfig.name}, Modelo: {modelName})</span>}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -528,7 +582,7 @@ export default function AutoUpdatePage() {
           <div className="flex flex-wrap gap-4">
             <Button 
               onClick={() => handleStartAutoAnalysis(false)} 
-              disabled={isProcessing || !apiKey || !modelName}
+              disabled={isProcessing || !currentProviderConfig || (currentProviderConfig.requiresApiKey && !apiKey) || !modelName}
               className="text-base py-3 px-6"
             >
               {status === "analyzing" || status === "loading_source" ? (
@@ -576,14 +630,14 @@ export default function AutoUpdatePage() {
                      status === "success" ? `Análisis completado (${analysisProgress.processed}/${analysisProgress.total} fragmentos).` : 
                      status === "error" && currentAnalysisError ? `Análisis interrumpido (${analysisProgress.processed > 0 ? `${analysisProgress.processed}/` : ''}${analysisProgress.total > 0 ? analysisProgress.total : 'desconocido'} fragmentos).` :
                      status === "error" && currentGitError ? "Error durante operación Git." :
-                     status === "uploading_git" ? `Subiendo a Git (Intento ${gitUploadRetryCount}/${MAX_GIT_UPLOAD_RETRIES})...` :
+                     status === "uploading_git" ? `Subiendo a Git (Intento ${gitUploadRetryCount+1}/${MAX_GIT_UPLOAD_RETRIES})...` : // Use count+1 for display
                      status === "fixing_error" ? "Intentando auto-corrección de error de análisis..." :
                      status === "fixing_git_error" ? "Intentando auto-corrección de error de Git..." : ""}
                 </Label>
                 <Progress 
                     value={
-                        status === "loading_source" ? 5 : // Small progress for loading
-                        status === "analyzing" && analysisProgress.total === 0 ? 10 : // Small progress for initial analysis phase
+                        status === "loading_source" ? 5 : 
+                        status === "analyzing" && analysisProgress.total === 0 ? 10 : 
                         analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 : 
                         (status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error" ? 100 : 0) 
                     } 
@@ -628,7 +682,6 @@ export default function AutoUpdatePage() {
                </CardContent>
              </Card>
            )}
-
 
           {analysisResult && status === "success" && (
             <Card className="mt-6 border-accent bg-accent/5">
@@ -795,7 +848,7 @@ export default function AutoUpdatePage() {
                         variant="outline" 
                         size="sm" 
                         onClick={() => handleAttemptAutoFix(currentAnalysisError || currentGitError, currentGitError ? "Error ocurrido durante la subida del código fuente a un repositorio Git." : "Error ocurrido durante el auto-análisis del código fuente.")} 
-                        disabled={status === "fixing_error" || status === "fixing_git_error" || !apiKey || !modelName}
+                        disabled={status === "fixing_error" || status === "fixing_git_error" || !currentProviderConfig || (currentProviderConfig.requiresApiKey && !apiKey) || !modelName}
                         className="text-accent border-accent/50 hover:bg-accent/20 hover:text-accent-foreground"
                     >
                         {(status === "fixing_error" || status === "fixing_git_error") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Settings2 className="mr-2 h-4 w-4"/>}
@@ -857,7 +910,7 @@ export default function AutoUpdatePage() {
                       disabled={isProcessing}
                     >
                       {isProcessing && status === "uploading_git" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <GitFork className="mr-2 h-4 w-4"/>}
-                      Reintentar Subida a Git ({gitUploadRetryCount}/{MAX_GIT_UPLOAD_RETRIES})
+                      Reintentar Subida a Git ({gitUploadRetryCount+1}/{MAX_GIT_UPLOAD_RETRIES}) {/* Display next attempt number */}
                     </AlertDialogAction>
                   )}
                   {(status === "error" && currentAnalysisError) && (
@@ -880,8 +933,3 @@ export default function AutoUpdatePage() {
     </div>
   );
 }
-
-    
-
-
-

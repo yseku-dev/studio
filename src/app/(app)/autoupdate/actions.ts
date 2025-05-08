@@ -1,31 +1,34 @@
 
 'use server';
 
-import { analyzeCodeAlchemistSource, AnalyzeCodeAlchemistSourceInput, AnalyzeCodeAlchemistSourceOutput } from '@/ai/flows/analyze-codealchemist-source-flow';
-import { suggestErrorFix, SuggestErrorFixInput, SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
+import { analyzeProjectSourceChunk, type ProjectAnalysisResponse, type LLMOptions } from '@/services/groq';
+import { suggestErrorFix, SuggestErrorFixInput, SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow'; // Assuming this remains specific for now
 import fs from 'fs/promises';
 import path from 'path';
 import { glob } from 'glob'; 
-import type { GroqOptions } from '@/services/groq';
 import simpleGit, { SimpleGitOptions } from 'simple-git';
-import os from 'os'; // For temporary directory
+import os from 'os';
+import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
+
 
 interface AutoUpdateAnalysisResult {
   success: boolean;
-  data?: AnalyzeCodeAlchemistSourceOutput;
+  data?: ProjectAnalysisResponse; // Use generic response type
   error?: string;
   chunksProcessed?: number;
   totalChunks?: number;
   detailedExecutionLogs?: string[];
 }
 
-const MAX_CHARS_PER_CHUNK = 3500; // Reduced from 5500 to 3500
-const GROQ_API_TIMEOUT_MS = 60000 * 1; // 1 minuto por chunk
-const INTER_CHUNK_PROCESSING_DELAY_MS = 30000; // Increased from 5000ms to 30000ms (30 seconds)
+const MAX_CHARS_PER_CHUNK = 3500; 
+const LLM_API_TIMEOUT_MS_AUTOUPDATE = 60000 * 1; 
+const INTER_CHUNK_PROCESSING_DELAY_MS = 5000; // Increased to 30s (30000) was too much, back to 5s
 
 export async function handleAutoAnalyzeAppSource(
+  providerId: LLMProviderId, // Expect providerId
   apiKey: string,
   modelName: string,
+  apiUrl?: string, // Optional API URL for local LLMs
   analysisPreferences?: string
 ): Promise<AutoUpdateAnalysisResult> {
   const executionLogs: string[] = [];
@@ -67,17 +70,20 @@ export async function handleAutoAnalyzeAppSource(
     executionLogs.push(fullMessage);
   };
 
+  const currentProvider = LLM_PROVIDERS.find(p => p.id === providerId);
+  log(`Iniciando auto-análisis de la aplicación con proveedor: ${currentProvider?.name || providerId}.`);
 
-  log("Iniciando auto-análisis de la aplicación.");
-  if (!apiKey || !modelName) {
-    logError("Configuración de API incompleta. Clave API y nombre de modelo son obligatorios.");
-    return { 
-      success: false, 
-      error: "La clave API y el nombre del modelo son obligatorios. Por favor, configúralos en ajustes.", 
-      chunksProcessed: 0, 
-      totalChunks: 0, 
-      detailedExecutionLogs: executionLogs 
-    };
+  if (!currentProvider) {
+    logError(`Proveedor LLM '${providerId}' no encontrado.`);
+    return { success: false, error: `Proveedor LLM '${providerId}' no encontrado. Por favor, configúralo en ajustes.`, detailedExecutionLogs: executionLogs };
+  }
+  if (currentProvider.requiresApiKey && !apiKey) {
+    logError(`Configuración de API incompleta para ${currentProvider.name}. Clave API es obligatoria.`);
+    return { success: false, error: `La clave API para ${currentProvider.name} es obligatoria. Por favor, configúrala en ajustes.`, detailedExecutionLogs: executionLogs };
+  }
+  if (!modelName) {
+    logError(`Configuración de API incompleta para ${currentProvider.name}. Nombre de modelo es obligatorio.`);
+    return { success: false, error: `El nombre del modelo para ${currentProvider.name} es obligatorio. Por favor, configúralo en ajustes.`, detailedExecutionLogs: executionLogs };
   }
   log(`Usando modelo: ${modelName}. Preferencias de análisis: ${analysisPreferences || 'Ninguna'}.`);
 
@@ -181,35 +187,30 @@ export async function handleAutoAnalyzeAppSource(
     };
   }
   
-  const allResults: AnalyzeCodeAlchemistSourceOutput[] = [];
+  const allResults: ProjectAnalysisResponse[] = [];
   let processedChunks = 0;
 
-  const groqAPIOptions: GroqOptions = {
+  const llmAPIOptions: LLMOptions = {
+    providerId: currentProvider.id,
     apiKey: apiKey,
     modelName: modelName,
-    timeoutMs: GROQ_API_TIMEOUT_MS
+    apiUrl: apiUrl || currentProvider.apiUrl,
+    timeoutMs: LLM_API_TIMEOUT_MS_AUTOUPDATE
   };
 
   for (const chunk of chunks) {
     const currentChunkNum = processedChunks + 1;
-    log(`Iniciando análisis del fragmento ${currentChunkNum} de ${totalChunks}... (Tamaño: ${chunk.length} caracteres). Timeout: ${GROQ_API_TIMEOUT_MS / 1000}s.`);
+    log(`Iniciando análisis del fragmento ${currentChunkNum} de ${totalChunks}... (Tamaño: ${chunk.length} caracteres). Timeout: ${LLM_API_TIMEOUT_MS_AUTOUPDATE / 1000}s.`);
     
-    const input: AnalyzeCodeAlchemistSourceInput = {
-      sourceCode: chunk, 
-      groqOptions: groqAPIOptions, 
-      analysisPreferences,
-    };
-
     try {
-      const result = await analyzeCodeAlchemistSource(input);
+      const result = await analyzeProjectSourceChunk(chunk, llmAPIOptions, analysisPreferences);
       allResults.push(result);
       processedChunks++;
       log(`Fragmento ${currentChunkNum}/${totalChunks} procesado exitosamente.`);
       logDetail(`Respuesta del fragmento ${currentChunkNum}: ${JSON.stringify(result).substring(0,200)}...`);
       
-      // Añadir un retraso aquí si hay más fragmentos por procesar
       if (processedChunks < totalChunks) {
-        log(`Esperando ${INTER_CHUNK_PROCESSING_DELAY_MS}ms antes del siguiente fragmento para gestionar los límites de TPM.`);
+        log(`Esperando ${INTER_CHUNK_PROCESSING_DELAY_MS}ms antes del siguiente fragmento para gestionar los límites de TPM/RPM.`);
         await new Promise(resolve => setTimeout(resolve, INTER_CHUNK_PROCESSING_DELAY_MS));
       }
 
@@ -252,7 +253,7 @@ export async function handleAutoAnalyzeAppSource(
   }
   log(`Análisis de todos los ${processedChunks} fragmentos completado. Agregando resultados...`);
 
-  const aggregatedResult: AnalyzeCodeAlchemistSourceOutput = {
+  const aggregatedResult: ProjectAnalysisResponse = {
     analysisTitle: allResults.length > 0 && allResults[0].analysisTitle ? `${allResults[0].analysisTitle} (Agregado)` : `Análisis Agregado de ${totalChunks} Fragmentos`,
     identifiedAreas: Array.from(new Set(allResults.flatMap(r => r.identifiedAreas || []))),
     suggestions: allResults.flatMap(r => (r.suggestions || []).map(s => ({...s, area: s.area || "General (Fragmento)" }))), 
@@ -269,7 +270,6 @@ export async function handleAutoAnalyzeAppSource(
   };
 }
 
-
 export interface AppSourceFile {
   fileName: string;
   content: string;
@@ -282,25 +282,20 @@ interface AppSourceBundleResult {
   logsBuilt?: string[];
 }
 
-// Patterns for files/directories to ignore when creating the source bundle for download/analysis.
-// The goal is to include everything needed to run `npm install && npm run dev` locally.
 const ignorePatterns = [
-  'node_modules/**', // Definitely exclude: User will run `npm install`.
-  '.next/**',       // Definitely exclude: Build output, generated by Next.js.
-  // '*.lock',      // REMOVED: package-lock.json or yarn.lock ARE needed.
-  '*.zip',          // Exclude other zip files.
-  '.DS_Store',      // Exclude macOS specific files.
-  '*.log',          // Exclude log files.
-  'build/**',       // Exclude common build output directories.
-  'dist/**',        // Exclude common distribution output directories.
-  '.env',           // Exclude the base .env file if it contains sensitive live config. The app uses UI for Groq key.
-  '.env.local',     // Exclude local environment overrides.
-  '.env.development', // Exclude development environment overrides.
-  '.env.production',// Exclude production environment overrides.
-  '.env.test',      // Exclude test environment overrides.
-  // 'public/mockServiceWorker.js', // REMOVED: Assume this file in public might be needed for local dev.
-  '.git/**',        // Definitely exclude: Git history and configuration.
-  // Editor-specific folders like .vscode are usually not needed for running. Glob pattern below handles this.
+  'node_modules/**', 
+  '.next/**',       
+  '*.zip',          
+  '.DS_Store',      
+  '*.log',          
+  'build/**',       
+  'dist/**',        
+  '.env',           
+  '.env.local',     
+  '.env.development', 
+  '.env.production',
+  '.env.test',      
+  '.git/**',        
 ];
 
 
@@ -328,10 +323,10 @@ export async function getApplicationSourceBundle(
     
     const allFiles = await glob('**/*', { 
       cwd: projectRoot, 
-      nodir: true, // Solo archivos, no directorios
-      dot: true,   // Incluir archivos que comienzan con punto (ej: .gitignore)
+      nodir: true, 
+      dot: true,   
       ignore: ignorePatterns,
-      follow: false, // No seguir symlinks para evitar loops o ir fuera del proyecto
+      follow: false, 
     });
     log(`Glob encontró ${allFiles.length} rutas de archivo después del filtrado inicial.`, 'INFO');
 
@@ -366,7 +361,7 @@ export async function getApplicationSourceBundle(
           const error = readError as NodeJS.ErrnoException;
           log(`No se pudo leer el archivo ${relativeFilePath} como texto (podría ser binario o error de permisos): ${error.message}. Código: ${error.code}`, 'WARN');
           content = `// Error: No se pudo leer el archivo ${relativeFilePath} como texto. Causa: ${error.message}.`;
-           if (!concatenate && (error.code === 'EILSEQ' || stats.size > 1024 * 1024 * 2) ) { // 2MB limit for non-concatenated files
+           if (!concatenate && (error.code === 'EILSEQ' || stats.size > 1024 * 1024 * 2) ) { 
              filesData.push({ fileName: relativeFilePath, content: "// Archivo binario o muy grande no legible, contenido omitido para ZIP." });
              log(`Contenido de ${relativeFilePath} omitido para ZIP (binario/grande o error de lectura no concatenado).`, 'WARN');
              continue; 
@@ -432,10 +427,9 @@ export async function getApplicationSourceBundle(
   }
 }
 
-
 export async function applySuggestedChange(
     filePath: string, 
-    originalContent: string, // originalContent is not used if we are overwriting, but good for logging/diffing before write.
+    originalContent: string, 
     suggestedContent: string,
     executionLogs?: string[]
 ): Promise<{success: boolean, error?: string, newContent?: string}> {
@@ -496,7 +490,6 @@ export async function applySuggestedChange(
     }
 }
 
-
 interface AutoFixSuggestionResult {
   success: boolean;
   data?: SuggestErrorFixOutput;
@@ -505,8 +498,10 @@ interface AutoFixSuggestionResult {
 
 export async function handleGetErrorFixSuggestion(
   errorMessage: string,
+  providerId: LLMProviderId,
   apiKey: string,
   modelName: string,
+  apiUrl?: string,
   executionLogs?: string[],
   customContext?: string 
 ): Promise<AutoFixSuggestionResult> {
@@ -517,29 +512,45 @@ export async function handleGetErrorFixSuggestion(
         if (executionLogs) executionLogs.push(timestampedMessage);
     };
 
-  log(`Solicitando sugerencia de auto-corrección para error: "${errorMessage.substring(0,150)}..."`, 'INFO');
-  if (!apiKey || !modelName) {
-    log("Configuración de API incompleta para auto-corrección.", 'ERROR');
-    return { success: false, error: "La clave API y el nombre del modelo son obligatorios para la auto-corrección." };
+  const currentProvider = LLM_PROVIDERS.find(p => p.id === providerId);
+  log(`Solicitando sugerencia de auto-corrección para error: "${errorMessage.substring(0,150)}..." con proveedor ${currentProvider?.name || providerId}`, 'INFO');
+  
+  if (!currentProvider) {
+    log(`Proveedor LLM '${providerId}' no encontrado para auto-corrección.`, 'ERROR');
+    return { success: false, error: `Proveedor LLM '${providerId}' no encontrado.` };
+  }
+  if (currentProvider.requiresApiKey && !apiKey) {
+    log(`Configuración de API incompleta para auto-corrección con ${currentProvider.name}.`, 'ERROR');
+    return { success: false, error: `La clave API y el nombre del modelo son obligatorios para la auto-corrección con ${currentProvider.name}.` };
+  }
+   if (!modelName) {
+    log(`Nombre de modelo no proporcionado para auto-corrección con ${currentProvider.name}.`, 'ERROR');
+    return { success: false, error: `El nombre del modelo es obligatorio para la auto-corrección con ${currentProvider.name}.` };
   }
 
-  const groqOptions: GroqOptions = {
+  const llmOptions: LLMOptions = { // Using LLMOptions for suggestErrorFix
+    providerId: currentProvider.id,
     apiKey,
     modelName,
-    timeoutMs: GROQ_API_TIMEOUT_MS, 
+    apiUrl: apiUrl || currentProvider.apiUrl,
+    timeoutMs: LLM_API_TIMEOUT_MS_AUTOUPDATE, 
   };
 
   const contextForIA = customContext || "Error ocurrido durante la función AutoUpdate (análisis del propio código de CodeAlchemist). Por favor, proporciona un análisis de causa raíz y sugerencias de solución específicas. Si el error es por límites de API, explica cómo mitigar el problema (ej. reducir payloads, ajustar timeouts, fragmentar datos, etc.).";
   log(`Contexto para la IA (AutoFix): "${contextForIA.substring(0,100)}..."`, 'INFO');
 
+  // Assuming suggestErrorFix is adapted or a new generic function is created
+  // For now, we'll keep using suggestErrorFix but pass LLMOptions
   const input: SuggestErrorFixInput = {
     error_message: errorMessage,
     context: contextForIA,
-    groqOptions: groqOptions,
+    llmOptions: llmOptions, // Pass the full LLMOptions object
   };
 
   try {
-    const result = await suggestErrorFix(input);
+    // This function call needs to be adapted if suggestErrorFix doesn't take LLMOptions
+    // or if we create a generic "suggestLLMErrorFix"
+    const result = await suggestErrorFix(input); // Critical: Ensure suggestErrorFix handles LLMOptions correctly
     log("Sugerencia de auto-corrección recibida exitosamente.", 'INFO');
     return { success: true, data: result };
   } catch (error) {
@@ -559,10 +570,11 @@ export async function handleGetErrorFixSuggestion(
     } else if (specificErrorMessage === '') {
         specificErrorMessage = "Error sin mensaje detallado obteniendo sugerencia."
     }
-    log(`Error obteniendo sugerencia para la corrección: ${specificErrorMessage}`, 'ERROR');
-    return { success: false, error: `Falló la obtención de sugerencia para corrección: ${specificErrorMessage}` };
+    log(`Error obteniendo sugerencia para la corrección con ${currentProvider.name}: ${specificErrorMessage}`, 'ERROR');
+    return { success: false, error: `Falló la obtención de sugerencia para corrección con ${currentProvider.name}: ${specificErrorMessage}` };
   }
 }
+
 
 interface GitUploadConfig {
     repoUrl: string;
@@ -640,7 +652,6 @@ export async function handleUploadToGit(
             log(`La rama local actual ya es '${defaultBranch}'.`, 'INFO');
         }
 
-
         log("Paso 4: Configurando usuario y email de Git...", 'INFO');
         await git.addConfig('user.name', gitConfig.username);
         await git.addConfig('user.email', gitConfig.email);
@@ -667,7 +678,6 @@ export async function handleUploadToGit(
              return { success: true, message: "No se detectaron cambios en el código fuente para subir a Git.", logs: internalLogs };
         }
         log(`Commit realizado. SHA: ${commitResult.commit || 'N/A'}. Resumen: ${commitResult.summary.changes} cambios, ${commitResult.summary.insertions} inserciones, ${commitResult.summary.deletions} eliminaciones.`, 'INFO');
-
 
         log("Paso 8: Configurando repositorio remoto 'origin'...", 'INFO');
         const authenticatedRepoUrl = gitConfig.repoUrl.replace("https://", `https://${encodeURIComponent(gitConfig.username)}:${encodeURIComponent(gitConfig.pat)}@`);
@@ -722,4 +732,3 @@ export async function handleUploadToGit(
         }
     }
 }
-

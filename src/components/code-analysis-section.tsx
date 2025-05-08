@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useState, useEffect, ChangeEvent } from 'react';
@@ -13,6 +14,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2, Wand2, Save, UploadCloud, XCircle, AlertTriangle, Copy } from 'lucide-react';
 import { ScrollArea } from './ui/scroll-area';
+import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
 
 const formSchema = z.object({
   code: z.string().min(10, 'El código debe tener al menos 10 caracteres.'),
@@ -27,22 +29,26 @@ interface AnalysisResult {
 
 interface CodeAnalysisSectionProps {
   onSaveSnapshot: (code: string, nameSuffix: string) => void;
+  llmProviderId: LLMProviderId;
+  apiKey: string | null;
+  modelName: string | null;
+  apiUrl?: string;
 }
 
-export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps) {
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [modelName, setModelName] = useState<string | null>(null);
+export function CodeAnalysisSection({ 
+    onSaveSnapshot, 
+    llmProviderId, 
+    apiKey, 
+    modelName, 
+    apiUrl 
+}: CodeAnalysisSectionProps) {
+  
   const [isLoading, setIsLoading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [originalCode, setOriginalCode] = useState<string>('');
   const [fileName, setFileName] = useState<string | null>(null);
   const { toast } = useToast();
-
-  useEffect(() => {
-    setApiKey(localStorage.getItem('codealchemist_groq_api_key'));
-    setModelName(localStorage.getItem('codealchemist_groq_model_name'));
-  }, []);
 
   const {
     register,
@@ -59,6 +65,9 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
   });
 
   const codeValue = watch('code');
+  const currentProviderConfig = LLM_PROVIDERS.find(p => p.id === llmProviderId);
+  const isConfigComplete = currentProviderConfig && modelName && (!currentProviderConfig.requiresApiKey || apiKey);
+
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -102,10 +111,10 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
 
 
   const onSubmit: SubmitHandler<FormData> = async (data) => {
-    if (!apiKey || !modelName) {
+    if (!isConfigComplete || !currentProviderConfig) {
       toast({
         title: 'Configuración Faltante',
-        description: 'Por favor, establece tu Clave API de Groq y Nombre de Modelo en Configuración.',
+        description: 'Por favor, completa la configuración de LLM en Ajustes.',
         variant: 'destructive',
       });
       return;
@@ -115,7 +124,8 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
     setAnalysisError(null);
     setOriginalCode(data.code);
 
-    const result = await handleAnalyzeCode(data.code, apiKey, modelName);
+    // Pass the LLM config received via props to the server action
+    const result = await handleAnalyzeCode(data.code, llmProviderId, apiKey!, modelName!, apiUrl);
 
     if (result.success && result.data) {
       setAnalysisResult(result.data);
@@ -127,7 +137,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
       setAnalysisError(result.error || 'Ocurrió un error desconocido durante el análisis.');
       toast({
         title: 'Análisis Fallido',
-        description: 'No se pudieron generar sugerencias. Revisa el mensaje de error.',
+        description: `No se pudieron generar sugerencias con ${currentProviderConfig.name}. Revisa el mensaje de error.`,
         variant: 'destructive',
       });
     }
@@ -174,9 +184,9 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
           <CardDescription>
             Pega tu código abajo o sube un archivo para obtener sugerencias de mejora potenciadas por IA.
             Las llamadas a la API tienen un tiempo de espera para evitar bloqueos.
-            {!apiKey || !modelName ? (
-                <span className="text-destructive block mt-1"> (Clave API o Modelo no configurado en Ajustes)</span>
-            ) : <span className="text-foreground block mt-1">(Usando modelo: {modelName})</span>}
+            {!isConfigComplete ? (
+                <span className="text-destructive block mt-1"> (Configuración de LLM incompleta en Ajustes)</span>
+            ) : <span className="text-foreground block mt-1">(Usando Proveedor: {currentProviderConfig?.name}, Modelo: {modelName})</span>}
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit(onSubmit)}>
@@ -203,7 +213,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
             </div>
 
             <div className="mt-4">
-              <Label htmlFor="code">Entrada de Código (Python recomendado)</Label>
+              <Label htmlFor="code">Entrada de Código</Label>
               <Textarea
                 id="code"
                 {...register('code')}
@@ -217,7 +227,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
             </div>
           </CardContent>
           <CardFooter>
-            <Button type="submit" disabled={isLoading || !codeValue} className="w-full md:w-auto">
+            <Button type="submit" disabled={isLoading || !codeValue || !isConfigComplete} className="w-full md:w-auto">
               {isLoading ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (

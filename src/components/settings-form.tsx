@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useForm, SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -18,13 +18,30 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { handleTestGroqConnection } from '@/app/(app)/settings/actions';
-import { handleTestGitConnection } from '@/app/(app)/settings/actions'; 
+import { handleTestLLMConnection, handleTestGitConnection } from '@/app/(app)/settings/actions';
 import { Separator } from '@/components/ui/separator';
+import {
+  LLM_PROVIDERS,
+  DEFAULT_LLM_PROVIDER,
+  MODELS_BY_PROVIDER,
+  type LLMProviderId,
+  type LLMProvider,
+  getLocalStorageApiKeyName,
+  getLocalStorageModelName,
+  LOCALSTORAGE_PROVIDER_ID_KEY,
+  LOCALSTORAGE_GIT_REPO_URL_KEY,
+  LOCALSTORAGE_GIT_USERNAME_KEY,
+  LOCALSTORAGE_GIT_EMAIL_KEY,
+  LOCALSTORAGE_GIT_PAT_KEY,
+} from '@/config/llm-config';
 
 const settingsSchema = z.object({
-  groqApiKey: z.string().min(1, 'La clave API de Groq es obligatoria.'),
-  groqModelName: z.string().min(1, 'El nombre del modelo de Groq es obligatorio.'),
+  llmProviderId: z.custom<LLMProviderId>(val => LLM_PROVIDERS.some(p => p.id === val), {
+    message: "Debes seleccionar un proveedor de LLM válido."
+  }),
+  apiKey: z.string().optional(), // API key is optional at schema level, required based on provider
+  llmModelName: z.string().min(1, 'El nombre del modelo es obligatorio.'),
+  apiUrl: z.string().url({message: "URL de API inválida"}).optional(), // For providers like LMStudio/Ollama where URL might be user-set
   gitRepositoryUrl: z.string().url({ message: "Por favor, introduce una URL válida para el repositorio Git." }).optional().or(z.literal('')),
   gitUsername: z.string().optional(),
   gitEmail: z.string().email({ message: "Por favor, introduce un email válido." }).optional().or(z.literal('')),
@@ -33,170 +50,163 @@ const settingsSchema = z.object({
 
 type SettingsFormData = z.infer<typeof settingsSchema>;
 
-// Original list of models
-const initialGroqModelsList = [
-  "compound-beta",
-  "compound-beta-mini",
-  "meta-llama/llama-4-scout-17b-16e-instruct",
-  "gemma2-9b-it",
-  "llama-guard-3-8b",
-  "llama-3.1-70b-versatile", 
-  "deepseek-r1-distill-llama-70b",
-  "llama3-70b-8192",
-  "meta-llama/llama-4-maverick-17b-128e-instruct",
-  "mistral-saba-24b",
-  "qwen-qwq-32b",
-  "allam-2-7b",
-  "llama-3.1-8b-instant", 
-  "llama3-8b-8192",
-];
-
-
 export function SettingsForm() {
   const { toast } = useToast();
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [isTestingGitConnection, setIsTestingGitConnection] = useState(false);
   
-  const [validatedGroqModels, setValidatedGroqModels] = useState<string[]>([]);
-  const [isTestingAllModels, setIsTestingAllModels] = useState(false);
+  const [currentProvider, setCurrentProvider] = useState<LLMProvider | undefined>(
+    LLM_PROVIDERS.find(p => p.id === DEFAULT_LLM_PROVIDER)
+  );
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
 
   const {
     register,
     handleSubmit,
     setValue,
     watch,
-    formState: { errors, isDirty },
+    formState: { errors, isDirty, dirtyFields },
     reset,
     getValues,
+    trigger,
   } = useForm<SettingsFormData>({
     resolver: zodResolver(settingsSchema),
-    defaultValues: {
-      groqApiKey: '',
-      groqModelName: initialGroqModelsList[0], 
-      gitRepositoryUrl: '',
-      gitUsername: '',
-      gitEmail: '',
-      gitPat: '',
-    },
+    // Default values will be set by useEffect based on localStorage and currentProvider
   });
   
-  const currentModel = watch('groqModelName');
-  const currentApiKey = watch('groqApiKey');
+  const watchedProviderId = watch('llmProviderId');
+  const watchedApiKey = watch('apiKey');
+  const watchedModelName = watch('llmModelName');
+  const watchedApiUrl = watch('apiUrl');
 
-  // Effect to load settings from localStorage
+  const updateModelsForProvider = useCallback((providerId: LLMProviderId | undefined) => {
+    if (!providerId) {
+      setAvailableModels([]);
+      return;
+    }
+    const models = MODELS_BY_PROVIDER[providerId] || {};
+    const modelNames = Object.keys(models).sort((a, b) => {
+      const tpmA = models[a].tpm || 0;
+      const tpmB = models[b].tpm || 0;
+      if (tpmA !== tpmB) return tpmB - tpmA; // Sort by TPM desc
+      const tokensA = models[a].tokens || 0;
+      const tokensB = models[b].tokens || 0;
+      if (tokensA !== tokensB) return tokensB - tokensA; // Then by Tokens desc
+      return a.localeCompare(b); // Then by name asc
+    });
+    setAvailableModels(modelNames);
+  }, []);
+
+
+  // Effect to load settings from localStorage and initialize form
   useEffect(() => {
-    const apiKeyFromStorage = localStorage.getItem('codealchemist_groq_api_key');
-    const modelNameFromStorage = localStorage.getItem('codealchemist_groq_model_name');
+    const storedProviderId = localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null;
+    const initialProviderId = storedProviderId || DEFAULT_LLM_PROVIDER;
+    const provider = LLM_PROVIDERS.find(p => p.id === initialProviderId) || LLM_PROVIDERS.find(p => p.id === DEFAULT_LLM_PROVIDER)!;
     
-    if (apiKeyFromStorage) setValue('groqApiKey', apiKeyFromStorage, { shouldDirty: false });
+    setCurrentProvider(provider);
+    setValue('llmProviderId', provider.id, { shouldDirty: false });
     
-    if (modelNameFromStorage) {
-      setValue('groqModelName', modelNameFromStorage, { shouldDirty: false });
+    const apiKeyFromStorage = localStorage.getItem(getLocalStorageApiKeyName(provider.id)) || '';
+    setValue('apiKey', apiKeyFromStorage, { shouldDirty: false });
+
+    const modelNameFromStorage = localStorage.getItem(getLocalStorageModelName(provider.id));
+    updateModelsForProvider(provider.id); // Update available models first
+
+    // Set modelName after availableModels is populated
+    // Need a slight delay or ensure updateModelsForProvider is synchronous enough
+    // For now, assuming models are available for the default/stored provider
+    const providerModels = MODELS_BY_PROVIDER[provider.id] || {};
+    const providerModelKeys = Object.keys(providerModels);
+    if (modelNameFromStorage && providerModelKeys.includes(modelNameFromStorage)) {
+      setValue('llmModelName', modelNameFromStorage, { shouldDirty: false });
+    } else if (providerModelKeys.length > 0) {
+      // Default to first sorted model if stored one is invalid or not found
+      const sortedModels = Object.keys(providerModels).sort((a,b) => (providerModels[b].tpm || 0) - (providerModels[a].tpm || 0) || a.localeCompare(b) );
+      setValue('llmModelName', sortedModels[0], { shouldDirty: false });
     } else {
-      setValue('groqModelName', initialGroqModelsList[0], { shouldDirty: false });
+      setValue('llmModelName', '', {shouldDirty: false});
     }
-
-    const gitRepoUrl = localStorage.getItem('codealchemist_git_repository_url');
-    const gitUsername = localStorage.getItem('codealchemist_git_username');
-    const gitEmail = localStorage.getItem('codealchemist_git_email');
-    const gitPat = localStorage.getItem('codealchemist_git_pat');
-
-    if (gitRepoUrl) setValue('gitRepositoryUrl', gitRepoUrl, { shouldDirty: false });
-    if (gitUsername) setValue('gitUsername', gitUsername, { shouldDirty: false });
-    if (gitEmail) setValue('gitEmail', gitEmail, { shouldDirty: false });
-    if (gitPat) setValue('gitPat', gitPat, { shouldDirty: false });
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setValue]); 
-  
-  // Effect to test all Groq models when API key is available
-  useEffect(() => {
-    const testAndFilterModels = async (apiKeyToTest: string) => {
-      if (!apiKeyToTest) {
-        setValidatedGroqModels(initialGroqModelsList); // Use full list if no key
-        return;
-      }
-
-      setIsTestingAllModels(true);
-      toast({
-        title: "Validando Modelos Groq...",
-        description: "Probando conexión con todos los modelos. Esto puede tardar.",
-        duration: 7000,
-      });
-
-      const validModels: string[] = [];
-      for (const model of initialGroqModelsList) {
-        // Adding a small delay to avoid overwhelming the API, though TPM is the main concern for Groq.
-        await new Promise(resolve => setTimeout(resolve, 300)); // 300ms delay
-        const result = await handleTestGroqConnection(apiKeyToTest, model);
-        if (result.success) {
-          validModels.push(model);
-        } else {
-          console.warn(`Modelo ${model} falló la prueba de conexión: ${result.message}`);
-        }
-      }
-
-      setValidatedGroqModels(validModels);
-      setIsTestingAllModels(false);
-
-      const currentFormModel = getValues('groqModelName');
-      if (validModels.length > 0) {
-        toast({
-          title: "Validación de Modelos Completa",
-          description: `${validModels.length} de ${initialGroqModelsList.length} modelos son accesibles.`,
-        });
-        // If current model is not in the valid list, or no model was set, update it.
-        if (!validModels.includes(currentFormModel)) {
-          setValue('groqModelName', validModels[0], { shouldDirty: true });
-          toast({
-            title: 'Modelo Seleccionado Actualizado',
-            description: `El modelo ${currentFormModel ? `"${currentFormModel}"` : 'anterior'} no es válido o no está disponible. Se ha cambiado a "${validModels[0]}".`,
-            variant: 'default',
-            duration: 8000,
-          });
-        }
-      } else {
-        toast({
-          title: "No se Validaron Modelos Groq",
-          description: "Ningún modelo pasó la prueba de conexión. Verifica tu clave API o prueba los modelos individualmente.",
-          variant: "destructive",
-          duration: 10000,
-        });
-         // If no models are valid, clear the selection or set to a placeholder if form allows empty.
-         // For now, we require a model, so this state might mean the user can't proceed.
-         setValue('groqModelName', '', {shouldDirty: true}); 
-      }
-    };
     
-    // This effect runs when currentApiKey (from watch) changes,
-    // meaning when it's loaded from localStorage or manually changed by user.
-    // We only want to auto-test when it's first loaded or explicitly if we add a button.
-    // For now, let's trigger it if currentApiKey has a value and validatedGroqModels is empty (initial state).
-    if (currentApiKey && validatedGroqModels.length === 0 && !isTestingAllModels) {
-       testAndFilterModels(currentApiKey);
-    } else if (!currentApiKey) {
-        // If API key is cleared, reset validated models to the full list (as they can't be tested)
-        setValidatedGroqModels(initialGroqModelsList);
+    // API URL (primarily for local LLMs)
+    const storedApiUrl = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
+    setValue('apiUrl', storedApiUrl || provider.apiUrl, { shouldDirty: false });
+
+
+    // Git settings
+    setValue('gitRepositoryUrl', localStorage.getItem(LOCALSTORAGE_GIT_REPO_URL_KEY) || '', { shouldDirty: false });
+    setValue('gitUsername', localStorage.getItem(LOCALSTORAGE_GIT_USERNAME_KEY) || '', { shouldDirty: false });
+    setValue('gitEmail', localStorage.getItem(LOCALSTORAGE_GIT_EMAIL_KEY) || '', { shouldDirty: false });
+    setValue('gitPat', localStorage.getItem(LOCALSTORAGE_GIT_PAT_KEY) || '', { shouldDirty: false });
+
+    reset(getValues(), {keepValues: true, keepDirty:false}); // Reset dirty state after initial load
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [setValue, updateModelsForProvider]); // updateModelsForProvider is memoized
+
+  // Effect to handle provider change
+  useEffect(() => {
+    const newProvider = LLM_PROVIDERS.find(p => p.id === watchedProviderId);
+    if (newProvider && newProvider.id !== currentProvider?.id) {
+      setCurrentProvider(newProvider);
+      updateModelsForProvider(newProvider.id);
+
+      // Load API key for the new provider
+      const apiKeyFromStorage = localStorage.getItem(getLocalStorageApiKeyName(newProvider.id)) || '';
+      setValue('apiKey', apiKeyFromStorage, { shouldDirty: dirtyFields.apiKey }); // Keep dirty if user was editing
+
+      // Set model to first available for new provider or clear if none
+      const newProviderModels = MODELS_BY_PROVIDER[newProvider.id] || {};
+      const newProviderModelKeys = Object.keys(newProviderModels);
+      if (newProviderModelKeys.length > 0) {
+         const sortedModels = Object.keys(newProviderModels).sort((a,b) => (newProviderModels[b].tpm || 0) - (newProviderModels[a].tpm || 0) || a.localeCompare(b) );
+         setValue('llmModelName', sortedModels[0], { shouldDirty: dirtyFields.llmModelName });
+      } else {
+        setValue('llmModelName', '', { shouldDirty: dirtyFields.llmModelName });
+      }
+      
+      // Set API URL for new provider
+      const storedApiUrl = localStorage.getItem(`codealchemist_apiurl_${newProvider.id}`);
+      setValue('apiUrl', storedApiUrl || newProvider.apiUrl, { shouldDirty: dirtyFields.apiUrl });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentApiKey, getValues, setValue, toast]); // Dependencies carefully chosen
+  }, [watchedProviderId, setValue, updateModelsForProvider, dirtyFields]);
 
 
   const onSubmit: SubmitHandler<SettingsFormData> = (data) => {
-    localStorage.setItem('codealchemist_groq_api_key', data.groqApiKey);
-    localStorage.setItem('codealchemist_groq_model_name', data.groqModelName);
+    if (!currentProvider) {
+        toast({title: "Error", description: "Proveedor LLM no seleccionado.", variant: "destructive"});
+        return;
+    }
     
-    if (data.gitRepositoryUrl) localStorage.setItem('codealchemist_git_repository_url', data.gitRepositoryUrl);
-    else localStorage.removeItem('codealchemist_git_repository_url');
+    localStorage.setItem(LOCALSTORAGE_PROVIDER_ID_KEY, data.llmProviderId);
+    if (data.apiKey) {
+      localStorage.setItem(getLocalStorageApiKeyName(data.llmProviderId), data.apiKey);
+    } else {
+      localStorage.removeItem(getLocalStorageApiKeyName(data.llmProviderId));
+    }
+    localStorage.setItem(getLocalStorageModelName(data.llmProviderId), data.llmModelName);
     
-    if (data.gitUsername) localStorage.setItem('codealchemist_git_username', data.gitUsername);
-    else localStorage.removeItem('codealchemist_git_username');
+    // Save API URL if it's different from default (for local LLMs)
+    const providerConfig = LLM_PROVIDERS.find(p => p.id === data.llmProviderId);
+    if (data.apiUrl && data.apiUrl !== providerConfig?.apiUrl) {
+        localStorage.setItem(`codealchemist_apiurl_${data.llmProviderId}`, data.apiUrl);
+    } else {
+        localStorage.removeItem(`codealchemist_apiurl_${data.llmProviderId}`);
+    }
 
-    if (data.gitEmail) localStorage.setItem('codealchemist_git_email', data.gitEmail);
-    else localStorage.removeItem('codealchemist_git_email');
+    // Git settings
+    if (data.gitRepositoryUrl) localStorage.setItem(LOCALSTORAGE_GIT_REPO_URL_KEY, data.gitRepositoryUrl);
+    else localStorage.removeItem(LOCALSTORAGE_GIT_REPO_URL_KEY);
+    
+    if (data.gitUsername) localStorage.setItem(LOCALSTORAGE_GIT_USERNAME_KEY, data.gitUsername);
+    else localStorage.removeItem(LOCALSTORAGE_GIT_USERNAME_KEY);
 
-    if (data.gitPat) localStorage.setItem('codealchemist_git_pat', data.gitPat);
-    else localStorage.removeItem('codealchemist_git_pat');
+    if (data.gitEmail) localStorage.setItem(LOCALSTORAGE_GIT_EMAIL_KEY, data.gitEmail);
+    else localStorage.removeItem(LOCALSTORAGE_GIT_EMAIL_KEY);
+
+    if (data.gitPat) localStorage.setItem(LOCALSTORAGE_GIT_PAT_KEY, data.gitPat);
+    else localStorage.removeItem(LOCALSTORAGE_GIT_PAT_KEY);
     
     toast({
       title: 'Configuración Guardada',
@@ -205,29 +215,47 @@ export function SettingsForm() {
     reset(data, { keepValues: true, keepDirty: false }); 
   };
 
-  const onTestConnection = async () => {
-    const { groqApiKey, groqModelName } = getValues();
-    if (!groqApiKey || !groqModelName) {
-      toast({
-        title: 'Campos incompletos',
-        description: 'Por favor, introduce la Clave API de Groq y selecciona un Modelo antes de probar la conexión.',
-        variant: 'destructive',
-      });
+  const onTestLLMConnection = async () => {
+    await trigger(["llmProviderId", "apiKey", "llmModelName", "apiUrl"]); // Validate before test
+    const currentValues = getValues();
+    const provider = LLM_PROVIDERS.find(p => p.id === currentValues.llmProviderId);
+
+    if (!provider) {
+      toast({ title: 'Error', description: 'Proveedor LLM no seleccionado.', variant: 'destructive' });
       return;
     }
+    if (provider.requiresApiKey && !currentValues.apiKey) {
+      toast({ title: 'Campos incompletos', description: `Por favor, introduce la Clave API para ${provider.name}.`, variant: 'destructive' });
+      return;
+    }
+    if (!currentValues.llmModelName) {
+      toast({ title: 'Campos incompletos', description: 'Por favor, selecciona un Modelo.', variant: 'destructive' });
+      return;
+    }
+     if (!currentValues.apiUrl && (provider.id === 'lmstudio' || provider.id === 'ollama')) {
+      toast({ title: 'Campos incompletos', description: `Por favor, introduce la URL de API para ${provider.name}.`, variant: 'destructive' });
+      return;
+    }
+
+
     setIsTestingConnection(true);
-    const result = await handleTestGroqConnection(groqApiKey, groqModelName);
+    const result = await handleTestLLMConnection(
+      provider.id,
+      currentValues.apiKey || "",
+      currentValues.llmModelName,
+      currentValues.apiUrl || provider.apiUrl // Use form value if present, else provider default
+    );
     setIsTestingConnection(false);
 
     if (result.success) {
       toast({
-        title: 'Conexión Groq Exitosa',
-        description: `Conectado correctamente a Groq con el modelo ${groqModelName}. Respuesta: ${result.data || 'OK'}`,
+        title: `Conexión ${provider.name} Exitosa`,
+        description: `Conectado correctamente con el modelo ${currentValues.llmModelName}. ${result.data ? "Respuesta: " + String(result.data).substring(0,50) + "..." : ""}`,
         action: <CheckCircle className="text-green-500" />,
       });
     } else {
       toast({
-        title: 'Error de Conexión Groq',
+        title: `Error de Conexión ${provider.name}`,
         description: result.message,
         variant: 'destructive',
         action: <XCircle className="text-white" />,
@@ -236,6 +264,7 @@ export function SettingsForm() {
   };
 
   const onTestGitConnection = async () => {
+    await trigger(["gitRepositoryUrl", "gitUsername", "gitPat"]);
     const { gitRepositoryUrl, gitUsername, gitPat } = getValues();
      if (!gitRepositoryUrl || !gitUsername || !gitPat) {
       toast({
@@ -279,73 +308,117 @@ export function SettingsForm() {
           Configuración de la Aplicación
         </CardTitle>
         <CardDescription>
-          Configura tus claves API, modelo de IA preferido y detalles de Git. Estos ajustes se guardan en el almacenamiento local de tu navegador.
+          Configura tu proveedor de LLM, claves API, modelo preferido y detalles de Git. Estos ajustes se guardan en el almacenamiento local de tu navegador.
         </CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit(onSubmit)}>
         <CardContent className="space-y-6">
           <div>
-            <h3 className="text-lg font-medium text-primary mb-2">Configuración de Groq API</h3>
+            <h3 className="text-lg font-medium text-primary mb-2">Configuración del Proveedor LLM</h3>
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="groqApiKey" className="text-foreground">Clave API de Groq</Label>
-                <Input
-                  id="groqApiKey"
-                  type="password"
-                  {...register('groqApiKey')}
-                  placeholder="Introduce tu clave API de Groq"
-                  className="bg-card text-foreground"
-                />
-                {errors.groqApiKey && (
-                  <p className="text-sm text-destructive">{errors.groqApiKey.message}</p>
-                )}
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="groqModelName" className="text-foreground">Nombre del Modelo de Groq</Label>
+                <Label htmlFor="llmProviderId" className="text-foreground">Proveedor LLM</Label>
                 <Select
-                  value={watch('groqModelName') || ''}
-                  onValueChange={(value) => setValue('groqModelName', value, { shouldDirty: true })}
-                  disabled={isTestingAllModels}
+                  value={watchedProviderId}
+                  onValueChange={(value) => setValue('llmProviderId', value as LLMProviderId, { shouldDirty: true, shouldValidate: true })}
                 >
-                  <SelectTrigger id="groqModelName" className="w-full bg-card text-foreground">
-                    <SelectValue placeholder={
-                      isTestingAllModels ? "Validando modelos..." :
-                      (validatedGroqModels.length === 0 && !!currentApiKey) ? "Ningún modelo validado" :
-                      "Selecciona un modelo de Groq"
-                    } />
+                  <SelectTrigger id="llmProviderId" className="w-full bg-card text-foreground">
+                    <SelectValue placeholder="Selecciona un proveedor" />
                   </SelectTrigger>
                   <SelectContent>
-                    {isTestingAllModels ? (
-                       <div className="p-2 text-sm text-muted-foreground text-center">Validando modelos...</div>
-                    ) : validatedGroqModels.length > 0 ? (
-                      validatedGroqModels.map((model) => (
-                        <SelectItem key={model} value={model}>
-                          {model}
-                        </SelectItem>
-                      ))
-                    ) : (
-                      <div className="p-2 text-sm text-muted-foreground text-center">
-                        { currentApiKey 
-                          ? "No hay modelos válidos con la clave API actual."
-                          : "Introduce una clave API para validar modelos."
-                        }
-                      </div>
-                    )}
+                    {LLM_PROVIDERS.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
-                {errors.groqModelName && (
-                  <p className="text-sm text-destructive">{errors.groqModelName.message}</p>
+                {errors.llmProviderId && (
+                  <p className="text-sm text-destructive">{errors.llmProviderId.message}</p>
                 )}
-                 <p className="text-xs text-muted-foreground">
-                    Los modelos se validan al cargar la página si existe una clave API.
-                    Modelos con TPM más alto pueden permitir un procesamiento más rápido.
-                </p>
               </div>
+              
+              {currentProvider && (currentProvider.id === 'lmstudio' || currentProvider.id === 'ollama' || currentProvider.id === 'openai' || currentProvider.id === 'groq' || currentProvider.id === 'anthropic') && (
+                <div className="space-y-2">
+                  <Label htmlFor="apiUrl" className="text-foreground">URL del Endpoint de API ({currentProvider.name})</Label>
+                  <Input
+                    id="apiUrl"
+                    type="url"
+                    {...register('apiUrl')}
+                    placeholder={`Ej: ${currentProvider.apiUrl}`}
+                    className="bg-card text-foreground"
+                    defaultValue={currentProvider.apiUrl}
+                  />
+                   {errors.apiUrl && (
+                    <p className="text-sm text-destructive">{errors.apiUrl.message}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Asegúrate de que este endpoint sea accesible. Para LM Studio/Ollama, incluye la versión, ej: /v1.
+                  </p>
+                </div>
+              )}
+
+
+              {currentProvider && currentProvider.requiresApiKey && (
+                <div className="space-y-2">
+                  <Label htmlFor="apiKey" className="text-foreground">Clave API de {currentProvider?.name || 'LLM'}</Label>
+                  <Input
+                    id="apiKey"
+                    type="password"
+                    {...register('apiKey')}
+                    placeholder={`Introduce tu clave API de ${currentProvider?.name || 'LLM'}`}
+                    className="bg-card text-foreground"
+                  />
+                  {errors.apiKey && (
+                    <p className="text-sm text-destructive">{errors.apiKey.message}</p>
+                  )}
+                </div>
+              )}
+
+              {currentProvider && (
+                <div className="space-y-2">
+                  <Label htmlFor="llmModelName" className="text-foreground">Nombre del Modelo ({currentProvider.name})</Label>
+                  <Select
+                    value={watchedModelName || ''}
+                    onValueChange={(value) => setValue('llmModelName', value, { shouldDirty: true, shouldValidate: true })}
+                  >
+                    <SelectTrigger id="llmModelName" className="w-full bg-card text-foreground">
+                      <SelectValue placeholder={availableModels.length > 0 ? "Selecciona un modelo" : "No hay modelos disponibles o carga de modelos"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableModels.length > 0 ? (
+                        availableModels.map((model) => (
+                          <SelectItem key={model} value={model}>
+                            {model} 
+                            {MODELS_BY_PROVIDER[currentProvider!.id]?.[model]?.tpm && ` (TPM: ${MODELS_BY_PROVIDER[currentProvider!.id]![model]!.tpm})`}
+                            {MODELS_BY_PROVIDER[currentProvider!.id]?.[model]?.tokens && ` (CTX: ${(MODELS_BY_PROVIDER[currentProvider!.id]![model]!.tokens! / 1000).toFixed(0)}k)`}
+                          </SelectItem>
+                        ))
+                      ) : (
+                         <div className="p-2 text-sm text-muted-foreground text-center">
+                           { currentProvider.requiresApiKey && !watchedApiKey 
+                             ? "Introduce una clave API para ver modelos." 
+                             : currentProvider.id === "ollama" || currentProvider.id === "lmstudio"
+                             ? "Carga/selecciona modelos en tu instancia local."
+                             : "No hay modelos configurados para este proveedor."
+                           }
+                         </div>
+                      )}
+                    </SelectContent>
+                  </Select>
+                  {errors.llmModelName && (
+                    <p className="text-sm text-destructive">{errors.llmModelName.message}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    La disponibilidad de modelos depende del proveedor y de tu clave API.
+                  </p>
+                </div>
+              )}
               <Button 
                 type="button" 
                 variant="outline" 
-                onClick={onTestConnection} 
-                disabled={isTestingConnection || !watch('groqApiKey') || !watch('groqModelName')}
+                onClick={onTestLLMConnection} 
+                disabled={isTestingConnection || !watchedProviderId || (currentProvider?.requiresApiKey && !watchedApiKey) || !watchedModelName}
                 className="w-full md:w-auto text-foreground"
               >
                 {isTestingConnection ? (
@@ -353,7 +426,7 @@ export function SettingsForm() {
                 ) : (
                   <Zap className="mr-2 h-4 w-4" />
                 )}
-                Probar Conexión Groq (Modelo Actual)
+                Probar Conexión ({currentProvider?.name || 'LLM'})
               </Button>
             </div>
           </div>
@@ -447,7 +520,7 @@ export function SettingsForm() {
         <CardFooter>
           <Button 
             type="submit" 
-            disabled={!isDirty && !watch('groqApiKey') && !watch('groqModelName') && !watch('gitRepositoryUrl') && !watch('gitUsername') && !watch('gitEmail') && !watch('gitPat')} 
+            disabled={!isDirty} 
             className="w-full md:w-auto"
           >
             <Save className="mr-2 h-4 w-4" />

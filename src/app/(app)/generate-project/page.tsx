@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useForm, SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -13,7 +13,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Loader2, FolderPlus, Wand2, AlertTriangle, DownloadCloud, CheckCircle, FileText, ListTree, Copy } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { handleGenerateProject } from './actions';
-import type { GeneratedProjectResponse, ProjectFile } from './actions';
+import type { HandleGenerateProjectResult, ProjectFile } from './actions'; // Use result type from action
 import JSZip from 'jszip';
 import {
   AlertDialog,
@@ -27,6 +27,15 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Badge } from '@/components/ui/badge';
+import {
+  DEFAULT_LLM_PROVIDER,
+  LLM_PROVIDERS,
+  type LLMProviderId,
+  getLocalStorageApiKeyName,
+  getLocalStorageModelName,
+  LOCALSTORAGE_PROVIDER_ID_KEY
+} from '@/config/llm-config';
+
 
 const formSchema = z.object({
   prompt: z.string().min(15, 'El prompt debe tener al menos 15 caracteres para describir un proyecto.'),
@@ -35,21 +44,42 @@ const formSchema = z.object({
 type FormData = z.infer<typeof formSchema>;
 
 export default function GenerateProjectPage() {
+  // LLM settings state
+  const [llmProviderId, setLlmProviderId] = useState<LLMProviderId>(DEFAULT_LLM_PROVIDER);
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [modelName, setModelName] = useState<string | null>(null);
+  const [apiUrl, setApiUrl] = useState<string | undefined>(undefined);
+
   const [isLoading, setIsLoading] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
-  const [generationResult, setGenerationResult] = useState<GeneratedProjectResponse['data'] | null>(null);
+  const [generationResult, setGenerationResult] = useState<HandleGenerateProjectResult['data'] | null>(null);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [isConfirming, setIsConfirming] = useState(false);
   const [promptToConfirm, setPromptToConfirm] = useState<string>("");
 
   const { toast } = useToast();
 
-  useEffect(() => {
-    setApiKey(localStorage.getItem('codealchemist_groq_api_key'));
-    setModelName(localStorage.getItem('codealchemist_groq_model_name'));
+  const loadLLMSettings = useCallback(() => {
+    const storedProviderId = localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null;
+    const provider = LLM_PROVIDERS.find(p => p.id === (storedProviderId || DEFAULT_LLM_PROVIDER)) || LLM_PROVIDERS.find(p => p.id === DEFAULT_LLM_PROVIDER)!;
+    setLlmProviderId(provider.id);
+    
+    setApiKey(localStorage.getItem(getLocalStorageApiKeyName(provider.id)));
+    setModelName(localStorage.getItem(getLocalStorageModelName(provider.id)));
+    setApiUrl(localStorage.getItem(`codealchemist_apiurl_${provider.id}`) || provider.apiUrl);
   }, []);
+
+  useEffect(() => {
+    loadLLMSettings();
+     // Listen for storage changes
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key?.startsWith('codealchemist_')) {
+        loadLLMSettings();
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [loadLLMSettings]);
 
   const {
     register,
@@ -74,19 +104,25 @@ export default function GenerateProjectPage() {
     setIsConfirming(false);
     if (!promptToConfirm) return;
 
-    if (!apiKey || !modelName) {
-      toast({
-        title: 'Configuración Faltante',
-        description: 'Por favor, establece tu Clave API de Groq y Nombre de Modelo en Configuración.',
-        variant: 'destructive',
-      });
+    const currentProviderConfig = LLM_PROVIDERS.find(p => p.id === llmProviderId);
+    if (!currentProviderConfig) {
+      toast({ title: 'Error de Configuración', description: 'Proveedor LLM no encontrado.', variant: 'destructive' });
       return;
     }
+     if (currentProviderConfig.requiresApiKey && !apiKey) {
+      toast({ title: 'Configuración Faltante', description: `Por favor, establece tu Clave API para ${currentProviderConfig.name} en Configuración.`, variant: 'destructive' });
+      return;
+    }
+    if (!modelName) {
+      toast({ title: 'Configuración Faltante', description: `Por favor, establece el Nombre de Modelo para ${currentProviderConfig.name} en Configuración.`, variant: 'destructive' });
+      return;
+    }
+    
     setIsLoading(true);
     setGenerationResult(null);
     setGenerationError(null);
 
-    const result = await handleGenerateProject(promptToConfirm, apiKey, modelName);
+    const result = await handleGenerateProject(promptToConfirm, llmProviderId, apiKey!, modelName!, apiUrl);
 
     if (result.success && result.data) {
       setGenerationResult(result.data);
@@ -160,6 +196,9 @@ export default function GenerateProjectPage() {
         toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el error al portapapeles.', variant: 'destructive' });
       });
   };
+  
+  const currentProviderConfig = LLM_PROVIDERS.find(p => p.id === llmProviderId);
+  const isConfigComplete = currentProviderConfig && modelName && (!currentProviderConfig.requiresApiKey || apiKey);
 
 
   return (
@@ -172,9 +211,9 @@ export default function GenerateProjectPage() {
           </CardTitle>
           <CardDescription>
             Describe la estructura y el tipo de proyecto que necesitas, y la IA generará un borrador.
-             {!apiKey || !modelName ? (
-                <span className="text-destructive block mt-1"> (Clave API o Modelo no configurado en Ajustes)</span>
-            ) : <span className="text-foreground block mt-1">(Usando modelo: {modelName})</span>}
+             {!isConfigComplete ? (
+                <span className="text-destructive block mt-1"> (Configuración de LLM incompleta en Ajustes)</span>
+            ) : <span className="text-foreground block mt-1">(Usando Proveedor: {currentProviderConfig?.name}, Modelo: {modelName})</span>}
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit(onSubmit)}>
@@ -196,7 +235,7 @@ export default function GenerateProjectPage() {
           <CardFooter>
             <AlertDialog open={isConfirming} onOpenChange={setIsConfirming}>
               <AlertDialogTrigger asChild>
-                <Button type="submit" disabled={isLoading || !currentPrompt} className="w-full md:w-auto">
+                <Button type="submit" disabled={isLoading || !currentPrompt || !isConfigComplete} className="w-full md:w-auto">
                   {isLoading ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : (
@@ -209,7 +248,7 @@ export default function GenerateProjectPage() {
                 <AlertDialogHeader>
                   <AlertDialogTitle>Confirmar Generación de Proyecto</AlertDialogTitle>
                   <AlertDialogDescription>
-                    ¿Estás seguro de que deseas generar la estructura de un proyecto basado en el siguiente prompt?
+                    ¿Estás seguro de que deseas generar la estructura de un proyecto basado en el siguiente prompt usando {currentProviderConfig?.name} con el modelo {modelName}?
                     <ScrollArea className="h-[150px] mt-2 p-2 border rounded bg-muted/30">
                         <pre className="text-xs text-foreground whitespace-pre-wrap">{promptToConfirm}</pre>
                     </ScrollArea>

@@ -1,50 +1,86 @@
 
-/**
- * Representa la respuesta de la API del modelo de lenguaje de Groq.
- */
-export interface GroqResponse {
-  /**
-   * La sugerencia de código generada por el modelo Groq.
-   */
-  codeSuggestion: string;
-  /**
-   * Una descripción del cambio sugerido.
-   */
-  explanation: string;
-}
+import {
+  LLM_PROVIDERS,
+  MODELS_BY_PROVIDER,
+  MAX_RETRIES as LLM_MAX_RETRIES,
+  RETRY_DELAY_MS as LLM_RETRY_DELAY_MS,
+  type LLMProviderId,
+  type ModelInfo,
+} from '@/config/llm-config';
 
-/**
- * Opciones de configuración para interactuar con la API de Groq.
- */
-export interface GroqOptions {
-  /**
-   * La clave API para autenticarse con Groq.
-   */
-  apiKey: string;
-  /**
-   * El modelo específico de Groq a utilizar para el análisis de código.
-   */
+
+// Generic LLM Options
+export interface LLMOptions {
+  providerId: LLMProviderId;
+  apiKey: string; // Could be empty for local models
   modelName: string;
-  /**
-   * El tiempo máximo en milisegundos para esperar una respuesta de la API.
-   * Por defecto es 60000 (60 segundos).
-   */
+  apiUrl?: string; // Optional override for API endpoint
   timeoutMs?: number;
 }
 
-const GROQ_API_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
+// Generic response for code suggestion
+export interface CodeSuggestionResponse {
+  codeSuggestion: string;
+  explanation: string;
+}
+
+// Generic response for project analysis
+export interface ProjectAnalysisResponse {
+  analysisTitle: string;
+  identifiedAreas: string[];
+  suggestions: Array<{ 
+    area: string; 
+    suggestion: string; 
+    priority?: 'high' | 'medium' | 'low';
+    suggestedFullFileContent?: string; 
+  }>;
+  overallAssessment: string;
+}
+
+// Generic response for code generation
+export interface GeneratedCodeResponse {
+  generatedCode: string;
+  explanation?: string;
+}
+
+// Generic response for project structure generation
+export interface ProjectFile {
+  path: string;
+  content: string;
+}
+export interface GeneratedProjectResponse {
+  projectStructure: {
+    projectName?: string;
+    files: ProjectFile[];
+  };
+  notes?: string;
+}
+
+// Generic chat types
+export interface ChatMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+export interface ChatLLMPayload {
+  messages: ChatMessage[];
+  options: LLMOptions;
+}
+
+export interface ChatLLMResponse {
+  content: string;
+}
+
+
 const DEFAULT_TIMEOUT_MS = 60000; // 60 segundos
 const CHAT_COMPLETION_TIMEOUT_MS = 90000; // 90 segundos para chat
 
-/**
- * Helper function to fetch data with retry logic for rate limits and transient errors.
- */
 async function fetchWithRetry(
   url: string,
   fetchRequestOptions: RequestInit,
-  maxRetries: number = 3,
-  initialDelayMs: number = 5000, 
-  serviceName: string = "Groq API"
+  providerName: string,
+  maxRetries: number = LLM_MAX_RETRIES,
+  initialDelayMs: number = LLM_RETRY_DELAY_MS
 ): Promise<Response> {
   let attempt = 0;
   let lastError: Error | null = null;
@@ -61,171 +97,228 @@ async function fetchWithRetry(
       const errorBodyText = await response.text(); 
 
       if (response.status === 429) { 
-        lastError = new Error(`Error de la API de Groq (${serviceName}): Límite de tasa excedido (429). Detalle: ${errorBodyText}`);
+        lastError = new Error(`Error de la API de ${providerName}: Límite de tasa excedido (429). Detalle: ${errorBodyText}`);
         
         if (attempt >= maxRetries) {
-          console.error(`Máximos reintentos (${maxRetries}) alcanzados para ${serviceName} después de error 429. Último error:`, errorBodyText);
+          console.error(`Máximos reintentos (${maxRetries}) alcanzados para ${providerName} después de error 429. Último error:`, errorBodyText);
           throw lastError;
         }
 
         let waitMs = initialDelayMs * Math.pow(2, attempt - 1); 
-
         const retryAfterMatch = errorBodyText.match(/try again in (\d+\.?\d*)\s*s/i);
         if (retryAfterMatch && retryAfterMatch[1]) {
           const suggestedSeconds = parseFloat(retryAfterMatch[1]);
           const suggestedWaitMs = Math.ceil(suggestedSeconds * 1000) + (Math.random() * 1000); 
           waitMs = Math.max(waitMs, suggestedWaitMs); 
-          console.warn(`${serviceName} 429: Reintentando después del retraso sugerido/calculado de ${waitMs / 1000}s. Intento ${attempt}/${maxRetries}. Error: ${errorBodyText.substring(0, 200)}`);
+          console.warn(`${providerName} 429: Reintentando después del retraso sugerido/calculado de ${waitMs / 1000}s. Intento ${attempt}/${maxRetries}. Error: ${errorBodyText.substring(0, 200)}`);
         } else {
-          console.warn(`${serviceName} 429: Límite de tasa excedido. Reintentando en ${waitMs / 1000}s (intento ${attempt}/${maxRetries}). Error: ${errorBodyText.substring(0,200)}`);
+          console.warn(`${providerName} 429: Límite de tasa excedido. Reintentando en ${waitMs / 1000}s (intento ${attempt}/${maxRetries}). Error: ${errorBodyText.substring(0,200)}`);
         }
         
         await new Promise(resolve => setTimeout(resolve, waitMs));
         continue; 
       } else if (response.status === 413) { 
-        lastError = new Error(`Error de la API de Groq (${serviceName}): Payload Too Large (413). Detalle: ${errorBodyText}`);
-        console.error(`Error de Payload Too Large (413) en ${serviceName}. El payload es demasiado grande para el modelo. Error: ${errorBodyText}`);
+        lastError = new Error(`Error de la API de ${providerName}: Payload Too Large (413). Detalle: ${errorBodyText}`);
+        console.error(`Error de Payload Too Large (413) en ${providerName}. El payload es demasiado grande para el modelo. Error: ${errorBodyText}`);
         throw lastError;
       }
 
-
-      console.error(`Respuesta de error HTTP de ${serviceName} - ${response.status}:`, errorBodyText);
-      throw new Error(`Error HTTP de ${serviceName}: ${response.status} ${response.statusText}. Detalle: ${errorBodyText}`);
+      console.error(`Respuesta de error HTTP de ${providerName} - ${response.status}:`, errorBodyText);
+      throw new Error(`Error HTTP de ${providerName}: ${response.status} ${response.statusText}. Detalle: ${errorBodyText}`);
 
     } catch (error) { 
       lastError = error as Error;
       if (error instanceof Error && error.name === 'AbortError') {
-        console.error(`Error de timeout llamando a ${serviceName} en intento ${attempt}`);
+        console.error(`Error de timeout llamando a ${providerName} en intento ${attempt}`);
         throw error; 
       }
       
       if (attempt >= maxRetries) {
-        console.error(`Máximos reintentos (${maxRetries}) alcanzados para ${serviceName}. Último error:`, error);
-        throw new Error(`Falló la solicitud a ${serviceName} después de ${maxRetries} intentos. Último error: ${lastError.message}`);
+        console.error(`Máximos reintentos (${maxRetries}) alcanzados para ${providerName}. Último error:`, error);
+        throw new Error(`Falló la solicitud a ${providerName} después de ${maxRetries} intentos. Último error: ${lastError.message}`);
       }
       
       const waitMs = (initialDelayMs * Math.pow(2, attempt - 1)) + (Math.random() * 1000);
-      console.warn(`${serviceName}: Error en intento ${attempt}. Reintentando en ${waitMs / 1000}s. Error: ${lastError.message}`);
+      console.warn(`${providerName}: Error en intento ${attempt}. Reintentando en ${waitMs / 1000}s. Error: ${lastError.message}`);
       await new Promise(resolve => setTimeout(resolve, waitMs));
     }
   }
-  throw new Error(`Falló la solicitud a ${serviceName} después de ${maxRetries} intentos. Último error: ${lastError ? lastError.message : "Error desconocido"}`);
+  throw new Error(`Falló la solicitud a ${providerName} después de ${maxRetries} intentos. Último error: ${lastError ? lastError.message : "Error desconocido"}`);
 }
 
+// Helper to construct API request based on provider type
+async function makeLLMRequest<TResponse>(
+  options: LLMOptions,
+  messages: ChatMessage[],
+  expectedResponseFormat: "json_object" | "text",
+  temperature: number = 0.3,
+  max_tokens: number = 2048,
+  serviceNameSuffix: string = "request"
+): Promise<TResponse> {
+  const providerConfig = LLM_PROVIDERS.find(p => p.id === options.providerId);
+  if (!providerConfig) {
+    throw new Error(`Proveedor LLM no configurado: ${options.providerId}`);
+  }
 
-/**
- * Analiza de forma asíncrona el código utilizando la API del modelo de lenguaje Groq
- * para sugerir mejoras.
- *
- * @param code El código a analizar.
- * @param options Opciones de configuración para la API de Groq.
- * @returns Una promesa que se resuelve en un objeto GroqResponse que contiene la sugerencia de código y la explicación.
- */
-export async function analyzeCodeWithGroq(
-  code: string,
-  options: GroqOptions
-): Promise<GroqResponse> {
-  console.log(`Realizando llamada a API de Groq (modelo: ${options.modelName}) para análisis de código...`);
+  const effectiveApiUrl = options.apiUrl || providerConfig.apiUrl;
+  let endpoint = effectiveApiUrl;
+
+  // Determine endpoint path based on provider compatibility
+  if (providerConfig.isGroqCompatible || (providerConfig.id === 'ollama' && !providerConfig.isOllamaCompatible) ) { // Ollama can use /v1/chat
+    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/chat/completions`;
+  } else if (providerConfig.isAnthropicCompatible) {
+    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/messages`;
+  } else if (providerConfig.isOllamaCompatible && providerConfig.id === 'ollama') { // Native Ollama endpoint
+     endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/api/chat`; // or /api/generate if needed
+  } else {
+    throw new Error(`El proveedor ${providerConfig.name} no tiene una configuración de endpoint compatible definida.`);
+  }
   
-  const requestBody = {
-    model: options.modelName,
-    messages: [
-      {
-        role: "system",
-        content: `Eres un asistente experto en análisis de código. Analiza el siguiente fragmento de código y proporciona:
-        1. Una sugerencia de código mejorado (campo "codeSuggestion").
-        2. Una explicación concisa de las mejoras (campo "explanation").
-        Responde ÚNICAMENTE en formato JSON con las claves exactas: "codeSuggestion" y "explanation". Asegúrate de que la respuesta sea un único objeto JSON.`
-      },
-      {
-        role: "user",
-        content: `Analiza el siguiente código y sugiere mejoras:\n\n\`\`\`\n${code}\n\`\`\``
+  console.log(`Realizando llamada a API de ${providerConfig.name} (modelo: ${options.modelName}) para ${serviceNameSuffix}...`);
+
+  const headers: HeadersInit = { 'Content-Type': 'application/json' };
+  if (providerConfig.requiresApiKey && options.apiKey && providerConfig.apiKeyName) {
+     if (providerConfig.isAnthropicCompatible) {
+      headers['x-api-key'] = options.apiKey;
+      headers['anthropic-version'] = '2023-06-01';
+    } else { // Groq, OpenAI, compatible Ollama/LMStudio
+      headers['Authorization'] = `Bearer ${options.apiKey}`;
+    }
+  }
+  
+  let requestBody: any;
+  if (providerConfig.isGroqCompatible || (providerConfig.id === 'ollama' && !providerConfig.isOllamaCompatible) ) {
+    requestBody = {
+      model: options.modelName,
+      messages: messages,
+      temperature: temperature,
+      max_tokens: max_tokens,
+      response_format: expectedResponseFormat === "json_object" ? { type: "json_object" } : undefined,
+    };
+  } else if (providerConfig.isAnthropicCompatible) {
+    // Anthropic needs system message separately if present
+    const systemMessage = messages.find(m => m.role === 'system');
+    const userAssistantMessages = messages.filter(m => m.role !== 'system');
+    requestBody = {
+      model: options.modelName,
+      messages: userAssistantMessages,
+      system: systemMessage?.content,
+      temperature: temperature,
+      max_tokens: max_tokens,
+      // Anthropic doesn't have a direct 'response_format' like OpenAI for JSON mode in the /messages API.
+      // You need to instruct it via the prompt to return JSON.
+    };
+  } else if (providerConfig.isOllamaCompatible && providerConfig.id === 'ollama') {
+    requestBody = {
+      model: options.modelName,
+      messages: messages,
+      stream: false, // For non-streaming response
+      format: expectedResponseFormat === "json_object" ? "json" : undefined,
+      options: { // Ollama specific model parameters can go here
+        temperature: temperature,
+        num_predict: max_tokens, // Corresponds to max_tokens
       }
-    ],
-    temperature: 0.3, 
-    max_tokens: 2048, 
-    response_format: { type: "json_object" },
-  };
+    };
+  } else {
+      throw new Error(`Configuración de cuerpo de solicitud no definida para el proveedor ${providerConfig.name}`);
+  }
+
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
+  const timeoutDuration = options.timeoutMs || DEFAULT_TIMEOUT_MS;
+  const timeoutId = setTimeout(() => controller.abort(), timeoutDuration);
 
   try {
     const fetchRequestOptions: RequestInit = {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${options.apiKey}`,
-        'Content-Type': 'application/json',
-      },
+      headers: headers,
       body: JSON.stringify(requestBody),
       signal: controller.signal,
     };
 
-    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 3, 2000, `analyzeCodeWithGroq(${options.modelName})`);
-    
+    const response = await fetchWithRetry(endpoint, fetchRequestOptions, `${providerConfig.name} (${serviceNameSuffix})`);
     const data = await response.json();
-    let parsedResult: GroqResponse;
 
-    if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
-        try {
-            parsedResult = JSON.parse(data.choices[0].message.content);
-             if (!parsedResult.codeSuggestion || !parsedResult.explanation) {
-                console.error("Respuesta JSON de Groq incompleta (analyzeCodeWithGroq):", parsedResult);
-                throw new Error("La respuesta JSON de Groq no contiene los campos 'codeSuggestion' o 'explanation'.");
-            }
-        } catch (parseError) {
-            console.error("Error al parsear la respuesta JSON de Groq (analyzeCodeWithGroq):", parseError, "\nContenido recibido:", data.choices[0].message.content);
-            throw new Error(`La respuesta de Groq (analyzeCodeWithGroq) no es un JSON válido o faltan campos. Error de parseo: ${(parseError as Error).message}`);
-        }
-    } else {
-        console.error("Respuesta inesperada de la API de Groq (analyzeCodeWithGroq):", data);
-        throw new Error("Respuesta inesperada de la API de Groq (analyzeCodeWithGroq).");
+    let contentToParse: string | undefined;
+    if (providerConfig.isGroqCompatible || (providerConfig.id === 'ollama' && !providerConfig.isOllamaCompatible) ) {
+      contentToParse = data.choices?.[0]?.message?.content;
+    } else if (providerConfig.isAnthropicCompatible) {
+      contentToParse = data.content?.[0]?.text;
+    } else if (providerConfig.isOllamaCompatible && providerConfig.id === 'ollama') {
+        contentToParse = data.message?.content; // Native Ollama response structure for non-streaming chat
     }
-    return parsedResult;
 
+
+    if (contentToParse) {
+      if (expectedResponseFormat === "json_object") {
+        try {
+          return JSON.parse(contentToParse) as TResponse;
+        } catch (parseError) {
+          console.error(`Error al parsear la respuesta JSON de ${providerConfig.name} (${serviceNameSuffix}):`, parseError, "\nContenido recibido:", contentToParse);
+          throw new Error(`La respuesta de ${providerConfig.name} (${serviceNameSuffix}) no es un JSON válido. Error: ${(parseError as Error).message}`);
+        }
+      } else {
+        // For text responses, we assume TResponse is { content: string } or similar
+        return { content: contentToParse } as unknown as TResponse; 
+      }
+    } else {
+      console.error(`Respuesta inesperada de la API de ${providerConfig.name} (${serviceNameSuffix}):`, data);
+      throw new Error(`Respuesta inesperada de la API de ${providerConfig.name} (${serviceNameSuffix}). No se encontró contenido.`);
+    }
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
-      console.error("Error de timeout final llamando a la API de Groq (analyzeCodeWithGroq)");
-      throw new Error("La solicitud a la API de Groq excedió el tiempo límite general.");
+      console.error(`Error de timeout final llamando a la API de ${providerConfig.name} (${serviceNameSuffix})`);
+      throw new Error(`La solicitud a la API de ${providerConfig.name} (${serviceNameSuffix}) excedió el tiempo límite general.`);
     }
-    console.error("Error procesando la solicitud a Groq (analyzeCodeWithGroq):", error);
-    throw error; 
+    console.error(`Error procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}):`, error);
+    throw error;
   } finally {
-     clearTimeout(timeoutId); 
+    clearTimeout(timeoutId);
   }
 }
 
-
 /**
- * Representa la respuesta de la API del modelo de lenguaje de Groq para análisis de proyecto.
+ * Analiza código para sugerir mejoras.
  */
-export interface ProjectAnalysisGroqResponse {
-  analysisTitle: string;
-  identifiedAreas: string[];
-  suggestions: Array<{ 
-    area: string; 
-    suggestion: string; 
-    priority?: 'high' | 'medium' | 'low';
-    suggestedFullFileContent?: string; 
-  }>;
-  overallAssessment: string;
+export async function analyzeCode(
+  code: string,
+  options: LLMOptions
+): Promise<CodeSuggestionResponse> {
+  const systemPrompt = `Eres un asistente experto en análisis de código. Analiza el siguiente fragmento de código y proporciona:
+1. Una sugerencia de código mejorado (campo "codeSuggestion").
+2. Una explicación concisa de las mejoras (campo "explanation").
+Responde ÚNICAMENTE en formato JSON con las claves exactas: "codeSuggestion" y "explanation". Asegúrate de que la respuesta sea un único objeto JSON.`;
+  
+  const messages: ChatMessage[] = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: `Analiza el siguiente código y sugiere mejoras:\n\n\`\`\`\n${code}\n\`\`\`` }
+  ];
+
+  const result = await makeLLMRequest<CodeSuggestionResponse>(
+    options, 
+    messages, 
+    "json_object",
+    0.3, // temperature
+    2048, // max_tokens
+    "analyzeCode"
+  );
+
+  if (!result.codeSuggestion || typeof result.explanation === 'undefined') { // Check for explanation existence, even if empty string
+    console.error("Respuesta JSON de LLM incompleta (analyzeCode):", result);
+    throw new Error("La respuesta JSON del LLM (analyzeCode) no contiene los campos 'codeSuggestion' o 'explanation'.");
+  }
+  return result;
 }
 
+
 /**
- * Analiza de forma asíncrona el código fuente de un proyecto (o un fragmento de él) utilizando la API del modelo de lenguaje Groq.
- *
- * @param sourceCodeChunk El fragmento de código fuente del proyecto a analizar.
- * @param options Opciones de configuración para la API de Groq.
- * @param analysisPreferences Preferencias o enfoque específico para el análisis de la IA.
- * @returns Una promesa que se resuelve en un objeto ProjectAnalysisGroqResponse.
+ * Analiza un fragmento de código fuente de un proyecto.
  */
-export async function analyzeProjectSourceWithGroq(
+export async function analyzeProjectSourceChunk(
   sourceCodeChunk: string, 
-  options: GroqOptions,
+  options: LLMOptions,
   analysisPreferences?: string
-): Promise<ProjectAnalysisGroqResponse> {
-  console.log(`Realizando llamada a API de Groq (modelo: ${options.modelName}) para análisis de fragmento de proyecto... (${sourceCodeChunk.length} caracteres)`);
-  
+): Promise<ProjectAnalysisResponse> {
   let systemPrompt = `Eres un asistente experto en análisis de código. Analiza el siguiente FRAGMENTO de código fuente de un proyecto y proporciona:
 1. Un título conciso para el análisis de este fragmento (campo "analysisTitle").
 2. Una lista de nombres de archivos o áreas clave identificadas DENTRO DE ESTE FRAGMENTO para revisión o mejora (campo "identifiedAreas").
@@ -242,145 +335,34 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
     systemPrompt += `\n\nTen en cuenta las siguientes preferencias o áreas de enfoque para tu análisis sobre este fragmento: "${analysisPreferences}".`;
   }
 
-  const requestBody = {
-    model: options.modelName,
-    messages: [
-      {
-        role: "system",
-        content: systemPrompt
-      },
-      {
-        role: "user",
-        content: `Analiza el siguiente fragmento de código fuente del proyecto:\n\n${sourceCodeChunk}`
-      }
-    ],
-    temperature: 0.2, 
-    max_tokens: 4000, 
-    response_format: { type: "json_object" },
-  };
+  const messages: ChatMessage[] = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: `Analiza el siguiente fragmento de código fuente del proyecto:\n\n${sourceCodeChunk}` }
+  ];
+  
+  const result = await makeLLMRequest<ProjectAnalysisResponse>(
+      options,
+      messages,
+      "json_object",
+      0.2, // temperature
+      4000, // max_tokens
+      "analyzeProjectSourceChunk"
+  );
 
-  const controller = new AbortController();
-  const timeoutForProjectAnalysis = options.timeoutMs || DEFAULT_TIMEOUT_MS * 2; 
-  const timeoutId = setTimeout(() => controller.abort(), timeoutForProjectAnalysis);
-
-  try {
-    const fetchRequestOptions: RequestInit = {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${options.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    };
-    
-    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 5, 30000, `analyzeProjectSourceWithGroq(${options.modelName})`); 
-
-    const data = await response.json();
-    let parsedResult: ProjectAnalysisGroqResponse;
-
-    if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
-        try {
-            parsedResult = JSON.parse(data.choices[0].message.content);
-            if (!parsedResult.analysisTitle || !parsedResult.identifiedAreas || !parsedResult.suggestions || !parsedResult.overallAssessment) {
-                console.error("Respuesta JSON de Groq incompleta (análisis de fragmento de proyecto):", parsedResult);
-                throw new Error("La respuesta JSON de Groq (análisis de fragmento de proyecto) no contiene todos los campos requeridos.");
-            }
-        } catch (parseError) {
-            console.error("Error al parsear la respuesta JSON de Groq (análisis de fragmento de proyecto):", parseError, "\nContenido recibido:", data.choices[0].message.content);
-            throw new Error(`La respuesta de Groq (análisis de fragmento de proyecto) no es un JSON válido o faltan campos. Error de parseo: ${(parseError as Error).message}`);
-        }
-    } else {
-        console.error("Respuesta inesperada de la API de Groq (análisis de fragmento de proyecto):", data);
-        throw new Error("Respuesta inesperada de la API de Groq (análisis de fragmento de proyecto).");
-    }
-    return parsedResult;
-    
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      console.error("Error de timeout final llamando a la API de Groq (análisis de fragmento de proyecto)");
-      throw new Error("La solicitud de análisis de fragmento de proyecto a la API de Groq excedió el tiempo límite general.");
-    }
-    console.error("Error procesando la solicitud de análisis de fragmento de proyecto a Groq:", error);
-    throw error; 
-  } finally {
-    clearTimeout(timeoutId);
+  if (!result.analysisTitle || !result.identifiedAreas || !result.suggestions || typeof result.overallAssessment === 'undefined') {
+    console.error("Respuesta JSON de LLM incompleta (analyzeProjectSourceChunk):", result);
+    throw new Error("La respuesta JSON del LLM (analyzeProjectSourceChunk) no contiene todos los campos requeridos.");
   }
+  return result;
 }
 
 /**
- * Prueba la conexión con la API de Groq.
- * @param options Opciones de configuración para la API de Groq.
- * @returns Una promesa que se resuelve en un objeto con el estado de éxito, mensaje y datos opcionales.
- */
-export async function testGroqConnection(options: GroqOptions): Promise<{success: boolean; message: string; data?: any}> {
-  console.log(`Probando conexión con Groq API (modelo: ${options.modelName})...`);
-  const requestBody = {
-    model: options.modelName,
-    messages: [{ role: "user", content: "Hola. ¿Estás funcionando?" }],
-    temperature: 0.1,
-    max_tokens: 50,
-  };
-
-  const controller = new AbortController();
-  const timeoutForTest = options.timeoutMs || 30000; 
-  const timeoutId = setTimeout(() => controller.abort(), timeoutForTest);
-
-  try {
-    const fetchRequestOptions: RequestInit = {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${options.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    };
-
-    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 2, 1000, `testGroqConnection(${options.modelName})`); 
-
-    const responseData = await response.json();
-    
-    if (responseData.choices && responseData.choices[0] && responseData.choices[0].message) {
-        return { success: true, message: "Conexión con Groq API exitosa.", data: responseData.choices[0].message.content };
-    }
-    console.warn("Respuesta inesperada de Groq API durante la prueba de conexión, aunque la llamada fue exitosa:", responseData);
-    return { success: false, message: "Respuesta inesperada de Groq API durante la prueba de conexión.", data: responseData };
-
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      console.error("Error de timeout probando la conexión con Groq API");
-      return { success: false, message: "La prueba de conexión a la API de Groq excedió el tiempo límite." };
-    }
-    console.error("Error probando la conexión con Groq API:", error);
-    const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-    return { success: false, message: `Falló la prueba de conexión: ${errorMessage}` };
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
-
-/**
- * Respuesta de la generación de código desde Groq.
- */
-interface GeneratedCodeGroqResponse {
-  generatedCode: string;
-  explanation?: string;
-}
-
-/**
- * Genera código a partir de un prompt utilizando la API de Groq.
- * @param prompt El prompt que describe el código a generar.
- * @param options Opciones de configuración para la API de Groq.
- * @returns Una promesa que se resuelve en un objeto GeneratedCodeGroqResponse.
+ * Genera código a partir de un prompt.
  */
 export async function generateCodeFromPrompt(
   prompt: string,
-  options: GroqOptions
-): Promise<GeneratedCodeGroqResponse> {
-  console.log(`Realizando llamada a API de Groq (modelo: ${options.modelName}) para generación de código...`);
-
+  options: LLMOptions
+): Promise<GeneratedCodeResponse> {
   const systemMessage = `Eres un asistente de programación experto. Genera un fragmento de código basado en la descripción del usuario.
 Proporciona:
 1. El código generado (campo "generatedCode").
@@ -389,94 +371,35 @@ Responde ÚNICAMENTE en formato JSON con las claves "generatedCode" y, opcionalm
 Asegúrate de que el código sea funcional y siga las mejores prácticas.
 Si el prompt pide un lenguaje específico, úsalo. Si no, Python es una buena opción por defecto.`;
 
-  const requestBody = {
-    model: options.modelName,
-    messages: [
-      { role: "system", content: systemMessage },
-      { role: "user", content: prompt }
-    ],
-    temperature: 0.4,
-    max_tokens: 3000, 
-    response_format: { type: "json_object" },
-  };
+  const messages: ChatMessage[] = [
+    { role: "system", content: systemMessage },
+    { role: "user", content: prompt }
+  ];
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS * 1.5); 
-
-  try {
-    const fetchRequestOptions: RequestInit = {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${options.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    };
-
-    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 3, 2000, `generateCodeFromPrompt(${options.modelName})`);
-    const data = await response.json();
-
-    if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
-      try {
-        const parsedResult = JSON.parse(data.choices[0].message.content);
-        if (!parsedResult.generatedCode) {
-          console.error("Respuesta JSON de Groq incompleta (generateCode):", parsedResult);
-          throw new Error("La respuesta JSON de Groq no contiene el campo 'generatedCode'.");
-        }
-        return parsedResult as GeneratedCodeGroqResponse;
-      } catch (parseError) {
-        console.error("Error al parsear la respuesta JSON de Groq (generateCode):", parseError, "\nContenido recibido:", data.choices[0].message.content);
-        throw new Error(`La respuesta de Groq (generateCode) no es un JSON válido o falta el campo 'generatedCode'. Error: ${(parseError as Error).message}`);
-      }
-    } else {
-      console.error("Respuesta inesperada de la API de Groq (generateCode):", data);
-      throw new Error("Respuesta inesperada de la API de Groq (generateCode).");
-    }
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      console.error("Error de timeout final llamando a la API de Groq (generateCode)");
-      throw new Error("La solicitud de generación de código a la API de Groq excedió el tiempo límite.");
-    }
-    console.error("Error procesando la solicitud a Groq (generateCode):", error);
-    throw error;
-  } finally {
-    clearTimeout(timeoutId);
+  const result = await makeLLMRequest<GeneratedCodeResponse>(
+    options,
+    messages,
+    "json_object",
+    0.4, // temperature
+    3000, // max_tokens
+    "generateCodeFromPrompt"
+  );
+  
+  if (!result.generatedCode) {
+    console.error("Respuesta JSON de LLM incompleta (generateCodeFromPrompt):", result);
+    throw new Error("La respuesta JSON del LLM (generateCodeFromPrompt) no contiene el campo 'generatedCode'.");
   }
+  return result;
 }
 
 
 /**
- * Estructura de un archivo de proyecto.
- */
-interface ProjectFile {
-  path: string; 
-  content: string;
-}
-
-/**
- * Respuesta de la generación de estructura de proyecto desde Groq.
- */
-interface GeneratedProjectGroqResponse {
-  projectStructure: {
-    projectName?: string; 
-    files: ProjectFile[]; 
-  };
-  notes?: string; 
-}
-
-/**
- * Genera una estructura de proyecto (archivos y carpetas) a partir de un prompt.
- * @param prompt El prompt que describe el proyecto.
- * @param options Opciones de configuración para la API de Groq.
- * @returns Una promesa que se resuelve en un objeto GeneratedProjectGroqResponse.
+ * Genera una estructura de proyecto a partir de un prompt.
  */
 export async function generateProjectStructureFromPrompt(
   prompt: string,
-  options: GroqOptions
-): Promise<GeneratedProjectGroqResponse> {
-  console.log(`Realizando llamada a API de Groq (modelo: ${options.modelName}) para generación de estructura de proyecto...`);
-
+  options: LLMOptions
+): Promise<GeneratedProjectResponse> {
   const systemMessage = `Eres un arquitecto de software y asistente de programación experto.
 Basado en la descripción del usuario, genera una estructura de archivos y carpetas para un nuevo proyecto de software.
 Proporciona:
@@ -493,136 +416,64 @@ Genera una estructura de directorios lógica y común para el tipo de proyecto d
 Incluye archivos de configuración comunes si son relevantes (ej: package.json, tsconfig.json, .gitignore).
 El contenido de los archivos debe ser coherente con sus extensiones y propósitos.`;
 
-  const requestBody = {
-    model: options.modelName,
-    messages: [
-      { role: "system", content: systemMessage },
-      { role: "user", content: prompt }
-    ],
-    temperature: 0.3,
-    max_tokens: 4000, 
-    response_format: { type: "json_object" },
-  };
+  const messages: ChatMessage[] = [
+    { role: "system", content: systemMessage },
+    { role: "user", content: prompt }
+  ];
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS * 3); 
+  const result = await makeLLMRequest<GeneratedProjectResponse>(
+    options,
+    messages,
+    "json_object",
+    0.3, // temperature
+    4000, // max_tokens
+    "generateProjectStructure"
+  );
 
-  try {
-    const fetchRequestOptions: RequestInit = {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${options.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    };
-
-    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 3, 3000, `generateProjectStructure(${options.modelName})`);
-    const data = await response.json();
-
-    if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
-      try {
-        const parsedResult = JSON.parse(data.choices[0].message.content);
-        if (!parsedResult.projectStructure || !Array.isArray(parsedResult.projectStructure.files)) {
-          console.error("Respuesta JSON de Groq incompleta o malformada (generateProjectStructure):", parsedResult);
-          throw new Error("La respuesta JSON de Groq no contiene 'projectStructure' o 'projectStructure.files' no es un array.");
-        }
-        for (const file of parsedResult.projectStructure.files) {
-            if (typeof file.path !== 'string' || typeof file.content !== 'string') {
-                console.error("Objeto de archivo inválido en la respuesta de Groq (generateProjectStructure):", file);
-                throw new Error("La respuesta JSON de Groq contiene un objeto de archivo inválido (falta 'path' o 'content' como string).");
-            }
-        }
-        return parsedResult as GeneratedProjectGroqResponse;
-      } catch (parseError) {
-        console.error("Error al parsear la respuesta JSON de Groq (generateProjectStructure):", parseError, "\nContenido recibido:", data.choices[0].message.content);
-        throw new Error(`La respuesta de Groq (generateProjectStructure) no es un JSON válido o tiene una estructura incorrecta. Error: ${(parseError as Error).message}`);
-      }
-    } else {
-      console.error("Respuesta inesperada de la API de Groq (generateProjectStructure):", data);
-      throw new Error("Respuesta inesperada de la API de Groq (generateProjectStructure).");
-    }
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      console.error("Error de timeout final llamando a la API de Groq (generateProjectStructure)");
-      throw new Error("La solicitud de generación de proyecto a la API de Groq excedió el tiempo límite.");
-    }
-    console.error("Error procesando la solicitud a Groq (generateProjectStructure):", error);
-    throw error;
-  } finally {
-    clearTimeout(timeoutId);
+  if (!result.projectStructure || !Array.isArray(result.projectStructure.files)) {
+    console.error("Respuesta JSON de LLM incompleta o malformada (generateProjectStructure):", result);
+    throw new Error("La respuesta JSON de LLM (generateProjectStructure) no contiene 'projectStructure' o 'projectStructure.files' no es un array.");
   }
-}
-
-export interface ChatMessage {
-  role: "user" | "assistant" | "system";
-  content: string;
-}
-
-export interface ChatGroqPayload {
-  messages: ChatMessage[];
-  options: GroqOptions;
-}
-
-export interface ChatGroqResponse {
-  content: string;
+  for (const file of result.projectStructure.files) {
+      if (typeof file.path !== 'string' || typeof file.content !== 'string') {
+          console.error("Objeto de archivo inválido en la respuesta de LLM (generateProjectStructure):", file);
+          throw new Error("La respuesta JSON de LLM (generateProjectStructure) contiene un objeto de archivo inválido (falta 'path' o 'content' como string).");
+      }
+  }
+  return result;
 }
 
 /**
- * Envía una solicitud de completado de chat a la API de Groq.
- * @param payload El payload que contiene los mensajes y las opciones.
- * @returns Una promesa que se resuelve en un objeto ChatGroqResponse.
+ * Envía una solicitud de completado de chat a la API LLM configurada.
  */
-export async function chatWithGroq(payload: ChatGroqPayload): Promise<ChatGroqResponse> {
+export async function chatWithLLM(payload: ChatLLMPayload): Promise<ChatLLMResponse> {
   const { messages, options } = payload;
-  console.log(`Realizando llamada a API de Groq (modelo: ${options.modelName}) para chat...`);
-
-  // Podríamos añadir un mensaje de sistema por defecto si no se proporciona,
-  // pero por ahora asumimos que el llamador lo gestiona.
-  // const systemDefault = { role: "system", content: "Eres un asistente de IA útil." };
-  // const fullMessages = messages.some(m => m.role === 'system') ? messages : [systemDefault, ...messages];
-
-  const requestBody = {
-    model: options.modelName,
-    messages: messages, // Usar directamente los mensajes proporcionados
-    temperature: 0.7, // Una temperatura más alta puede ser mejor para chat
-    max_tokens: 2048, // Ajustar según sea necesario
-    // No se usa response_format: { type: "json_object" } a menos que se espere JSON del chat
-  };
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || CHAT_COMPLETION_TIMEOUT_MS);
-
-  try {
-    const fetchRequestOptions: RequestInit = {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${options.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    };
-
-    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 3, 2000, `chatWithGroq(${options.modelName})`);
-    const data = await response.json();
-
-    if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
-      return { content: data.choices[0].message.content };
-    } else {
-      console.error("Respuesta inesperada de la API de Groq (chat):", data);
-      throw new Error("Respuesta inesperada de la API de Groq (chat). No se encontró contenido en la respuesta.");
-    }
-  } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') {
-      console.error("Error de timeout final llamando a la API de Groq (chat)");
-      throw new Error("La solicitud de chat a la API de Groq excedió el tiempo límite.");
-    }
-    console.error("Error procesando la solicitud a Groq (chat):", error);
-    // Re-lanzar el error para que sea manejado por la capa superior.
-    throw error;
-  } finally {
-    clearTimeout(timeoutId);
+  // System message for chat can be more generic or passed by the caller.
+  // For now, assume messages array is complete.
+  const providerConfig = LLM_PROVIDERS.find(p => p.id === options.providerId);
+  if (!providerConfig) {
+    throw new Error(`Proveedor LLM no configurado: ${options.providerId}`);
   }
+
+  const result = await makeLLMRequest<ChatLLMResponse>(
+    options,
+    messages,
+    "text", // Chat typically expects text response
+    0.7, // temperature, can be higher for chat
+    2048, // max_tokens
+    "chatWithLLM"
+  );
+
+  if (typeof result.content === 'undefined') {
+    console.error(`Respuesta de LLM incompleta (chatWithLLM) para ${providerConfig.name}:`, result);
+    throw new Error(`Respuesta de LLM (chatWithLLM) para ${providerConfig.name} no contiene contenido.`);
+  }
+  return result;
 }
+
+// Renaming old Groq-specific types for clarity if they are still used elsewhere temporarily
+export type GroqOptions = LLMOptions; // Deprecated: use LLMOptions
+export type GroqResponse = CodeSuggestionResponse; // Deprecated: use CodeSuggestionResponse
+export type ProjectAnalysisGroqResponse = ProjectAnalysisResponse; // Deprecated: use ProjectAnalysisResponse
+export type ChatGroqPayload = ChatLLMPayload; // Deprecated: use ChatLLMPayload
+export type ChatGroqResponse = ChatLLMResponse; // Deprecated: use ChatLLMResponse

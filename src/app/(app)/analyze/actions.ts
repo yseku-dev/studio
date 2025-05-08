@@ -1,50 +1,59 @@
+
 'use server';
 
-import { suggestCodeImprovements, SuggestCodeImprovementsInput, SuggestCodeImprovementsOutput } from '@/ai/flows/suggest-code-improvements';
-import type { GroqOptions } from '@/services/groq'; // Import GroqOptions
+import { analyzeCode, type CodeSuggestionResponse, type LLMOptions } from '@/services/groq';
+import { LOCALSTORAGE_PROVIDER_ID_KEY, getLocalStorageApiKeyName, getLocalStorageModelName, DEFAULT_LLM_PROVIDER, LLM_PROVIDERS } from '@/config/llm-config'; // Import general LLM config
 
 interface AnalyzeCodeResult {
   success: boolean;
-  data?: SuggestCodeImprovementsOutput;
+  data?: CodeSuggestionResponse; // Use generic response type
   error?: string;
 }
 
-const GROQ_API_TIMEOUT_MS_ANALYZE = 60000; // 60 segundos para análisis de código simple
+const LLM_API_TIMEOUT_MS_ANALYZE = 60000; // 60 segundos para análisis de código simple
 
 export async function handleAnalyzeCode(
   code: string,
-  apiKey: string,
-  modelName: string
+  providerId: string, // Now expects providerId
+  apiKey: string,     // Still needs API key directly passed
+  modelName: string,   // Still needs model name
+  apiUrl?: string      // Optional API URL for local LLMs
 ): Promise<AnalyzeCodeResult> {
-  if (!apiKey || !modelName) {
-    return { success: false, error: "La clave API y el nombre del modelo son obligatorios. Por favor, configúralos en ajustes." };
+  
+  const currentProvider = LLM_PROVIDERS.find(p => p.id === providerId);
+  if (!currentProvider) {
+    return { success: false, error: `Proveedor LLM '${providerId}' no encontrado. Por favor, configúralo en ajustes.` };
+  }
+  
+  if (currentProvider.requiresApiKey && !apiKey) {
+    return { success: false, error: `La clave API para ${currentProvider.name} es obligatoria. Por favor, configúrala en ajustes.` };
+  }
+  if (!modelName) {
+     return { success: false, error: `El nombre del modelo para ${currentProvider.name} es obligatorio. Por favor, configúralo en ajustes.` };
   }
 
-  const groqOptions: GroqOptions = {
+
+  const llmOptions: LLMOptions = {
+    providerId: currentProvider.id,
     apiKey,
     modelName,
-    timeoutMs: GROQ_API_TIMEOUT_MS_ANALYZE,
+    apiUrl: apiUrl || currentProvider.apiUrl, // Use provided apiUrl or default from provider config
+    timeoutMs: LLM_API_TIMEOUT_MS_ANALYZE,
   };
   
-  const input: SuggestCodeImprovementsInput = {
-    code,
-    groqOptions, // Pasar el objeto de opciones completo
-  };
-
-
   try {
-    const result = await suggestCodeImprovements(input);
+    // Call the generic analyzeCode function
+    const result = await analyzeCode(code, llmOptions);
     return { success: true, data: result };
   } catch (error) {
-    const operationName = "el análisis del código";
-    console.error(`Error en ${operationName}:`, error); // Log the raw error
+    const operationName = `el análisis del código con ${currentProvider.name}`;
+    console.error(`Error en ${operationName}:`, error); 
     
     let detailMessage: string;
     if (error instanceof Error) {
         detailMessage = error.message;
-        // Specific timeout message check
         if (detailMessage.toLowerCase().includes("timeout") || detailMessage.toLowerCase().includes("excedió el tiempo límite")) {
-          detailMessage = `El análisis del código excedió el tiempo límite de ${GROQ_API_TIMEOUT_MS_ANALYZE / 1000} segundos. Intenta con un fragmento más pequeño o revisa la conexión.`;
+          detailMessage = `El análisis del código excedió el tiempo límite de ${LLM_API_TIMEOUT_MS_ANALYZE / 1000} segundos. Intenta con un fragmento más pequeño o revisa la conexión.`;
         }
     } else {
         try {
@@ -53,8 +62,7 @@ export async function handleAnalyzeCode(
             detailMessage = "Ocurrió un error desconocido.";
         }
     }
-    // Fallback if String(error) was empty or resulted in an empty string
-    if (!detailMessage && detailMessage !== '') { // Check for empty string explicitly if needed
+    if (!detailMessage && detailMessage !== '') {
         detailMessage = "Ocurrió un error desconocido.";
     } else if (detailMessage === '') {
         detailMessage = "Error sin mensaje detallado.";
