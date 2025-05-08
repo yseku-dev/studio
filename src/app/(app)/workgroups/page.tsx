@@ -182,7 +182,7 @@ export default function WorkgroupsPage() {
               <p className="text-muted-foreground text-center py-8">No hay grupos de trabajo creados. ¡Empieza creando uno!</p>
             )}
             {workgroups.length > 0 && (
-              <ScrollArea className="h-[calc(100vh-20rem)]">
+              <ScrollArea className="h-[calc(100vh-16rem)]"> {/* Increased height */}
                 <div className="grid gap-4 md:grid-cols-2">
                   {workgroups.map(wg => (
                     <Card key={wg.id} className="flex flex-col">
