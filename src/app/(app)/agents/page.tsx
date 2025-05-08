@@ -1,7 +1,7 @@
 // src/app/(app)/agents/page.tsx
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useForm, SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -14,7 +14,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger, DialogClose } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from '@/hooks/use-toast';
-import { PlusCircle, Users2, Edit2, Trash2, Wand2 } from 'lucide-react';
+import { PlusCircle, Users2, Edit2, Trash2, Wand2, UploadCloud, DownloadCloud } from 'lucide-react';
 import type { AgentConfig, AgentLLMConfig, AgentSpecificLLMConfig } from '@/types/agent';
 import { LLM_PROVIDERS, MODELS_BY_PROVIDER, DEFAULT_LLM_PROVIDER, type LLMProviderId, getLocalStorageApiKeyName as getGlobalApiKeyName, getLocalStorageModelName as getGlobalModelName, LOCALSTORAGE_PROVIDER_ID_KEY as GLOBAL_PROVIDER_ID_KEY } from '@/config/llm-config';
 
@@ -34,14 +34,13 @@ const agentSchema = z.object({
   return true;
 }, {
   message: "Para configuración LLM personalizada, el proveedor y el modelo son obligatorios.",
-  path: ["customModelName"], // Point error to one of the custom fields
+  path: ["customModelName"], 
 });
 
 type AgentFormData = z.infer<typeof agentSchema>;
 
 const LOCALSTORAGE_AGENTS_KEY = 'codealchemist_agents';
 
-// Default agents
 const defaultAgents: Omit<AgentConfig, 'id'>[] = [
   { name: "JefeDeProducto", description: "Define requisitos, historias de usuario y prioridades.", systemMessage: "Eres un Jefe de Producto experimentado. Tu tarea es definir claramente los requisitos del proyecto, crear historias de usuario detalladas y establecer prioridades. Comunícate de forma efectiva con el equipo.", llmConfig: 'default' },
   { name: "ArquitectoSoftware", description: "Diseña la arquitectura del sistema y selecciona tecnologías.", systemMessage: "Eres un Arquitecto de Software senior. Tu responsabilidad es diseñar una arquitectura robusta, escalable y mantenible. Selecciona las tecnologías y patrones de diseño más adecuados.", llmConfig: 'default' },
@@ -57,6 +56,7 @@ export default function AgentsPage() {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingAgent, setEditingAgent] = useState<AgentConfig | null>(null);
   const { toast } = useToast();
+  const importFileRef = useRef<HTMLInputElement>(null);
 
   const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<AgentFormData>({
     resolver: zodResolver(agentSchema),
@@ -71,14 +71,28 @@ export default function AgentsPage() {
    useEffect(() => {
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
     if (storedAgents) {
-      setAgents(JSON.parse(storedAgents));
+      try {
+        const parsedAgents = JSON.parse(storedAgents);
+        if (Array.isArray(parsedAgents)) {
+          setAgents(parsedAgents);
+        } else {
+          throw new Error("Stored agents is not an array");
+        }
+      } catch (e) {
+        console.error("Error parsing stored agents:", e);
+        localStorage.removeItem(LOCALSTORAGE_AGENTS_KEY); // Clear corrupted data
+        initializeDefaultAgents();
+      }
     } else {
-      // Pre-populate with default agents if none are stored
-      const initialAgents = defaultAgents.map(agent => ({ ...agent, id: crypto.randomUUID() }));
-      setAgents(initialAgents);
-      localStorage.setItem(LOCALSTORAGE_AGENTS_KEY, JSON.stringify(initialAgents));
+      initializeDefaultAgents();
     }
   }, []);
+
+  const initializeDefaultAgents = () => {
+    const initialAgents = defaultAgents.map(agent => ({ ...agent, id: crypto.randomUUID() }));
+    setAgents(initialAgents);
+    localStorage.setItem(LOCALSTORAGE_AGENTS_KEY, JSON.stringify(initialAgents));
+  };
 
   useEffect(() => {
     if (watchedLlmConfigType === 'custom' && watchedCustomProviderId) {
@@ -190,32 +204,145 @@ export default function AgentsPage() {
     }
   };
 
+  const handleExportAllAgents = () => {
+    if (agents.length === 0) {
+      toast({ title: "Nada que exportar", description: "No hay agentes para exportar.", variant: "default" });
+      return;
+    }
+    const jsonData = JSON.stringify(agents, null, 2);
+    const blob = new Blob([jsonData], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'codealchemist_all_agents.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast({ title: "Exportación Exitosa", description: "Todos los agentes han sido exportados." });
+  };
+
+  const handleExportAgent = (agentId: string) => {
+    const agentToExport = agents.find(a => a.id === agentId);
+    if (!agentToExport) {
+      toast({ title: "Error de Exportación", description: "No se encontró el agente.", variant: "destructive" });
+      return;
+    }
+    const jsonData = JSON.stringify(agentToExport, null, 2);
+    const blob = new Blob([jsonData], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `codealchemist_agent_${agentToExport.name.replace(/\s+/g, '_')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast({ title: "Exportación Exitosa", description: `Agente "${agentToExport.name}" exportado.` });
+  };
+
+  const handleImportAgents = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string;
+        const importedData = JSON.parse(text);
+        
+        // Validate if it's an array (for multiple agents) or a single agent object
+        let agentsToImport: AgentConfig[];
+        if (Array.isArray(importedData)) {
+          agentsToImport = importedData as AgentConfig[]; // Add more validation here if needed
+        } else if (typeof importedData === 'object' && importedData !== null && 'id' in importedData && 'name' in importedData) {
+          agentsToImport = [importedData as AgentConfig];
+        } else {
+          throw new Error("El archivo JSON no contiene un agente o una lista de agentes válidos.");
+        }
+
+        // Basic validation for each agent (can be enhanced with Zod)
+        agentsToImport.forEach(agent => {
+          if (!agent.id || !agent.name || !agent.systemMessage) {
+            throw new Error(`Agente importado inválido: falta id, name o systemMessage. Agente: ${JSON.stringify(agent).substring(0,100)}`);
+          }
+          // Ensure new IDs if they conflict, or decide on an update strategy
+          // For simplicity, we'll add new ones, or update if ID matches
+        });
+
+        let updatedAgents = [...agents];
+        let newAgentsCount = 0;
+        let updatedAgentsCount = 0;
+
+        agentsToImport.forEach(importedAgent => {
+          const existingIndex = updatedAgents.findIndex(a => a.id === importedAgent.id);
+          if (existingIndex > -1) {
+            updatedAgents[existingIndex] = importedAgent; // Update existing
+            updatedAgentsCount++;
+          } else {
+            updatedAgents.push({...importedAgent, id: importedAgent.id || crypto.randomUUID()}); // Add new
+            newAgentsCount++;
+          }
+        });
+        
+        setAgents(updatedAgents);
+        localStorage.setItem(LOCALSTORAGE_AGENTS_KEY, JSON.stringify(updatedAgents));
+        toast({ title: "Importación Exitosa", description: `${newAgentsCount} agente(s) nuevo(s) añadido(s), ${updatedAgentsCount} agente(s) actualizado(s).` });
+
+      } catch (error) {
+        console.error("Error importing agents:", error);
+        toast({ title: "Error de Importación", description: `No se pudo importar el archivo. ${error instanceof Error ? error.message : "Formato inválido."}`, variant: "destructive" });
+      } finally {
+        // Reset file input
+        if (importFileRef.current) {
+          importFileRef.current.value = "";
+        }
+      }
+    };
+    reader.readAsText(file);
+  };
+
 
   return (
     <Dialog open={isFormOpen} onOpenChange={handleDialogVisibilityChange}>
       <div className="space-y-6">
         <Card className="shadow-lg">
-          <CardHeader className="flex flex-row items-center justify-between">
-            <div>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <div className="flex-grow">
               <CardTitle className="text-2xl flex items-center gap-2">
                 <Users2 className="h-6 w-6 text-primary" />
                 Gestión de Agentes IA
               </CardTitle>
-              <CardDescription>
-                Crea y administra tus agentes de IA para AutoGen.
+              <CardDescription className="mt-1">
+                Crea, administra, importa y exporta tus agentes de IA.
               </CardDescription>
             </div>
-            <DialogTrigger asChild>
-              <Button onClick={() => handleOpenForm()}>
-                <PlusCircle className="mr-2 h-4 w-4" /> Crear Agente
+            <div className="flex items-center gap-2">
+              <Button variant="outline" size="sm" onClick={() => importFileRef.current?.click()}>
+                <UploadCloud className="mr-2 h-4 w-4" /> Importar Agentes
               </Button>
-            </DialogTrigger>
+              <Input 
+                type="file" 
+                ref={importFileRef} 
+                className="hidden" 
+                accept=".json" 
+                onChange={handleImportAgents} 
+              />
+              <Button variant="outline" size="sm" onClick={handleExportAllAgents} disabled={agents.length === 0}>
+                <DownloadCloud className="mr-2 h-4 w-4" /> Exportar Todos
+              </Button>
+              <DialogTrigger asChild>
+                <Button onClick={() => handleOpenForm()} size="sm">
+                  <PlusCircle className="mr-2 h-4 w-4" /> Crear Agente
+                </Button>
+              </DialogTrigger>
+            </div>
           </CardHeader>
           <CardContent>
             {agents.length === 0 ? (
-              <p className="text-muted-foreground text-center py-8">No hay agentes creados. ¡Empieza creando uno!</p>
+              <p className="text-muted-foreground text-center py-8">No hay agentes creados. ¡Empieza creando uno o importa agentes existentes!</p>
             ) : (
-              <ScrollArea className="h-[calc(100vh-20rem)]">
+              <ScrollArea className="h-[calc(100vh-22rem)]"> {/* Adjusted height */}
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
                   {agents.map(agent => (
                     <Card key={agent.id} className="flex flex-col">
@@ -228,6 +355,9 @@ export default function AgentsPage() {
                          <p className="text-xs text-muted-foreground"><strong>Config LLM:</strong> {getLLMConfigDisplay(agent.llmConfig)}</p>
                       </CardContent>
                       <CardFooter className="flex justify-end gap-2 border-t pt-4">
+                        <Button variant="outline" size="sm" onClick={() => handleExportAgent(agent.id)}>
+                           <DownloadCloud className="mr-1 h-3 w-3" /> Exportar
+                        </Button>
                         <Button variant="outline" size="sm" onClick={() => handleOpenForm(agent)}>
                           <Edit2 className="mr-1 h-3 w-3" /> Editar
                         </Button>
@@ -243,7 +373,7 @@ export default function AgentsPage() {
           </CardContent>
         </Card>
 
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="sm:max-w-3xl"> {/* Adjusted max-width */}
           <DialogHeader>
             <DialogTitle>{editingAgent ? 'Editar Agente' : 'Crear Nuevo Agente'}</DialogTitle>
             <DialogDescription>
@@ -251,7 +381,7 @@ export default function AgentsPage() {
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
-            <ScrollArea className="max-h-[60vh] p-1 -mx-1 pr-4">
+            <ScrollArea className="max-h-[70vh] p-1 -mx-1 pr-4"> {/* Adjusted max-height */}
               <div className="space-y-4 px-1">
                 <div>
                   <Label htmlFor="name">Nombre del Agente</Label>
@@ -345,4 +475,3 @@ export default function AgentsPage() {
     </Dialog>
   );
 }
-
