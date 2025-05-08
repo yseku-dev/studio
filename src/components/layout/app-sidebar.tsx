@@ -20,7 +20,9 @@ import {
   FolderPlus,
   ChevronsLeft,
   ChevronsRight,
-  MessageCircle
+  MessageCircle,
+  Users2, // Icon for Agents
+  Workflow // Icon for Workgroups
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -40,6 +42,8 @@ const navItems = [
   { href: '/autoupdate', label: 'AutoUpdate', icon: Sparkles },
   { href: '/versions', label: 'Versiones Guardadas', icon: GitCompareArrows },
   { href: '/chat', label: 'Chat con IA', icon: MessageCircle },
+  { href: '/agents', label: 'Agentes IA', icon: Users2 },
+  { href: '/workgroups', label: 'Grupos de Trabajo IA', icon: Workflow },
   { href: '/settings', label: 'Configuración', icon: Settings },
 ];
 
@@ -73,6 +77,9 @@ export function AppSidebar() {
       "flex flex-col h-full bg-card border-r transition-all duration-300 ease-in-out",
       isCollapsed && !isMobile ? "w-20" : "w-72"
     )}>
+       <SheetHeader className="p-0 m-0 border-none">
+        <SheetTitle className="sr-only">Barra lateral principal</SheetTitle>
+      </SheetHeader>
       <div className={cn(
           "flex items-center border-b p-4 h-14", 
           isCollapsed && !isMobile ? "justify-center" : "justify-between"
@@ -181,9 +188,6 @@ export function AppSidebar() {
           </SheetTrigger>
         </div>
         <SheetContent side="left" className="w-72 p-0 bg-card border-r-0">
-           <SheetHeader>
-             <SheetTitle className="sr-only">Barra lateral principal</SheetTitle>
-           </SheetHeader>
           <SidebarContent />
         </SheetContent>
       </Sheet>
@@ -192,4 +196,3 @@ export function AppSidebar() {
 
   return <SidebarContent />;
 }
-
