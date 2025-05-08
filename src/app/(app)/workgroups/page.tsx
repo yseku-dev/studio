@@ -14,7 +14,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger, DialogClose } from '@/components/ui/dialog';
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from '@/hooks/use-toast';
-import { PlusCircle, Workflow, Edit2, Trash2, Play, Users2, Lock } from 'lucide-react'; // Added Lock icon
+import { PlusCircle, Workflow, Edit2, Trash2, Play, Users2, Lock } from 'lucide-react';
 import type { WorkgroupConfig, AgentConfig } from '@/types/agent';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -26,8 +26,9 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger, // Added missing import
-} from "@/components/ui/alert-dialog"; // Import AlertDialog
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { WorkgroupExecutionModal } from '@/components/workgroup-execution-modal'; // Import the new modal
 
 const ORCHESTRATOR_AGENT_NAME = "OrquestadorFlujoAgentes";
 
@@ -46,7 +47,6 @@ const LOCALSTORAGE_WORKGROUPS_KEY = 'codealchemist_workgroups';
 const LOCALSTORAGE_AGENTS_KEY = 'codealchemist_agents'; // To load available agents
 
 // Default workgroup using default agent names (IDs will be resolved dynamically)
-// Note: Orchestrator is not explicitly listed here, it will be added automatically
 const defaultWorkgroup: Omit<WorkgroupConfig, 'id' | 'agentIds'> & { agentNames: string[] } = {
   name: "EquipoDesarrolloSoftware",
   description: "Un equipo multidisciplinario para desarrollar una aplicación de lista de tareas.",
@@ -58,7 +58,6 @@ const defaultWorkgroup: Omit<WorkgroupConfig, 'id' | 'agentIds'> & { agentNames:
     "IngenieroPruebas",
     "IngenieroDevOps",
     "RepresentanteUsuario",
-    // "SimuladorInteraccionUsuario", // REMOVED
     // "OrquestadorFlujoAgentes" // Removed from explicit default list, added automatically
   ],
 };
@@ -68,6 +67,8 @@ export default function WorkgroupsPage() {
   const [availableAgents, setAvailableAgents] = useState<AgentConfig[]>([]);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingWorkgroup, setEditingWorkgroup] = useState<WorkgroupConfig | null>(null);
+  const [executingWorkgroup, setExecutingWorkgroup] = useState<WorkgroupConfig | null>(null); // State for the running workgroup
+  const [isExecutionModalOpen, setIsExecutionModalOpen] = useState(false); // State for execution modal visibility
   const { toast } = useToast();
 
   const orchestratorAgent = useMemo(() =>
@@ -142,7 +143,7 @@ export default function WorkgroupsPage() {
     if (workgroup) {
       setEditingWorkgroup(workgroup);
       // Filter out orchestrator ID for the form state
-      const selectableAgentIds = workgroup.agentIds.filter(id => id !== orchestratorAgent.id);
+      const selectableAgentIds = workgroup.agentIds.filter(id => id !== orchestratorAgent?.id);
       reset({
         name: workgroup.name,
         description: workgroup.description,
@@ -197,13 +198,21 @@ export default function WorkgroupsPage() {
   };
 
   const handleRunWorkgroup = (workgroup: WorkgroupConfig) => {
-    // Placeholder for running the workgroup (actual AutoGen execution would be complex)
+     // Check if orchestrator exists and is included
+    if (!orchestratorAgent || !workgroup.agentIds.includes(orchestratorAgent.id)) {
+      toast({
+        title: 'Error de Configuración',
+        description: `El grupo "${workgroup.name}" no incluye al agente Orquestador necesario o este no existe.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+    setExecutingWorkgroup(workgroup);
+    setIsExecutionModalOpen(true);
     toast({
-      title: 'Iniciando Grupo de Trabajo (Simulado)',
-      description: `El grupo "${workgroup.name}" comenzaría a ejecutar su tarea: "${workgroup.task.substring(0, 50)}..."`,
+      title: 'Iniciando Grupo de Trabajo',
+      description: `Abriendo vista de ejecución para "${workgroup.name}".`,
     });
-    console.log("Ejecutando grupo de trabajo (simulado):", workgroup);
-    // Here you would typically trigger a backend process or a complex client-side orchestration.
   };
 
   const getAgentNameById = (agentId: string): string => {
@@ -219,6 +228,7 @@ export default function WorkgroupsPage() {
   };
 
   return (
+    <>
     <Dialog open={isFormOpen} onOpenChange={handleDialogVisibilityChange}>
       <div className="space-y-6">
         <Card className="shadow-lg w-full max-w-6xl mx-auto"> {/* Increased width */}
@@ -400,5 +410,19 @@ export default function WorkgroupsPage() {
         </DialogContent>
       </div>
     </Dialog>
+
+      {/* Workgroup Execution Modal */}
+      {executingWorkgroup && (
+        <WorkgroupExecutionModal
+          isOpen={isExecutionModalOpen}
+          onClose={() => {
+            setIsExecutionModalOpen(false);
+            setExecutingWorkgroup(null);
+          }}
+          workgroup={executingWorkgroup}
+          agents={availableAgents}
+        />
+      )}
+    </>
   );
 }
