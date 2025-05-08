@@ -58,7 +58,7 @@ const defaultWorkgroup: Omit<WorkgroupConfig, 'id' | 'agentIds'> & { agentNames:
     "IngenieroPruebas",
     "IngenieroDevOps",
     "RepresentanteUsuario",
-    "SimuladorInteraccionUsuario",
+    // "SimuladorInteraccionUsuario", // REMOVED
     // "OrquestadorFlujoAgentes" // Removed from explicit default list, added automatically
   ],
 };

@@ -70,12 +70,12 @@ const defaultAgents: Omit<AgentConfig, 'id'>[] = [
   { name: "IngenieroPruebas", description: "Escribe y ejecuta pruebas para asegurar la calidad.", systemMessage: "Eres un Ingeniero de Pruebas meticuloso. Tu objetivo es asegurar la calidad del software mediante la creación y ejecución de planes de prueba exhaustivos. Reporta los errores de forma clara.", llmConfig: 'default', executionCapability: true }, // Example capability
   { name: "IngenieroDevOps", description: "Gestiona infraestructura, despliegues y CI/CD.", systemMessage: "Eres un Ingeniero DevOps eficiente. Tu función es automatizar los procesos de CI/CD y gestionar la infraestructura, asegurando su disponibilidad y rendimiento.", llmConfig: 'default', executionCapability: true, virtualEnvCapability: true, readWriteCapability: true }, // Example capabilities
   { name: "RepresentanteUsuario", description: "Proporciona feedback desde la perspectiva del usuario final.", systemMessage: "Eres el Representante del Usuario. Tu perspectiva es crucial. Proporciona feedback sobre las funcionalidades desarrolladas y valida que el producto cumple con las expectativas.", llmConfig: 'default' },
-  {
-    name: "SimuladorInteraccionUsuario",
-    description: "Simula la interacción del usuario, proporciona feedback y aclara requisitos durante el desarrollo.",
-    systemMessage: "Actúas como un proxy o simulador del usuario final. Tu rol es interactuar con el equipo de desarrollo (los otros agentes) como si fueras un usuario probando la aplicación o definiendo sus necesidades. Proporciona feedback sobre las propuestas de los otros agentes, haz preguntas aclaratorias sobre los requisitos que ellos discutan, y valida que las soluciones se alinean con la tarea principal del grupo de trabajo. No generes código, enfócate en la perspectiva del usuario y en la usabilidad. Por ejemplo, si discuten una nueva función, pregunta '¿Cómo accedería un usuario a esto?' o '¿Sería esto intuitivo para alguien que no conoce el sistema?'.",
-    llmConfig: 'default'
-  },
+  // {
+  //   name: "SimuladorInteraccionUsuario",
+  //   description: "Simula la interacción del usuario, proporciona feedback y aclara requisitos durante el desarrollo.",
+  //   systemMessage: "Actúas como un proxy o simulador del usuario final. Tu rol es interactuar con el equipo de desarrollo (los otros agentes) como si fueras un usuario probando la aplicación o definiendo sus necesidades. Proporciona feedback sobre las propuestas de los otros agentes, haz preguntas aclaratorias sobre los requisitos que ellos discutan, y valida que las soluciones se alinean con la tarea principal del grupo de trabajo. No generes código, enfócate en la perspectiva del usuario y en la usabilidad. Por ejemplo, si discuten una nueva función, pregunta '¿Cómo accedería un usuario a esto?' o '¿Sería esto intuitivo para alguien que no conoce el sistema?'.",
+  //   llmConfig: 'default'
+  // },
   {
     name: "OrquestadorFlujoAgentes",
     description: "Gestiona y dirige la secuencia de interacciones entre los agentes del grupo para asegurar que la tarea se complete de manera eficiente y coherente.",
@@ -752,4 +752,3 @@ export default function AgentsPage() {
     </>
   );
 }
-
