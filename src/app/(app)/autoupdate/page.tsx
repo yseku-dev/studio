@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
@@ -43,11 +42,15 @@ import {
 type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "success" | "error" | "fixing_error" | "uploading_git" | "fixing_git_error";
 type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
 
-interface SuggestionWithStatus extends ProjectAnalysisResponse['suggestions'][0] {
+interface SuggestionWithStatus extends Omit<ProjectAnalysisResponse['suggestions'][number], 'area' | 'suggestion' | 'priority' | 'suggestedFullFileContent'> {
   id: string;
   status: SuggestionStatus;
   errorMessage?: string;
   originalContent?: string; 
+  area: string; 
+  suggestion: string; 
+  priority?: 'high' | 'medium' | 'low';
+  suggestedFullFileContent?: string; 
 }
 
 interface AnalysisProgress {
@@ -67,7 +70,7 @@ export default function AutoUpdatePage() {
   const [analysisResult, setAnalysisResult] = useState<ProjectAnalysisResponse | null>(null);
   const [currentAnalysisError, setCurrentAnalysisError] = useState<string | null>(null);
   const [suggestionsWithStatus, setSuggestionsWithStatus] = useState<SuggestionWithStatus[]>([]);
-  const [isDownloading, setIsDownloading] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(isDownloading);
   const [projectFiles, setProjectFiles] = useState<Awaited<ReturnType<typeof getApplicationSourceBundle>>['files']>([]);
   const [analysisPreferences, setAnalysisPreferences] = useState<string>("");
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ processed: 0, total: 0 });
@@ -154,7 +157,7 @@ export default function AutoUpdatePage() {
 
 
     const initialLogs = isRetry ? [...detailedLogs] : []; 
-    initialLogs.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? 'Reintentando' : 'Iniciando'} auto-análisis con ${currentProviderConfig.name}...`);
+    initialLogs.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? 'Reintentando' : 'Iniciando'} auto-análisis de la aplicación con ${currentProviderConfig.name}...`);
     setStatus("loading_source"); 
     setAnalysisResult(null);
     setCurrentAnalysisError(null); 
@@ -203,6 +206,10 @@ export default function AutoUpdatePage() {
           id: `suggestion-${index}-${Date.now()}`,
           status: currentStatus,
           originalContent: relatedFile?.content,
+		  area: s.area,
+		  suggestion: s.suggestion,
+		  priority: s.priority,
+		  suggestedFullFileContent: s.suggestedFullFileContent
         };
       });
       setSuggestionsWithStatus(initialSuggestions);
@@ -324,6 +331,10 @@ export default function AutoUpdatePage() {
           ...s, 
           status: "applied", 
           originalContent: result.newContent, 
+		  area: s.area,
+		  suggestion: s.suggestion,
+		  priority: s.priority,
+		  suggestedFullFileContent: s.suggestedFullFileContent
         } : s));
       toast({ title: "Sugerencia Aplicada", description: `El cambio para ${baseFilePath} se ha aplicado. Revisa la consola y los logs.`});
       currentLogsCopy.push(`[CLIENT SUCCESS ${new Date().toISOString()}] Sugerencia aplicada a ${baseFilePath}. El contenido del archivo ha sido actualizado.`);
@@ -338,7 +349,11 @@ export default function AutoUpdatePage() {
       }));
 
     } else {
-      setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: result.error} : s));
+      setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: result.error,
+		  area: s.area,
+		  suggestion: s.suggestion,
+		  priority: s.priority,
+		  suggestedFullFileContent: s.suggestedFullFileContent } : s));
       toast({ title: "Error al Aplicar", description: result.error || `No se pudo aplicar el cambio a ${baseFilePath}.`, variant: "destructive"});
       currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al aplicar sugerencia a ${baseFilePath}: ${result.error}`);
     }
@@ -390,7 +405,7 @@ export default function AutoUpdatePage() {
                 variant: "destructive",
             });
             setIsDownloading(false);
-            currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener código fuente para ZIP: ${bundleResult.error || "Desconocido"}`);
+            currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener código fuente para ZIP: ${bundleResult.error}`);
             setDetailedLogs(currentLogsCopy);
             return;
         }
@@ -513,18 +528,6 @@ export default function AutoUpdatePage() {
     setGitUploadRetryCount(0); // Start count from 0 for the first attempt logic in performGitUpload
     performGitUpload(false);
   };
-
-  const handleRetryGitUploadFromModal = () => {
-    if (gitUploadRetryCount >= MAX_GIT_UPLOAD_RETRIES) {
-        toast({ title: "Máximo de Reintentos Alcanzado", description: `No se pueden realizar más de ${MAX_GIT_UPLOAD_RETRIES} intentos para la subida a Git.`, variant: "destructive" });
-        setIsAutoFixModalOpen(false);
-        return;
-    }
-    setIsAutoFixModalOpen(false);
-    // Retry count increment is handled inside performGitUpload when isRetry=true
-    performGitUpload(true);
-  };
-
 
   useEffect(() => { 
     const initialLogs: string[] = [];

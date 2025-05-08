@@ -1,4 +1,3 @@
-
 'use server';
 /**
  * @fileOverview Flujo para sugerir soluciones a mensajes de error utilizando la API LLM configurada.
@@ -9,7 +8,7 @@
  */
 
 import {z} from 'zod';
-import { makeLLMRequest, type LLMOptions, type ChatMessage } from '@/services/groq'; // Use generic service function
+import { chatWithLLM, type LLMOptions, type ChatMessage, ChatLLMPayload, ChatLLMResponse } from '@/services/groq'; // Use generic chat function
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
 
 // Schema for LLMOptions, required as part of the input
@@ -69,16 +68,22 @@ Si el error menciona límites de API (ej. TPM, RPM, "Payload Too Large", "Rate l
   ];
 
   try {
-    // Use the generic makeLLMRequest function
-    const result = await makeLLMRequest<SuggestErrorFixOutput>(
-        llmOptions,
-        messages,
-        "json_object",
-        0.3, // temperature
-        1500, // max_tokens
-        "suggestErrorFix"
-    );
-    
+    // Use the generic chatWithLLM function
+    const chatPayload: ChatLLMPayload = {
+        messages: messages,
+        options: llmOptions
+    };
+    const chatResponse: ChatLLMResponse = await chatWithLLM(chatPayload);
+
+    // Parse the JSON response
+    let result: SuggestErrorFixOutput;
+    try {
+        result = JSON.parse(chatResponse.content);
+    } catch (parseError) {
+        console.error("Error al parsear la respuesta JSON de LLM (suggestErrorFix):", parseError, "\nContenido recibido:", chatResponse.content);
+        throw new Error(`La respuesta de LLM (suggestErrorFix) no es un JSON válido. Error: ${(parseError as Error).message}`);
+    }
+
     // Validate the structure received from the LLM
     const outputValidation = SuggestErrorFixOutputSchema.safeParse(result);
     if (!outputValidation.success) {
@@ -93,3 +98,4 @@ Si el error menciona límites de API (ej. TPM, RPM, "Payload Too Large", "Rate l
     throw error;
   }
 }
+
