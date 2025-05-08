@@ -51,8 +51,8 @@ export function AppTopbar() {
           </SheetTrigger>
           <SheetContent side="left" className="w-72 p-0 bg-card">
             <SheetHeader className="p-4 border-b flex flex-row items-center justify-start text-left space-y-0">
-              <SheetTitle className="text-xl font-semibold text-primary flex items-center gap-2">
                 <PackageSearch className="h-7 w-7 text-primary" />
+              <SheetTitle className="text-xl font-semibold text-primary ml-2">
                 YskCodeAlchemist
               </SheetTitle>
             </SheetHeader>
@@ -80,29 +80,49 @@ export function AppTopbar() {
           </SheetContent>
         </Sheet>
       ) : (
-        <nav className="flex items-center gap-1 md:gap-2">
-          {navItems.map((item) => (
-            <Button
-              key={item.href}
-              asChild
-              variant="ghost"
-              size="sm"
-              className={cn(
-                'text-sm font-medium transition-colors',
-                pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href))
-                  ? 'text-primary'
-                  : 'text-muted-foreground hover:text-foreground'
-              )}
-            >
-              <Link href={item.href} className="flex items-center gap-1.5 px-2 py-1">
-                <item.icon className="h-4 w-4" />
-                {item.label}
-              </Link>
-            </Button>
-          ))}
-        </nav>
+        <div className="flex items-center gap-x-1 md:gap-x-2">
+          <nav className="flex items-center">
+            {navItems
+              .filter(item => item.href !== '/settings') // Exclude settings from main nav links for desktop
+              .map((item) => (
+              <Button
+                key={item.href}
+                asChild
+                variant="ghost"
+                size="sm"
+                className={cn(
+                  'text-sm font-medium transition-colors px-2 py-1 md:px-3',
+                  pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href))
+                    ? 'text-primary'
+                    : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <Link href={item.href} className="flex items-center gap-1.5">
+                  <item.icon className="h-4 w-4" />
+                  {item.label}
+                </Link>
+              </Button>
+            ))}
+          </nav>
+          {/* Standalone Settings Button for desktop */}
+          <Button
+            asChild
+            variant="ghost"
+            size="icon"
+            className={cn(
+              'transition-colors ml-2', // Added margin for separation
+              pathname === '/settings'
+                ? 'text-primary bg-primary/10'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+            )}
+            aria-label="Configuración"
+          >
+            <Link href="/settings">
+              <Settings className="h-5 w-5" />
+            </Link>
+          </Button>
+        </div>
       )}
     </header>
   );
 }
-
