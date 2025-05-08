@@ -460,7 +460,8 @@ export async function handleGetErrorFixSuggestion(
   errorMessage: string,
   apiKey: string,
   modelName: string,
-  executionLogs?: string[]
+  executionLogs?: string[],
+  customContext?: string // Parámetro opcional para contexto personalizado
 ): Promise<AutoFixSuggestionResult> {
    const log = (message: string, level: 'INFO' | 'ERROR' = 'INFO') => {
         const timestampedMessage = `[AutoFix ${level} ${new Date().toISOString()}] ${message}`;
@@ -481,9 +482,13 @@ export async function handleGetErrorFixSuggestion(
     timeoutMs: GROQ_API_TIMEOUT_MS, 
   };
 
+  // Usar customContext si se proporciona, de lo contrario usar el contexto por defecto.
+  const contextForIA = customContext || "Error ocurrido durante la función AutoUpdate (análisis del propio código de CodeAlchemist). Por favor, proporciona un análisis de causa raíz y sugerencias de solución específicas. Si el error es por límites de API, explica cómo mitigar el problema (ej. reducir payloads, ajustar timeouts, fragmentar datos, etc.).";
+  log(`Contexto para la IA (AutoFix): "${contextForIA.substring(0,100)}..."`, 'INFO');
+
   const input: SuggestErrorFixInput = {
     error_message: errorMessage,
-    context: "Error ocurrido durante la función AutoUpdate (análisis del propio código de CodeAlchemist). Por favor, proporciona un análisis de causa raíz y sugerencias de solución específicas. Si el error es por límites de API, explica cómo mitigar el problema (ej. reducir payloads, ajustar timeouts, fragmentar datos, etc.).",
+    context: contextForIA,
     groqOptions: groqOptions,
   };
 
@@ -634,3 +639,4 @@ export async function handleUploadToGit(
 
 
     
+

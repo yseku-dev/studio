@@ -28,7 +28,7 @@ import { Label } from '@/components/ui/label';
 import { Progress } from "@/components/ui/progress";
 
 
-type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "success" | "error" | "fixing_error" | "uploading_git";
+type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "success" | "error" | "fixing_error" | "uploading_git" | "fixing_git_error";
 type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
 
 interface SuggestionWithStatus extends FlowSuggestionUnit {
@@ -171,8 +171,9 @@ export default function AutoUpdatePage() {
     }
   };
   
-  const handleAttemptAutoFix = async () => {
-    if (!currentAnalysisError || !apiKey || !modelName) {
+  const handleAttemptAutoFix = async (errorToFix?: string | null, errorContext?: string) => {
+    const targetError = errorToFix || currentAnalysisError;
+    if (!targetError || !apiKey || !modelName) {
       toast({
         title: "Información Faltante",
         description: "No hay error actual para corregir o falta configuración de API.",
@@ -181,13 +182,14 @@ export default function AutoUpdatePage() {
       return;
     }
     const newLogs = [...detailedLogs];
-    newLogs.push(`[CLIENT ${new Date().toISOString()}] Intentando auto-corrección para el error: ${currentAnalysisError.substring(0, 100)}...`);
-    setStatus("fixing_error");
+    newLogs.push(`[CLIENT ${new Date().toISOString()}] Intentando auto-corrección para el error: ${targetError.substring(0, 100)}...`);
+    const prevStatus = status;
+    setStatus(errorContext?.toLowerCase().includes("git") ? "fixing_git_error" : "fixing_error");
     setAutoFixSuggestion(null);
     setDetailedLogs(newLogs);
     toast({ title: "Intentando Auto-Corrección", description: "Consultando a la IA para una posible solución..." });
 
-    const fixResult = await handleGetErrorFixSuggestion(currentAnalysisError, apiKey, modelName, newLogs);
+    const fixResult = await handleGetErrorFixSuggestion(targetError, apiKey, modelName, newLogs, errorContext);
     setDetailedLogs(newLogs);
 
     if (fixResult.success && fixResult.data) {
@@ -203,7 +205,8 @@ export default function AutoUpdatePage() {
       });
       newLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener sugerencia de corrección: ${fixResult.error || "Desconocido"}`);
     }
-    setStatus("error"); 
+    // Revert to previous error state or success if analysis was successful before fix attempt
+    setStatus(prevStatus === "fixing_error" || prevStatus === "fixing_git_error" ? (analysisResult ? "success" : "error") : prevStatus ); 
     setDetailedLogs(newLogs);
   };
 
@@ -370,6 +373,8 @@ export default function AutoUpdatePage() {
     setIsDownloading(false);
   };
 
+  const [currentGitError, setCurrentGitError] = useState<string | null>(null);
+
   const handleGitUpload = async () => {
     const { repoUrl, username, email, pat } = gitConfig;
     if (!repoUrl || !username || !email || !pat) {
@@ -380,7 +385,7 @@ export default function AutoUpdatePage() {
         });
         return;
     }
-
+    setCurrentGitError(null);
     setStatus("uploading_git");
     const currentLogs = [...detailedLogs];
     currentLogs.push(`[CLIENT ${new Date().toISOString()}] Iniciando subida a Git: ${repoUrl.replace(pat, '********')}`); // Don't log PAT
@@ -397,15 +402,27 @@ export default function AutoUpdatePage() {
             description: result.message,
             duration: 7000,
         });
+         setStatus(analysisResult ? "success" : "idle");
     } else {
+        setCurrentGitError(result.message);
         toast({
             title: "Error en Subida a Git",
             description: result.message,
             variant: "destructive",
             duration: 10000,
+             action: (
+                <Button 
+                    variant="outline" 
+                    size="sm"
+                    className="ml-auto border-destructive/50 text-destructive hover:bg-destructive/20 hover:text-destructive-foreground"
+                    onClick={() => handleAttemptAutoFix(result.message, "Error ocurrido durante la subida del código fuente a un repositorio Git. Analiza este error de Git y sugiere posibles causas y soluciones. Por ejemplo, si el error es 'src refspec main does not match any', podría ser porque la rama local 'main' no existe o el repositorio remoto no tiene una rama 'main'. Sugiere comandos Git para verificar y solucionar, como verificar ramas locales y remotas, o hacer push a una rama específica.")}
+                >
+                    <Settings2 className="mr-2 h-4 w-4"/> Auto-Fix
+                </Button>
+            )
         });
+        setStatus("error"); // Set to general error, or a more specific git error state if preferred
     }
-    setStatus(analysisResult ? "success" : "idle"); 
   };
 
 
@@ -421,7 +438,7 @@ export default function AutoUpdatePage() {
 
 
   const isGitConfigured = gitConfig.repoUrl && gitConfig.username && gitConfig.email && gitConfig.pat;
-  const isProcessing = status === "analyzing" || status === "loading_source" || status === "fixing_error" || status === "uploading_git";
+  const isProcessing = status === "analyzing" || status === "loading_source" || status === "fixing_error" || status === "uploading_git" || status === "fixing_git_error";
 
 
   return (
@@ -503,7 +520,7 @@ export default function AutoUpdatePage() {
             </Button>
           </div>
 
-          {(status === "analyzing" || status === "success" || status === "error" || status === "uploading_git") && (analysisProgress.total > 0 || status === "loading_source" || (status === "analyzing" && analysisProgress.total === 0)) && (
+          {(status === "analyzing" || status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error") && (analysisProgress.total > 0 || status === "loading_source" || (status === "analyzing" && analysisProgress.total === 0)) && (
             <div className="mt-4 space-y-2">
                 <Label className="text-sm text-foreground">
                     {status === "loading_source" ? "Cargando código fuente..." :
@@ -511,10 +528,12 @@ export default function AutoUpdatePage() {
                         (analysisProgress.total > 0 ? `Procesando fragmentos... (${analysisProgress.processed}/${analysisProgress.total})` : "Iniciando análisis, calculando total de fragmentos...") : 
                      status === "success" ? `Análisis completado (${analysisProgress.processed}/${analysisProgress.total} fragmentos).` : 
                      status === "error" ? `Análisis interrumpido (${analysisProgress.processed > 0 ? `${analysisProgress.processed}/` : ''}${analysisProgress.total > 0 ? analysisProgress.total : 'desconocido'} fragmentos).` :
-                     status === "uploading_git" ? "Subiendo a Git..." : ""}
+                     status === "uploading_git" ? "Subiendo a Git..." :
+                     status === "fixing_error" ? "Intentando auto-corrección de error de análisis..." :
+                     status === "fixing_git_error" ? "Intentando auto-corrección de error de Git..." : ""}
                 </Label>
                 <Progress 
-                    value={analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 : (status === "loading_source" || (status === "analyzing" && analysisProgress.total === 0)) ? 0 : (status === "success" || status === "error" || status === "uploading_git" ? 100 : 0) } 
+                    value={analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 : (status === "loading_source" || (status === "analyzing" && analysisProgress.total === 0)) ? 0 : (status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error" ? 100 : 0) } 
                     className="w-full h-3" 
                 />
                 {(analysisProgress.total > 0 || (status === "error" && analysisProgress.processed > 0)) && (
@@ -694,38 +713,38 @@ export default function AutoUpdatePage() {
               <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos, especialmente si el código es extenso.</p>
             </div>
           )}
-          {status === "error" && currentAnalysisError && ( 
+          {status === "error" && (currentAnalysisError || currentGitError) && ( 
              <Card className="mt-6 border-destructive bg-destructive/10">
                <CardHeader className="pb-2">
                 <CardTitle className="text-lg flex items-center gap-2 text-destructive"> 
                   <AlertTriangle className="h-6 w-6" />
-                  Error en el Auto-Análisis
+                  Error en Operación
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                <p className="text-destructive font-medium">Ocurrió un error durante el auto-análisis:</p> 
+                <p className="text-destructive font-medium">Ocurrió un error:</p> 
                 <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50">
-                    <pre className="text-xs text-foreground whitespace-pre-wrap">{currentAnalysisError}</pre> 
+                    <pre className="text-xs text-foreground whitespace-pre-wrap">{currentAnalysisError || currentGitError}</pre> 
                 </ScrollArea>
                 <div className="flex gap-2 mt-2">
-                    <Button variant="outline" size="sm" onClick={() => handleCopyLogs(currentAnalysisError)} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground">
+                    <Button variant="outline" size="sm" onClick={() => handleCopyLogs(currentAnalysisError || currentGitError)} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground">
                         <Copy className="mr-2 h-4 w-4"/> Copiar Mensaje de Error
                     </Button>
                     <Button 
                         variant="outline" 
                         size="sm" 
-                        onClick={handleAttemptAutoFix} 
-                        disabled={status === "fixing_error" || !apiKey || !modelName}
+                        onClick={() => handleAttemptAutoFix(currentAnalysisError || currentGitError, currentGitError ? "Error ocurrido durante la subida del código fuente a un repositorio Git. Analiza este error de Git y sugiere posibles causas y soluciones. Por ejemplo, si el error es 'src refspec main does not match any', podría ser porque la rama local 'main' no existe o el repositorio remoto no tiene una rama 'main'. Sugiere comandos Git para verificar y solucionar, como verificar ramas locales y remotas, o hacer push a una rama específica." : undefined)} 
+                        disabled={status === "fixing_error" || status === "fixing_git_error" || !apiKey || !modelName}
                         className="text-accent border-accent/50 hover:bg-accent/20 hover:text-accent-foreground"
                     >
-                        {status === "fixing_error" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Settings2 className="mr-2 h-4 w-4"/>}
+                        {(status === "fixing_error" || status === "fixing_git_error") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Settings2 className="mr-2 h-4 w-4"/>}
                          Auto-Fix (Experimental)
                     </Button>
                 </div>
               </CardContent>
             </Card>
           )}
-          {status === "fixing_error" && (
+          {(status === "fixing_error" || status === "fixing_git_error") && (
              <div className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[150px] mt-6">
               <Loader2 className="h-10 w-10 animate-spin text-accent mb-4" />
               <p className="text-lg text-foreground">Intentando obtener sugerencia de Auto-Corrección...</p>
@@ -779,3 +798,4 @@ export default function AutoUpdatePage() {
 }
 
     
+
