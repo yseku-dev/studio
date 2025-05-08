@@ -363,12 +363,12 @@ export default function AgentsPage() {
                         <CardDescription className="text-xs text-muted-foreground h-8 line-clamp-2">{agent.description}</CardDescription>
                       </CardHeader>
                       <CardContent className="flex-grow space-y-3 pt-2 pb-4">
-                         <p className="text-xs text-foreground">
+                         <div className="text-xs text-foreground"> {/* Changed from p to div */}
                            <strong>Mensaje de Sistema:</strong>
                            <ScrollArea className="h-16 mt-1 p-1.5 border rounded bg-muted/50 text-xs">
                              <pre className="whitespace-pre-wrap">{agent.systemMessage}</pre>
                            </ScrollArea>
-                         </p>
+                         </div>
                          <p className="text-xs text-foreground">
                            <strong>Config LLM:</strong>
                            <span className="ml-1 text-muted-foreground">{getLLMConfigDisplay(agent.llmConfig)}</span>
@@ -500,5 +500,3 @@ export default function AgentsPage() {
     </Dialog>
   );
 }
-
-    
