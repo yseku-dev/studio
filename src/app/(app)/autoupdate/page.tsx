@@ -70,7 +70,7 @@ export default function AutoUpdatePage() {
   const [analysisResult, setAnalysisResult] = useState<ProjectAnalysisResponse | null>(null);
   const [currentAnalysisError, setCurrentAnalysisError] = useState<string | null>(null);
   const [suggestionsWithStatus, setSuggestionsWithStatus] = useState<SuggestionWithStatus[]>([]);
-  const [isDownloading, setIsDownloading] = useState(isDownloading);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [projectFiles, setProjectFiles] = useState<Awaited<ReturnType<typeof getApplicationSourceBundle>>['files']>([]);
   const [analysisPreferences, setAnalysisPreferences] = useState<string>("");
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ processed: 0, total: 0 });
@@ -908,7 +908,7 @@ export default function AutoUpdatePage() {
                   <AlertDialogCancel onClick={() => setIsAutoFixModalOpen(false)}>Cerrar</AlertDialogCancel>
                   {(status === "error" && currentGitError && gitUploadRetryCount < MAX_GIT_UPLOAD_RETRIES) && (
                     <AlertDialogAction 
-                      onClick={handleRetryGitUploadFromModal}
+                      onClick={() => handleRetryGitUploadFromModal()}
                       className="bg-primary hover:bg-primary/90"
                       disabled={isProcessing}
                     >
