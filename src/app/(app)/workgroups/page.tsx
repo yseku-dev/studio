@@ -26,6 +26,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger, // Added missing import
 } from "@/components/ui/alert-dialog"; // Import AlertDialog
 
 const ORCHESTRATOR_AGENT_NAME = "OrquestadorFlujoAgentes";
