@@ -47,9 +47,22 @@ export async function handleAutoAnalyzeAppSource(
   const logError = (message: string, error?: any) => {
     let fullMessage = `[ERROR ${new Date().toISOString()}] ${message}`;
     if (error) {
-      fullMessage += ` | Detalle: ${error instanceof Error ? error.message : JSON.stringify(error)}`;
+      let errorDetail = "No se pudo serializar el detalle del error.";
+      try {
+        errorDetail = error instanceof Error ? error.message : JSON.stringify(error);
+      } catch (e) {
+        // Fallback if JSON.stringify fails
+        if (error instanceof Error) {
+            errorDetail = error.message;
+        } else if (typeof error.toString === 'function') {
+            errorDetail = error.toString();
+        }
+        // else errorDetail remains "No se pudo serializar el detalle del error."
+      }
+      fullMessage += ` | Detalle: ${errorDetail}`;
+
       if (error instanceof Error && error.stack) {
-        fullMessage += ` | Stack: ${error.stack}`;
+        fullMessage += ` | Stack: ${error.stack.substring(0, 500)}...`; // Truncate stack for brevity in logs
       }
     }
     console.error(fullMessage);
@@ -501,3 +514,4 @@ export async function handleGetErrorFixSuggestion(
     return { success: false, error: `Falló la obtención de sugerencia para corrección: ${specificErrorMessage}` };
   }
 }
+
