@@ -541,6 +541,8 @@ export async function handleUploadToGit(
     }
 
     let tempRepoPath: string | undefined;
+    const defaultBranch = 'main'; 
+
     try {
         log("Paso 1: Obtener el paquete de código fuente más reciente...", 'INFO');
         const sourceBundle = await getApplicationSourceBundle(false, internalLogs);
@@ -566,6 +568,22 @@ export async function handleUploadToGit(
         await git.init();
         log("Repositorio Git inicializado.", 'INFO');
 
+        // Asegurar que la rama actual sea defaultBranch (ej. 'main')
+        log(`Paso 3.1: Asegurando que la rama local sea '${defaultBranch}'...`, 'INFO');
+        const currentBranchSummary = await git.branchLocal();
+        if (currentBranchSummary.current !== defaultBranch) {
+            if (currentBranchSummary.all.includes(defaultBranch)) { // Si 'main' existe pero no es la actual
+                 await git.checkout(defaultBranch);
+                 log(`Cambiado a la rama local existente '${defaultBranch}'.`, 'INFO');
+            } else { // Si 'main' no existe localmente, renombrar la actual (que podría ser 'master')
+                 await git.branch(['-M', defaultBranch]);
+                 log(`Rama actual renombrada a '${defaultBranch}'.`, 'INFO');
+            }
+        } else {
+            log(`La rama local actual ya es '${defaultBranch}'.`, 'INFO');
+        }
+
+
         log("Paso 4: Configurando usuario y email de Git...", 'INFO');
         await git.addConfig('user.name', gitConfig.username);
         await git.addConfig('user.email', gitConfig.email);
@@ -577,7 +595,7 @@ export async function handleUploadToGit(
            const dirForFile = path.dirname(filePath);
            await fs.mkdir(dirForFile, { recursive: true });
            await fs.writeFile(filePath, file.content, 'utf-8');
-           log(`Archivo copiado a ${filePath}`, 'DETAIL');
+           // log(`Archivo copiado a ${filePath}`, 'DETAIL'); // Demasiado verboso
         }
         log("Archivos copiados al repositorio temporal.", 'INFO');
 
@@ -587,30 +605,24 @@ export async function handleUploadToGit(
 
         log(`Paso 7: Realizando commit con mensaje: "${commitMessage}"`, 'INFO');
         const commitResult = await git.commit(commitMessage);
-        log(`Commit realizado. SHA: ${commitResult.commit}. Resumen: ${commitResult.summary.changes} cambios, ${commitResult.summary.insertions} inserciones, ${commitResult.summary.deletions} eliminaciones.`, 'INFO');
-        
-        if (commitResult.summary.changes === 0 && !commitResult.commit) {
+
+        if (!commitResult.commit && commitResult.summary.changes === 0) { // No commit SHA and no changes
              log("No hay cambios para hacer commit. La subida a Git se considera exitosa sin push.", 'WARN');
              return { success: true, message: "No se detectaron cambios en el código fuente para subir a Git.", logs: internalLogs };
         }
+        log(`Commit realizado. SHA: ${commitResult.commit || 'N/A'}. Resumen: ${commitResult.summary.changes} cambios, ${commitResult.summary.insertions} inserciones, ${commitResult.summary.deletions} eliminaciones.`, 'INFO');
 
 
-        log("Paso 8: Añadiendo repositorio remoto...", 'INFO');
+        log("Paso 8: Configurando repositorio remoto 'origin'...", 'INFO');
         const authenticatedRepoUrl = gitConfig.repoUrl.replace("https://", `https://${encodeURIComponent(gitConfig.username)}:${encodeURIComponent(gitConfig.pat)}@`);
         
-        try {
-            await git.getRemotes(true); // Check if 'origin' remote exists
-            log("El remoto 'origin' ya existe. Intentando actualizar URL...", 'DETAIL');
-            await git.remote(['set-url', 'origin', authenticatedRepoUrl]);
-        } catch (e) { // If remote doesn't exist or other error
-            log("El remoto 'origin' no existe o hubo un error al verificar. Añadiendo nuevo remoto...", 'DETAIL');
-            await git.addRemote('origin', authenticatedRepoUrl);
-        }
-        log(`Repositorio remoto 'origin' configurado para ${gitConfig.repoUrl.replace(gitConfig.pat, '********')}`, 'INFO');
-
-        const defaultBranch = 'main'; // Or make this configurable
+        // En un repo temporal nuevo, siempre añadimos el remote, no necesitamos set-url.
+        await git.addRemote('origin', authenticatedRepoUrl);
+        log(`Repositorio remoto 'origin' añadido y configurado para ${gitConfig.repoUrl.replace(gitConfig.pat, '********')}`, 'INFO');
+        
         log(`Paso 9: Realizando push a la rama '${defaultBranch}'...`, 'INFO');
-        await git.push(['-u', 'origin', defaultBranch]);
+        // Usar -u para establecer upstream y crear la rama en el remoto si no existe.
+        await git.push(['-u', 'origin', defaultBranch]); 
         log(`Push a la rama '${defaultBranch}' completado.`, 'INFO');
 
         const successMsg = `Subida a Git completada exitosamente al repositorio ${gitConfig.repoUrl.replace(gitConfig.pat, '********')}.`;
@@ -639,4 +651,5 @@ export async function handleUploadToGit(
 
 
     
+
 
