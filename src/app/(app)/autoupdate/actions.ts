@@ -19,8 +19,9 @@ interface AutoUpdateAnalysisResult {
   detailedExecutionLogs?: string[];
 }
 
-const MAX_CHARS_PER_CHUNK = 7500; 
+const MAX_CHARS_PER_CHUNK = 5500; // Reduced from 7500 to 5500
 const GROQ_API_TIMEOUT_MS = 60000 * 1; // 1 minuto por chunk
+const INTER_CHUNK_PROCESSING_DELAY_MS = 5000; // Increased from 2000ms to 5000ms (5 seconds)
 
 export async function handleAutoAnalyzeAppSource(
   apiKey: string,
@@ -205,6 +206,13 @@ export async function handleAutoAnalyzeAppSource(
       processedChunks++;
       log(`Fragmento ${currentChunkNum}/${totalChunks} procesado exitosamente.`);
       logDetail(`Respuesta del fragmento ${currentChunkNum}: ${JSON.stringify(result).substring(0,200)}...`);
+      
+      // Añadir un retraso aquí si hay más fragmentos por procesar
+      if (processedChunks < totalChunks) {
+        log(`Esperando ${INTER_CHUNK_PROCESSING_DELAY_MS}ms antes del siguiente fragmento para gestionar los límites de TPM.`);
+        await new Promise(resolve => setTimeout(resolve, INTER_CHUNK_PROCESSING_DELAY_MS));
+      }
+
     } catch (error) {
       let errorMessage = "Ocurrió un error desconocido durante el análisis de un fragmento.";
       if (error instanceof Error) {
