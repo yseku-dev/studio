@@ -383,18 +383,19 @@ export default function AutoUpdatePage() {
 
     setStatus("uploading_git");
     const currentLogs = [...detailedLogs];
-    currentLogs.push(`[CLIENT ${new Date().toISOString()}] Iniciando subida a Git: ${repoUrl}`);
+    currentLogs.push(`[CLIENT ${new Date().toISOString()}] Iniciando subida a Git: ${repoUrl.replace(pat, '********')}`); // Don't log PAT
     setDetailedLogs(currentLogs);
-    toast({ title: "Subiendo a Git...", description: `Intentando subir el código fuente a ${repoUrl.split('/').pop()}`});
+    toast({ title: "Subiendo a Git...", description: `Intentando subir el código fuente a ${repoUrl.split('/').pop()?.replace('.git',' ')}`});
 
     const result = await handleUploadToGit({ repoUrl, username, email, pat }, "CodeAlchemist: AutoUpdate Sync", currentLogs);
     
-    setDetailedLogs(currentLogs); // Actualizar logs con los de la función handleUploadToGit
+    setDetailedLogs(currentLogs); 
 
     if (result.success) {
         toast({
-            title: "Subida a Git (Simulada) Exitosa",
-            description: result.message
+            title: "Subida a Git Exitosa",
+            description: result.message,
+            duration: 7000,
         });
     } else {
         toast({
@@ -404,7 +405,7 @@ export default function AutoUpdatePage() {
             duration: 10000,
         });
     }
-    setStatus(analysisResult ? "success" : "idle"); // Volver al estado anterior o idle
+    setStatus(analysisResult ? "success" : "idle"); 
   };
 
 
@@ -413,6 +414,7 @@ export default function AutoUpdatePage() {
     initialLogs.push(`[CLIENT ${new Date().toISOString()}] AutoUpdatePage montado. Cargando archivos de proyecto iniciales...`);
     fetchProjectFiles(initialLogs).finally(() => {
         initialLogs.push(`[CLIENT ${new Date().toISOString()}] Carga inicial de archivos de proyecto completada.`);
+        setDetailedLogs(initialLogs); // Set logs after fetch
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -497,7 +499,7 @@ export default function AutoUpdatePage() {
               ) : (
                 <GitFork className="mr-2 h-5 w-5" />
               )}
-              Subir a Git (Simulado)
+              Subir a Git
             </Button>
           </div>
 
@@ -734,7 +736,7 @@ export default function AutoUpdatePage() {
         <CardFooter>
           <p className="text-xs text-muted-foreground">
             <strong>Nota Importante:</strong> El análisis se realiza sobre el código fuente completo de CodeAlchemist, potencialmente dividido en fragmentos para manejar límites de tokens y timeouts.
-            La descarga de código fuente proporciona un archivo ZIP. La subida a Git (simulada) también utiliza el estado actual del código.
+            La descarga de código fuente proporciona un archivo ZIP. La subida a Git también utiliza el estado actual del código.
             Las sugerencias de IA y su aplicación siempre deben ser revisadas cuidadosamente por un desarrollador.
           </p>
         </CardFooter>

@@ -7,6 +7,8 @@ import fs from 'fs/promises';
 import path from 'path';
 import { glob } from 'glob'; 
 import type { GroqOptions } from '@/services/groq';
+import simpleGit, { SimpleGitOptions } from 'simple-git';
+import os from 'os'; // For temporary directory
 
 interface AutoUpdateAnalysisResult {
   success: boolean;
@@ -276,7 +278,7 @@ const ignorePatterns = [
   '.env.production',
   '.env.test',
   'public/mockServiceWorker.js', 
-  '.git/**', // Ignorar directorio .git
+  '.git/**', 
 ];
 
 export async function getApplicationSourceBundle(
@@ -288,7 +290,7 @@ export async function getApplicationSourceBundle(
     const timestampedMessage = `[SourceBundle ${level} ${new Date().toISOString()}] ${message}`;
     switch(level) {
         case 'INFO': console.log(timestampedMessage); break;
-        case 'DETAIL': console.log(timestampedMessage); break;
+        case 'DETAIL': console.log(timestampedMessage); break; // Keep details for verbosity
         case 'WARN': console.warn(timestampedMessage); break;
         case 'ERROR': console.error(timestampedMessage); break;
     }
@@ -341,7 +343,7 @@ export async function getApplicationSourceBundle(
           const error = readError as NodeJS.ErrnoException;
           log(`No se pudo leer el archivo ${relativeFilePath} como texto (podría ser binario o error de permisos): ${error.message}. Código: ${error.code}`, 'WARN');
           content = `// Error: No se pudo leer el archivo ${relativeFilePath} como texto. Causa: ${error.message}.`;
-           if (!concatenate && (error.code === 'EILSEQ' || stats.size > 1024 * 1024 * 2) ) {
+           if (!concatenate && (error.code === 'EILSEQ' || stats.size > 1024 * 1024 * 2) ) { // 2MB limit for non-concatenated files
              filesData.push({ fileName: relativeFilePath, content: "// Archivo binario o muy grande no legible, contenido omitido para ZIP." });
              log(`Contenido de ${relativeFilePath} omitido para ZIP (binario/grande o error de lectura no concatenado).`, 'WARN');
              continue; 
@@ -396,7 +398,7 @@ export async function getApplicationSourceBundle(
 
 export async function applySuggestedChange(
     filePath: string, 
-    originalContent: string,
+    originalContent: string, // originalContent is not used if we are overwriting, but good for logging/diffing before write.
     suggestedContent: string,
     executionLogs?: string[]
 ): Promise<{success: boolean, error?: string, newContent?: string}> {
@@ -409,27 +411,20 @@ export async function applySuggestedChange(
 
     log(`Intentando aplicar cambio al archivo: ${filePath}`, 'INFO');
     
-    const isSimulation = false; 
-
-    if (isSimulation) {
-        log(`SIMULACIÓN: El archivo ${filePath} se habría actualizado.`, 'INFO');
-        log("SIMULACIÓN: No se han realizado cambios reales en el sistema de archivos.", 'INFO');
-        log(`SIMULACIÓN: Contenido original (primeros 300 chars): ${originalContent.substring(0,300)}...`, 'INFO');
-        log(`SIMULACIÓN: Contenido sugerido (primeros 300 chars): ${suggestedContent.substring(0,300)}...`, 'INFO');
-        return { success: true, newContent: suggestedContent };
-    }
-
+    // No simulation - actual file system operations
     try {
         const projectRoot = process.cwd();
         const fullPath = path.join(projectRoot, filePath);
 
         log(`Ruta completa del archivo para escritura: ${fullPath}`, 'INFO');
         
+        // Security check: ensure the path is within the project directory
         if (!fullPath.startsWith(projectRoot)) {
             log(`Intento de escritura fuera del directorio del proyecto denegado: ${filePath}`, 'ERROR');
             return { success: false, error: `Acceso denegado: La ruta del archivo está fuera de los límites permitidos.` };
         }
         
+        // Ensure directory exists
         const dirName = path.dirname(fullPath);
         try {
             await fs.mkdir(dirName, { recursive: true });
@@ -521,18 +516,18 @@ interface GitUploadResult {
 
 export async function handleUploadToGit(
     gitConfig: GitUploadConfig,
-    commitMessage: string = "AutoUpdate: Sincronización de código fuente",
+    commitMessage: string = "CodeAlchemist: AutoUpdate Sync",
     parentExecutionLogs?: string[]
 ): Promise<GitUploadResult> {
     const internalLogs: string[] = [];
     const log = (message: string, level: 'INFO' | 'DETAIL' | 'WARN' | 'ERROR' = 'INFO') => {
         const timestampedMessage = `[GitUpload ${level} ${new Date().toISOString()}] ${message}`;
-        // No usar console.log/warn/error aquí directamente para no duplicar si parentExecutionLogs es el mismo
+        console.log(timestampedMessage); // Log all git operations for debugging
         internalLogs.push(timestampedMessage);
         if (parentExecutionLogs) parentExecutionLogs.push(timestampedMessage);
     };
     
-    log(`Iniciando subida a Git para el repositorio: ${gitConfig.repoUrl}`, 'INFO');
+    log(`Iniciando subida a Git para el repositorio: ${gitConfig.repoUrl.replace(gitConfig.pat, '********')}`, 'INFO');
 
     if (!gitConfig.repoUrl || !gitConfig.username || !gitConfig.email || !gitConfig.pat) {
         const errMsg = "Configuración de Git incompleta. Se requieren URL, nombre de usuario, email y PAT.";
@@ -540,9 +535,7 @@ export async function handleUploadToGit(
         return { success: false, message: errMsg, logs: internalLogs };
     }
 
-    // Nota: La ejecución real de comandos Git aquí es compleja y depende del entorno del servidor.
-    // Esto es una simulación. En un entorno real, se usaría child_process.exec o una librería de Git.
-
+    let tempRepoPath: string | undefined;
     try {
         log("Paso 1: Obtener el paquete de código fuente más reciente...", 'INFO');
         const sourceBundle = await getApplicationSourceBundle(false, internalLogs);
@@ -553,64 +546,89 @@ export async function handleUploadToGit(
         }
         log(`Paquete de código fuente obtenido con ${sourceBundle.files.length} archivos.`, 'INFO');
         
-        // SIMULACIÓN DE OPERACIONES GIT
-        log("Paso 2: (Simulación) Creando un directorio temporal para el repositorio...", 'DETAIL');
-        const tempRepoPath = `/tmp/codealchemist_gitsync_${Date.now()}`;
-        log(`(Simulación) Directorio temporal: ${tempRepoPath}`, 'DETAIL');
+        log("Paso 2: Creando un directorio temporal para el repositorio...", 'DETAIL');
+        tempRepoPath = await fs.mkdtemp(path.join(os.tmpdir(), 'codealchemist-gitsync-'));
+        log(`Directorio temporal creado: ${tempRepoPath}`, 'INFO');
 
-        log("Paso 3: (Simulación) Inicializando repositorio Git...", 'DETAIL');
-        // Aquí iría: git init
-        log(`(Simulación) git init en ${tempRepoPath}`, 'INFO');
+        const gitOptions: Partial<SimpleGitOptions> = {
+            baseDir: tempRepoPath,
+            binary: 'git',
+            maxConcurrentProcesses: 1,
+        };
+        const git = simpleGit(gitOptions);
 
-        log("Paso 4: (Simulación) Configurando usuario y email de Git...", 'DETAIL');
-        // Aquí iría: git config user.name "${gitConfig.username}" y git config user.email "${gitConfig.email}"
-        log(`(Simulación) git config user.name "${gitConfig.username}"`, 'INFO');
-        log(`(Simulación) git config user.email "${gitConfig.email}"`, 'INFO');
+        log("Paso 3: Inicializando repositorio Git...", 'INFO');
+        await git.init();
+        log("Repositorio Git inicializado.", 'INFO');
 
-        log(`Paso 5: (Simulación) Copiando ${sourceBundle.files.length} archivos al repositorio temporal...`, 'DETAIL');
-        // Simular la escritura de archivos al directorio temporal.
-        // Por ejemplo: await fs.mkdir(tempRepoPath, { recursive: true });
-        // for (const file of sourceBundle.files) {
-        //    const filePath = path.join(tempRepoPath, file.fileName);
-        //    await fs.mkdir(path.dirname(filePath), { recursive: true });
-        //    await fs.writeFile(filePath, file.content, 'utf-8');
-        // }
-        log("(Simulación) Archivos copiados.", 'INFO');
+        log("Paso 4: Configurando usuario y email de Git...", 'INFO');
+        await git.addConfig('user.name', gitConfig.username);
+        await git.addConfig('user.email', gitConfig.email);
+        log(`Usuario Git configurado como "${gitConfig.username}" <${gitConfig.email}>`, 'INFO');
 
-        log("Paso 6: (Simulación) Añadiendo todos los archivos al staging de Git...", 'DETAIL');
-        // Aquí iría: git add .
-        log("(Simulación) git add .", 'INFO');
+        log(`Paso 5: Copiando ${sourceBundle.files.length} archivos al repositorio temporal...`, 'DETAIL');
+        for (const file of sourceBundle.files) {
+           const filePath = path.join(tempRepoPath, file.fileName);
+           const dirForFile = path.dirname(filePath);
+           await fs.mkdir(dirForFile, { recursive: true });
+           await fs.writeFile(filePath, file.content, 'utf-8');
+           log(`Archivo copiado a ${filePath}`, 'DETAIL');
+        }
+        log("Archivos copiados al repositorio temporal.", 'INFO');
 
-        log(`Paso 7: (Simulación) Realizando commit con mensaje: "${commitMessage}"`, 'DETAIL');
-        // Aquí iría: git commit -m "${commitMessage}"
-        log(`(Simulación) git commit -m "${commitMessage}"`, 'INFO');
+        log("Paso 6: Añadiendo todos los archivos al staging de Git...", 'INFO');
+        await git.add('./*'); // Add all files in the temp directory
+        log("Archivos añadidos al staging.", 'INFO');
 
-        log("Paso 8: (Simulación) Añadiendo repositorio remoto...", 'DETAIL');
-        // Modificar URL para incluir PAT para autenticación HTTPS
-        // Formato: https://<username>:<pat>@github.com/username/repo.git
-        const authenticatedRepoUrl = gitConfig.repoUrl.replace("https://", `https://${gitConfig.username}:${gitConfig.pat}@`);
-        // Aquí iría: git remote add origin ${authenticatedRepoUrl}
-        log(`(Simulación) git remote add origin ${gitConfig.repoUrl.replace(gitConfig.pat, "*****")}`, 'INFO'); // No loguear el PAT
+        log(`Paso 7: Realizando commit con mensaje: "${commitMessage}"`, 'INFO');
+        const commitResult = await git.commit(commitMessage);
+        log(`Commit realizado. SHA: ${commitResult.commit}. Resumen: ${commitResult.summary.changes} cambios, ${commitResult.summary.insertions} inserciones, ${commitResult.summary.deletions} eliminaciones.`, 'INFO');
+        
+        if (commitResult.summary.changes === 0 && !commitResult.commit) {
+             log("No hay cambios para hacer commit. La subida a Git se considera exitosa sin push.", 'WARN');
+             return { success: true, message: "No se detectaron cambios en el código fuente para subir a Git.", logs: internalLogs };
+        }
 
-        log("Paso 9: (Simulación) Realizando push a la rama 'main' (o 'master')...", 'DETAIL');
-        // Aquí iría: git push -u origin main (o master, puede necesitar detección o configuración)
-        log("(Simulación) git push -u origin main", 'INFO');
 
-        log("Paso 10: (Simulación) Limpiando directorio temporal...", 'DETAIL');
-        // Aquí iría: await fs.rm(tempRepoPath, { recursive: true, force: true });
-        log("(Simulación) Directorio temporal eliminado.", 'INFO');
+        log("Paso 8: Añadiendo repositorio remoto...", 'INFO');
+        const authenticatedRepoUrl = gitConfig.repoUrl.replace("https://", `https://${encodeURIComponent(gitConfig.username)}:${encodeURIComponent(gitConfig.pat)}@`);
+        
+        try {
+            await git.getRemotes(true); // Check if 'origin' remote exists
+            log("El remoto 'origin' ya existe. Intentando actualizar URL...", 'DETAIL');
+            await git.remote(['set-url', 'origin', authenticatedRepoUrl]);
+        } catch (e) { // If remote doesn't exist or other error
+            log("El remoto 'origin' no existe o hubo un error al verificar. Añadiendo nuevo remoto...", 'DETAIL');
+            await git.addRemote('origin', authenticatedRepoUrl);
+        }
+        log(`Repositorio remoto 'origin' configurado para ${gitConfig.repoUrl.replace(gitConfig.pat, '********')}`, 'INFO');
 
-        const successMsg = "Subida a Git simulada exitosamente. Revisa los logs para ver los comandos simulados.";
+        const defaultBranch = 'main'; // Or make this configurable
+        log(`Paso 9: Realizando push a la rama '${defaultBranch}'...`, 'INFO');
+        await git.push(['-u', 'origin', defaultBranch]);
+        log(`Push a la rama '${defaultBranch}' completado.`, 'INFO');
+
+        const successMsg = `Subida a Git completada exitosamente al repositorio ${gitConfig.repoUrl.replace(gitConfig.pat, '********')}.`;
         log(successMsg, 'INFO');
         return { success: true, message: successMsg, logs: internalLogs };
 
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : "Error desconocido durante la subida a Git.";
         log(`Error crítico durante la subida a Git: ${errorMsg}`, 'ERROR');
-        if (error instanceof Error && error.stack) {
-            log(`Stack del error de Git: ${error.stack}`, 'ERROR');
+        if (error instanceof Error && (error as any).stack) { // simple-git errors might have stack
+            log(`Stack del error de Git: ${(error as any).stack}`, 'ERROR');
         }
         return { success: false, message: `Falló la subida a Git: ${errorMsg}`, logs: internalLogs };
+    } finally {
+        if (tempRepoPath) {
+            log(`Paso 10: Limpiando directorio temporal ${tempRepoPath}...`, 'INFO');
+            try {
+                await fs.rm(tempRepoPath, { recursive: true, force: true });
+                log("Directorio temporal eliminado.", 'INFO');
+            } catch (cleanupError) {
+                log(`Error al limpiar el directorio temporal ${tempRepoPath}: ${(cleanupError as Error).message}`, 'ERROR');
+            }
+        }
     }
 }
 
