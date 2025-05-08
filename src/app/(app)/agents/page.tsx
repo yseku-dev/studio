@@ -108,7 +108,16 @@ export default function AgentsPage() {
       });
     } else {
       setEditingAgent(null);
-      reset({ name: '', description: '', systemMessage: '', llmConfigType: 'default' });
+      reset({ 
+        name: '', 
+        description: '', 
+        systemMessage: '', 
+        llmConfigType: 'default',
+        customProviderId: undefined,
+        customModelName: undefined,
+        customApiKey: '',
+        customApiUrl: '',
+      });
     }
     setIsFormOpen(true);
   };
@@ -164,59 +173,76 @@ export default function AgentsPage() {
     return `Personalizado (${providerName} - ${llmConfig.modelName})`;
   };
 
+  const handleDialogVisibilityChange = (open: boolean) => {
+    setIsFormOpen(open);
+    if (!open) {
+      setEditingAgent(null);
+      reset({ 
+        name: '', 
+        description: '', 
+        systemMessage: '', 
+        llmConfigType: 'default',
+        customProviderId: undefined,
+        customModelName: undefined,
+        customApiKey: '',
+        customApiUrl: '',
+      });
+    }
+  };
+
 
   return (
-    <div className="space-y-6">
-      <Card className="shadow-lg">
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="text-2xl flex items-center gap-2">
-              <Users2 className="h-6 w-6 text-primary" />
-              Gestión de Agentes IA
-            </CardTitle>
-            <CardDescription>
-              Crea y administra tus agentes de IA para AutoGen.
-            </CardDescription>
-          </div>
-          <DialogTrigger asChild>
-            <Button onClick={() => handleOpenForm()}>
-              <PlusCircle className="mr-2 h-4 w-4" /> Crear Agente
-            </Button>
-          </DialogTrigger>
-        </CardHeader>
-        <CardContent>
-          {agents.length === 0 ? (
-            <p className="text-muted-foreground text-center py-8">No hay agentes creados. ¡Empieza creando uno!</p>
-          ) : (
-            <ScrollArea className="h-[calc(100vh-20rem)]">
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                {agents.map(agent => (
-                  <Card key={agent.id} className="flex flex-col">
-                    <CardHeader>
-                      <CardTitle className="text-lg">{agent.name}</CardTitle>
-                      <CardDescription className="text-xs truncate">{agent.description}</CardDescription>
-                    </CardHeader>
-                    <CardContent className="flex-grow space-y-2">
-                       <p className="text-xs text-muted-foreground"><strong>Mensaje de Sistema:</strong> <span className="line-clamp-2">{agent.systemMessage}</span></p>
-                       <p className="text-xs text-muted-foreground"><strong>Config LLM:</strong> {getLLMConfigDisplay(agent.llmConfig)}</p>
-                    </CardContent>
-                    <CardFooter className="flex justify-end gap-2 border-t pt-4">
-                      <Button variant="outline" size="sm" onClick={() => handleOpenForm(agent)}>
-                        <Edit2 className="mr-1 h-3 w-3" /> Editar
-                      </Button>
-                      <Button variant="destructive" size="sm" onClick={() => handleDeleteAgent(agent.id)}>
-                        <Trash2 className="mr-1 h-3 w-3" /> Eliminar
-                      </Button>
-                    </CardFooter>
-                  </Card>
-                ))}
-              </div>
-            </ScrollArea>
-          )}
-        </CardContent>
-      </Card>
+    <Dialog open={isFormOpen} onOpenChange={handleDialogVisibilityChange}>
+      <div className="space-y-6">
+        <Card className="shadow-lg">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <div>
+              <CardTitle className="text-2xl flex items-center gap-2">
+                <Users2 className="h-6 w-6 text-primary" />
+                Gestión de Agentes IA
+              </CardTitle>
+              <CardDescription>
+                Crea y administra tus agentes de IA para AutoGen.
+              </CardDescription>
+            </div>
+            <DialogTrigger asChild>
+              <Button onClick={() => handleOpenForm()}>
+                <PlusCircle className="mr-2 h-4 w-4" /> Crear Agente
+              </Button>
+            </DialogTrigger>
+          </CardHeader>
+          <CardContent>
+            {agents.length === 0 ? (
+              <p className="text-muted-foreground text-center py-8">No hay agentes creados. ¡Empieza creando uno!</p>
+            ) : (
+              <ScrollArea className="h-[calc(100vh-20rem)]">
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {agents.map(agent => (
+                    <Card key={agent.id} className="flex flex-col">
+                      <CardHeader>
+                        <CardTitle className="text-lg">{agent.name}</CardTitle>
+                        <CardDescription className="text-xs truncate">{agent.description}</CardDescription>
+                      </CardHeader>
+                      <CardContent className="flex-grow space-y-2">
+                         <p className="text-xs text-muted-foreground"><strong>Mensaje de Sistema:</strong> <span className="line-clamp-2">{agent.systemMessage}</span></p>
+                         <p className="text-xs text-muted-foreground"><strong>Config LLM:</strong> {getLLMConfigDisplay(agent.llmConfig)}</p>
+                      </CardContent>
+                      <CardFooter className="flex justify-end gap-2 border-t pt-4">
+                        <Button variant="outline" size="sm" onClick={() => handleOpenForm(agent)}>
+                          <Edit2 className="mr-1 h-3 w-3" /> Editar
+                        </Button>
+                        <Button variant="destructive" size="sm" onClick={() => handleDeleteAgent(agent.id)}>
+                          <Trash2 className="mr-1 h-3 w-3" /> Eliminar
+                        </Button>
+                      </CardFooter>
+                    </Card>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+          </CardContent>
+        </Card>
 
-      <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editingAgent ? 'Editar Agente' : 'Crear Nuevo Agente'}</DialogTitle>
@@ -315,7 +341,8 @@ export default function AgentsPage() {
             </DialogFooter>
           </form>
         </DialogContent>
-      </Dialog>
-    </div>
+      </div>
+    </Dialog>
   );
 }
+
