@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { handleTestGroqConnection } from '@/app/(app)/settings/actions';
-import { handleTestGitConnection } from '@/app/(app)/settings/actions'; // Import the new action
+import { handleTestGitConnection } from '@/app/(app)/settings/actions'; 
 import { Separator } from '@/components/ui/separator';
 
 const settingsSchema = z.object({
@@ -33,26 +33,21 @@ const settingsSchema = z.object({
 
 type SettingsFormData = z.infer<typeof settingsSchema>;
 
-// Updated model list based on provided limits, ordered by TPM and then other factors
-const groqModels = [
-  // 70000 TPM
+// Original list of models
+const initialGroqModelsList = [
   "compound-beta",
   "compound-beta-mini",
-  // 30000 TPM
   "meta-llama/llama-4-scout-17b-16e-instruct",
-  // 15000 TPM
   "gemma2-9b-it",
-  "llama-guard-3-8b", // Note: Guard model, specific purpose
-  // 12000 TPM
-  "llama-3.1-70b-versatile",
-  // 6000 TPM (Ordered by perceived capability/size then alphabetically)
+  "llama-guard-3-8b",
+  "llama-3.1-70b-versatile", 
   "deepseek-r1-distill-llama-70b",
   "llama3-70b-8192",
   "meta-llama/llama-4-maverick-17b-128e-instruct",
   "mistral-saba-24b",
   "qwen-qwq-32b",
   "allam-2-7b",
-  "llama-3.1-8b-instant",
+  "llama-3.1-8b-instant", 
   "llama3-8b-8192",
 ];
 
@@ -60,7 +55,11 @@ const groqModels = [
 export function SettingsForm() {
   const { toast } = useToast();
   const [isTestingConnection, setIsTestingConnection] = useState(false);
-  const [isTestingGitConnection, setIsTestingGitConnection] = useState(false); // New state for Git test
+  const [isTestingGitConnection, setIsTestingGitConnection] = useState(false);
+  
+  const [validatedGroqModels, setValidatedGroqModels] = useState<string[]>([]);
+  const [isTestingAllModels, setIsTestingAllModels] = useState(false);
+
   const {
     register,
     handleSubmit,
@@ -73,33 +72,29 @@ export function SettingsForm() {
     resolver: zodResolver(settingsSchema),
     defaultValues: {
       groqApiKey: '',
-      groqModelName: groqModels[0], // Default to the first model in the new list
+      groqModelName: initialGroqModelsList[0], 
       gitRepositoryUrl: '',
       gitUsername: '',
       gitEmail: '',
       gitPat: '',
     },
   });
+  
+  const currentModel = watch('groqModelName');
+  const currentApiKey = watch('groqApiKey');
 
+  // Effect to load settings from localStorage
   useEffect(() => {
-    const apiKey = localStorage.getItem('codealchemist_groq_api_key');
-    const modelName = localStorage.getItem('codealchemist_groq_model_name');
-    if (apiKey) setValue('groqApiKey', apiKey, { shouldDirty: false });
+    const apiKeyFromStorage = localStorage.getItem('codealchemist_groq_api_key');
+    const modelNameFromStorage = localStorage.getItem('codealchemist_groq_model_name');
     
-    if (modelName && groqModels.includes(modelName)) {
-      setValue('groqModelName', modelName, { shouldDirty: false });
-    } else if (modelName) { // Model was saved but not in the new list
-      setValue('groqModelName', groqModels[0], { shouldDirty: true }); // Default to new first model
-       toast({
-        title: 'Modelo no Encontrado o Actualizado',
-        description: `El modelo guardado "${modelName}" no está en la lista actualizada o ha cambiado. Se ha seleccionado "${groqModels[0]}" por defecto. Por favor, verifica y guarda la configuración.`,
-        variant: 'default',
-        duration: 10000,
-      });
-    } else { // No model saved, use default
-        setValue('groqModelName', groqModels[0], { shouldDirty: false });
+    if (apiKeyFromStorage) setValue('groqApiKey', apiKeyFromStorage, { shouldDirty: false });
+    
+    if (modelNameFromStorage) {
+      setValue('groqModelName', modelNameFromStorage, { shouldDirty: false });
+    } else {
+      setValue('groqModelName', initialGroqModelsList[0], { shouldDirty: false });
     }
-
 
     const gitRepoUrl = localStorage.getItem('codealchemist_git_repository_url');
     const gitUsername = localStorage.getItem('codealchemist_git_username');
@@ -112,9 +107,80 @@ export function SettingsForm() {
     if (gitPat) setValue('gitPat', gitPat, { shouldDirty: false });
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setValue, toast]);
+  }, [setValue]); 
   
-  const currentModel = watch('groqModelName');
+  // Effect to test all Groq models when API key is available
+  useEffect(() => {
+    const testAndFilterModels = async (apiKeyToTest: string) => {
+      if (!apiKeyToTest) {
+        setValidatedGroqModels(initialGroqModelsList); // Use full list if no key
+        return;
+      }
+
+      setIsTestingAllModels(true);
+      toast({
+        title: "Validando Modelos Groq...",
+        description: "Probando conexión con todos los modelos. Esto puede tardar.",
+        duration: 7000,
+      });
+
+      const validModels: string[] = [];
+      for (const model of initialGroqModelsList) {
+        // Adding a small delay to avoid overwhelming the API, though TPM is the main concern for Groq.
+        await new Promise(resolve => setTimeout(resolve, 300)); // 300ms delay
+        const result = await handleTestGroqConnection(apiKeyToTest, model);
+        if (result.success) {
+          validModels.push(model);
+        } else {
+          console.warn(`Modelo ${model} falló la prueba de conexión: ${result.message}`);
+        }
+      }
+
+      setValidatedGroqModels(validModels);
+      setIsTestingAllModels(false);
+
+      const currentFormModel = getValues('groqModelName');
+      if (validModels.length > 0) {
+        toast({
+          title: "Validación de Modelos Completa",
+          description: `${validModels.length} de ${initialGroqModelsList.length} modelos son accesibles.`,
+        });
+        // If current model is not in the valid list, or no model was set, update it.
+        if (!validModels.includes(currentFormModel)) {
+          setValue('groqModelName', validModels[0], { shouldDirty: true });
+          toast({
+            title: 'Modelo Seleccionado Actualizado',
+            description: `El modelo ${currentFormModel ? `"${currentFormModel}"` : 'anterior'} no es válido o no está disponible. Se ha cambiado a "${validModels[0]}".`,
+            variant: 'default',
+            duration: 8000,
+          });
+        }
+      } else {
+        toast({
+          title: "No se Validaron Modelos Groq",
+          description: "Ningún modelo pasó la prueba de conexión. Verifica tu clave API o prueba los modelos individualmente.",
+          variant: "destructive",
+          duration: 10000,
+        });
+         // If no models are valid, clear the selection or set to a placeholder if form allows empty.
+         // For now, we require a model, so this state might mean the user can't proceed.
+         setValue('groqModelName', '', {shouldDirty: true}); 
+      }
+    };
+    
+    // This effect runs when currentApiKey (from watch) changes,
+    // meaning when it's loaded from localStorage or manually changed by user.
+    // We only want to auto-test when it's first loaded or explicitly if we add a button.
+    // For now, let's trigger it if currentApiKey has a value and validatedGroqModels is empty (initial state).
+    if (currentApiKey && validatedGroqModels.length === 0 && !isTestingAllModels) {
+       testAndFilterModels(currentApiKey);
+    } else if (!currentApiKey) {
+        // If API key is cleared, reset validated models to the full list (as they can't be tested)
+        setValidatedGroqModels(initialGroqModelsList);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentApiKey, getValues, setValue, toast]); // Dependencies carefully chosen
+
 
   const onSubmit: SubmitHandler<SettingsFormData> = (data) => {
     localStorage.setItem('codealchemist_groq_api_key', data.groqApiKey);
@@ -237,33 +303,49 @@ export function SettingsForm() {
               <div className="space-y-2">
                 <Label htmlFor="groqModelName" className="text-foreground">Nombre del Modelo de Groq</Label>
                 <Select
-                  value={currentModel || groqModels[0]} // Fallback to first model if currentModel is somehow undefined
+                  value={watch('groqModelName') || ''}
                   onValueChange={(value) => setValue('groqModelName', value, { shouldDirty: true })}
+                  disabled={isTestingAllModels}
                 >
                   <SelectTrigger id="groqModelName" className="w-full bg-card text-foreground">
-                    <SelectValue placeholder="Selecciona un modelo de Groq" />
+                    <SelectValue placeholder={
+                      isTestingAllModels ? "Validando modelos..." :
+                      (validatedGroqModels.length === 0 && !!currentApiKey) ? "Ningún modelo validado" :
+                      "Selecciona un modelo de Groq"
+                    } />
                   </SelectTrigger>
                   <SelectContent>
-                    {groqModels.map((model) => (
-                      <SelectItem key={model} value={model}>
-                        {model}
-                      </SelectItem>
-                    ))}
+                    {isTestingAllModels ? (
+                       <div className="p-2 text-sm text-muted-foreground text-center">Validando modelos...</div>
+                    ) : validatedGroqModels.length > 0 ? (
+                      validatedGroqModels.map((model) => (
+                        <SelectItem key={model} value={model}>
+                          {model}
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <div className="p-2 text-sm text-muted-foreground text-center">
+                        { currentApiKey 
+                          ? "No hay modelos válidos con la clave API actual."
+                          : "Introduce una clave API para validar modelos."
+                        }
+                      </div>
+                    )}
                   </SelectContent>
                 </Select>
                 {errors.groqModelName && (
                   <p className="text-sm text-destructive">{errors.groqModelName.message}</p>
                 )}
                  <p className="text-xs text-muted-foreground">
-                    Los modelos están ordenados aproximadamente por su límite de Tokens Por Minuto (TPM) y capacidad. 
-                    Modelos con TPM más alto pueden permitir un procesamiento más rápido de múltiples fragmentos.
+                    Los modelos se validan al cargar la página si existe una clave API.
+                    Modelos con TPM más alto pueden permitir un procesamiento más rápido.
                 </p>
               </div>
               <Button 
                 type="button" 
                 variant="outline" 
                 onClick={onTestConnection} 
-                disabled={isTestingConnection}
+                disabled={isTestingConnection || !watch('groqApiKey') || !watch('groqModelName')}
                 className="w-full md:w-auto text-foreground"
               >
                 {isTestingConnection ? (
@@ -271,7 +353,7 @@ export function SettingsForm() {
                 ) : (
                   <Zap className="mr-2 h-4 w-4" />
                 )}
-                Probar Conexión Groq
+                Probar Conexión Groq (Modelo Actual)
               </Button>
             </div>
           </div>
@@ -376,5 +458,3 @@ export function SettingsForm() {
     </Card>
   );
 }
-
-    
