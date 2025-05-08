@@ -34,7 +34,7 @@ const agentSchema = z.object({
   return true;
 }, {
   message: "Para configuración LLM personalizada, el proveedor y el modelo son obligatorios.",
-  path: ["customModelName"], 
+  path: ["customModelName"],
 });
 
 type AgentFormData = z.infer<typeof agentSchema>;
@@ -48,11 +48,11 @@ const defaultAgents: Omit<AgentConfig, 'id'>[] = [
   { name: "IngenieroPruebas", description: "Escribe y ejecuta pruebas para asegurar la calidad.", systemMessage: "Eres un Ingeniero de Pruebas meticuloso. Tu objetivo es asegurar la calidad del software mediante la creación y ejecución de planes de prueba exhaustivos. Reporta los errores de forma clara.", llmConfig: 'default' },
   { name: "IngenieroDevOps", description: "Gestiona infraestructura, despliegues y CI/CD.", systemMessage: "Eres un Ingeniero DevOps eficiente. Tu función es automatizar los procesos de CI/CD y gestionar la infraestructura, asegurando su disponibilidad y rendimiento.", llmConfig: 'default' },
   { name: "RepresentanteUsuario", description: "Proporciona feedback desde la perspectiva del usuario final.", systemMessage: "Eres el Representante del Usuario. Tu perspectiva es crucial. Proporciona feedback sobre las funcionalidades desarrolladas y valida que el producto cumple con las expectativas.", llmConfig: 'default' },
-  { 
-    name: "SimuladorInteraccionUsuario", 
-    description: "Simula la interacción del usuario, proporciona feedback y aclara requisitos durante el desarrollo.", 
-    systemMessage: "Actúas como un proxy o simulador del usuario final. Tu rol es interactuar con el equipo de desarrollo (los otros agentes) como si fueras un usuario probando la aplicación o definiendo sus necesidades. Proporciona feedback sobre las propuestas de los otros agentes, haz preguntas aclaratorias sobre los requisitos que ellos discutan, y valida que las soluciones se alinean con la tarea principal del grupo de trabajo. No generes código, enfócate en la perspectiva del usuario y en la usabilidad. Por ejemplo, si discuten una nueva función, pregunta '¿Cómo accedería un usuario a esto?' o '¿Sería esto intuitivo para alguien que no conoce el sistema?'.", 
-    llmConfig: 'default' 
+  {
+    name: "SimuladorInteraccionUsuario",
+    description: "Simula la interacción del usuario, proporciona feedback y aclara requisitos durante el desarrollo.",
+    systemMessage: "Actúas como un proxy o simulador del usuario final. Tu rol es interactuar con el equipo de desarrollo (los otros agentes) como si fueras un usuario probando la aplicación o definiendo sus necesidades. Proporciona feedback sobre las propuestas de los otros agentes, haz preguntas aclaratorias sobre los requisitos que ellos discutan, y valida que las soluciones se alinean con la tarea principal del grupo de trabajo. No generes código, enfócate en la perspectiva del usuario y en la usabilidad. Por ejemplo, si discuten una nueva función, pregunta '¿Cómo accedería un usuario a esto?' o '¿Sería esto intuitivo para alguien que no conoce el sistema?'.",
+    llmConfig: 'default'
   },
   {
     name: "OrquestadorFlujoAgentes",
@@ -134,10 +134,10 @@ export default function AgentsPage() {
       });
     } else {
       setEditingAgent(null);
-      reset({ 
-        name: '', 
-        description: '', 
-        systemMessage: '', 
+      reset({
+        name: '',
+        description: '',
+        systemMessage: '',
         llmConfigType: 'default',
         customProviderId: undefined,
         customModelName: undefined,
@@ -187,7 +187,7 @@ export default function AgentsPage() {
     // TODO: Also remove this agent from any workgroups
     toast({ title: 'Agente Eliminado', description: 'El agente ha sido eliminado.' });
   };
-  
+
   const getLLMConfigDisplay = (llmConfig: AgentLLMConfig): string => {
     if (llmConfig === 'default') {
       const globalProviderId = localStorage.getItem(GLOBAL_PROVIDER_ID_KEY) as LLMProviderId | null || DEFAULT_LLM_PROVIDER;
@@ -203,10 +203,10 @@ export default function AgentsPage() {
     setIsFormOpen(open);
     if (!open) {
       setEditingAgent(null);
-      reset({ 
-        name: '', 
-        description: '', 
-        systemMessage: '', 
+      reset({
+        name: '',
+        description: '',
+        systemMessage: '',
         llmConfigType: 'default',
         customProviderId: undefined,
         customModelName: undefined,
@@ -262,7 +262,7 @@ export default function AgentsPage() {
       try {
         const text = e.target?.result as string;
         const importedData = JSON.parse(text);
-        
+
         // Validate if it's an array (for multiple agents) or a single agent object
         let agentsToImport: AgentConfig[];
         if (Array.isArray(importedData)) {
@@ -296,7 +296,7 @@ export default function AgentsPage() {
             newAgentsCount++;
           }
         });
-        
+
         setAgents(updatedAgents);
         localStorage.setItem(LOCALSTORAGE_AGENTS_KEY, JSON.stringify(updatedAgents));
         toast({ title: "Importación Exitosa", description: `${newAgentsCount} agente(s) nuevo(s) añadido(s), ${updatedAgentsCount} agente(s) actualizado(s).` });
@@ -318,27 +318,27 @@ export default function AgentsPage() {
   return (
     <Dialog open={isFormOpen} onOpenChange={handleDialogVisibilityChange}>
       <div className="space-y-6">
-        <Card className="shadow-lg">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+        <Card className="shadow-lg border-primary/20">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4 border-b">
             <div className="flex-grow">
               <CardTitle className="text-2xl flex items-center gap-2">
                 <Users2 className="h-6 w-6 text-primary" />
                 Gestión de Agentes IA
               </CardTitle>
-              <CardDescription className="mt-1">
-                Crea, administra, importa y exporta tus agentes de IA.
+              <CardDescription className="mt-1 text-muted-foreground">
+                Crea, administra, importa y exporta tus agentes de IA para grupos de trabajo.
               </CardDescription>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-shrink-0">
               <Button variant="outline" size="sm" onClick={() => importFileRef.current?.click()}>
-                <UploadCloud className="mr-2 h-4 w-4" /> Importar Agentes
+                <UploadCloud className="mr-2 h-4 w-4" /> Importar
               </Button>
-              <Input 
-                type="file" 
-                ref={importFileRef} 
-                className="hidden" 
-                accept=".json" 
-                onChange={handleImportAgents} 
+              <Input
+                type="file"
+                ref={importFileRef}
+                className="hidden"
+                accept=".json"
+                onChange={handleImportAgents}
               />
               <Button variant="outline" size="sm" onClick={handleExportAllAgents} disabled={agents.length === 0}>
                 <DownloadCloud className="mr-2 h-4 w-4" /> Exportar Todos
@@ -350,30 +350,38 @@ export default function AgentsPage() {
               </DialogTrigger>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-6">
             {agents.length === 0 ? (
-              <p className="text-muted-foreground text-center py-8">No hay agentes creados. ¡Empieza creando uno o importa agentes existentes!</p>
+              <p className="text-muted-foreground text-center py-12">No hay agentes creados. ¡Empieza creando uno o importa agentes existentes!</p>
             ) : (
-              <ScrollArea className="h-[calc(100vh-22rem)]"> {/* Adjusted height */}
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              <ScrollArea className="h-[calc(100vh-18rem)]"> {/* Adjusted height */}
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                   {agents.map(agent => (
-                    <Card key={agent.id} className="flex flex-col">
-                      <CardHeader>
-                        <CardTitle className="text-lg">{agent.name}</CardTitle>
-                        <CardDescription className="text-xs truncate">{agent.description}</CardDescription>
+                    <Card key={agent.id} className="flex flex-col bg-card hover:shadow-md transition-shadow">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-lg font-semibold text-primary">{agent.name}</CardTitle>
+                        <CardDescription className="text-xs text-muted-foreground h-8 line-clamp-2">{agent.description}</CardDescription>
                       </CardHeader>
-                      <CardContent className="flex-grow space-y-2">
-                         <p className="text-xs text-muted-foreground"><strong>Mensaje de Sistema:</strong> <span className="line-clamp-2">{agent.systemMessage}</span></p>
-                         <p className="text-xs text-muted-foreground"><strong>Config LLM:</strong> {getLLMConfigDisplay(agent.llmConfig)}</p>
+                      <CardContent className="flex-grow space-y-3 pt-2 pb-4">
+                         <p className="text-xs text-foreground">
+                           <strong>Mensaje de Sistema:</strong>
+                           <ScrollArea className="h-16 mt-1 p-1.5 border rounded bg-muted/50 text-xs">
+                             <pre className="whitespace-pre-wrap">{agent.systemMessage}</pre>
+                           </ScrollArea>
+                         </p>
+                         <p className="text-xs text-foreground">
+                           <strong>Config LLM:</strong>
+                           <span className="ml-1 text-muted-foreground">{getLLMConfigDisplay(agent.llmConfig)}</span>
+                          </p>
                       </CardContent>
-                      <CardFooter className="flex justify-end gap-2 border-t pt-4">
-                        <Button variant="outline" size="sm" onClick={() => handleExportAgent(agent.id)}>
+                      <CardFooter className="flex justify-end gap-2 border-t pt-3 pb-3">
+                        <Button variant="ghost" size="sm" onClick={() => handleExportAgent(agent.id)} className="text-xs text-muted-foreground hover:text-primary">
                            <DownloadCloud className="mr-1 h-3 w-3" /> Exportar
                         </Button>
-                        <Button variant="outline" size="sm" onClick={() => handleOpenForm(agent)}>
+                        <Button variant="outline" size="sm" onClick={() => handleOpenForm(agent)} className="text-xs">
                           <Edit2 className="mr-1 h-3 w-3" /> Editar
                         </Button>
-                        <Button variant="destructive" size="sm" onClick={() => handleDeleteAgent(agent.id)}>
+                        <Button variant="destructive" size="sm" onClick={() => handleDeleteAgent(agent.id)} className="text-xs">
                           <Trash2 className="mr-1 h-3 w-3" /> Eliminar
                         </Button>
                       </CardFooter>
@@ -411,8 +419,8 @@ export default function AgentsPage() {
                   {errors.systemMessage && <p className="text-sm text-destructive mt-1">{errors.systemMessage.message}</p>}
                 </div>
 
-                <div className="space-y-2 rounded-md border p-4">
-                    <Label className="text-base">Configuración LLM del Agente</Label>
+                <div className="space-y-2 rounded-md border p-4 bg-muted/30">
+                    <Label className="text-base font-medium text-foreground">Configuración LLM del Agente</Label>
                      <Select value={watchedLlmConfigType} onValueChange={(value) => setValue('llmConfigType', value as 'default' | 'custom')}>
                         <SelectTrigger>
                             <SelectValue placeholder="Seleccionar tipo de configuración LLM" />
@@ -424,7 +432,8 @@ export default function AgentsPage() {
                     </Select>
 
                     {watchedLlmConfigType === 'custom' && (
-                        <div className="space-y-3 pt-3">
+                        <div className="space-y-3 pt-3 border-t border-border mt-3">
+                             <p className="text-xs text-muted-foreground">Define qué proveedor y modelo usará específicamente este agente.</p>
                             <div>
                                 <Label htmlFor="customProviderId">Proveedor LLM (Personalizado)</Label>
                                 <Select value={watch('customProviderId')} onValueChange={(value) => setValue('customProviderId', value as LLMProviderId)}>
@@ -441,21 +450,24 @@ export default function AgentsPage() {
                                 <>
                                     <div>
                                         <Label htmlFor="customModelName">Modelo (Personalizado)</Label>
-                                        <Select value={watch('customModelName')} onValueChange={(value) => setValue('customModelName', value)}>
+                                        <Select value={watch('customModelName') || ''} onValueChange={(value) => setValue('customModelName', value)}>
                                             <SelectTrigger id="customModelName">
                                                 <SelectValue placeholder="Seleccionar modelo" />
                                             </SelectTrigger>
                                             <SelectContent>
-                                                {availableCustomModels.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
+                                                {availableCustomModels.length > 0 ? availableCustomModels.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)
+                                                : <div className="p-2 text-sm text-muted-foreground text-center">No hay modelos para este proveedor</div>
+                                                }
                                             </SelectContent>
                                         </Select>
                                         {errors.customModelName && <p className="text-sm text-destructive mt-1">{errors.customModelName.message}</p>}
                                     </div>
-                                    
-                                    {(LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.requiresApiKey) && 
+
+                                    {(LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.requiresApiKey) &&
                                         <div>
                                             <Label htmlFor="customApiKey">Clave API (Personalizada, opcional)</Label>
                                             <Input id="customApiKey" type="password" {...register('customApiKey')} placeholder="Sobrescribir clave API global (si aplica)" />
+                                            <p className="text-xs text-muted-foreground mt-1">Deja vacío para usar la clave API global (si está configurada).</p>
                                         </div>
                                     }
                                     {(LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.id === 'lmstudio' || LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.id === 'ollama') &&
@@ -463,6 +475,7 @@ export default function AgentsPage() {
                                           <Label htmlFor="customApiUrl">URL de API (Personalizada, opcional)</Label>
                                           <Input id="customApiUrl" type="url" {...register('customApiUrl')} placeholder="Ej: http://localhost:1234/v1" />
                                           {errors.customApiUrl && <p className="text-sm text-destructive mt-1">{errors.customApiUrl.message}</p>}
+                                          <p className="text-xs text-muted-foreground mt-1">Deja vacío para usar la URL global (si está configurada).</p>
                                       </div>
                                     }
                                 </>
@@ -488,3 +501,4 @@ export default function AgentsPage() {
   );
 }
 
+    
