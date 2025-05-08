@@ -46,17 +46,19 @@ type LogEntry = {
 export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: WorkgroupExecutionModalProps) {
   const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
-  const [currentTurnInternal, setCurrentTurnInternal] = useState(0); // Use internal state for tracking
+  const [currentTurn, setCurrentTurn] = useState(0); // Renamed from currentTurnInternal
   const [conversationHistory, setConversationHistory] = useState<ChatMessage[]>([]);
   const [executionError, setExecutionError] = useState<string | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const executionControllerRef = useRef<AbortController | null>(null); // To allow cancelling
+  const isMountedRef = useRef(false); // Track mount state
   const { toast } = useToast();
 
   const orchestrator = agents.find(a => a.id === workgroup.agentIds.find(id => agents.find(a => a.id === id)?.name === ORCHESTRATOR_AGENT_NAME));
   const participantAgents = agents.filter(a => workgroup.agentIds.includes(a.id) && a.id !== orchestrator?.id);
 
   const logMessage = useCallback((logEntry: Omit<LogEntry, 'timestamp'>) => {
+    if (!isMountedRef.current) return; // Prevent logging if component unmounted
     const timestamp = new Date().toLocaleTimeString('es-ES', { hour12: false });
     setExecutionLogs(prev => [...prev, { ...logEntry, timestamp }]);
   }, []);
@@ -98,13 +100,19 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
    }, [logMessage]);
 
 
-  const runExecutionTurn = useCallback(async (turnNumber: number, currentHistory: ChatMessage[], signal: AbortSignal) => {
-    // Use passed turnNumber and currentHistory instead of possibly stale state
-    logMessage({ type: 'system', message: `Iniciando turno ${turnNumber}/${MAX_TURNS}...` });
+   const runExecutionTurn = useCallback(async (turn: number, history: ChatMessage[], signal: AbortSignal) => {
+    if (!isMountedRef.current || signal.aborted) {
+        logMessage({ type: 'system', message: 'Ejecución detenida (Componente desmontado o señal cancelada).' });
+        setIsExecuting(false);
+        return;
+    }
 
-     if (!orchestrator) {
+    logMessage({ type: 'system', message: `Iniciando turno ${turn}/${MAX_TURNS}...` });
+    setCurrentTurn(turn); // Update UI turn count
+
+    if (!orchestrator) {
         logMessage({ type: 'error', message: 'Error crítico: Agente Orquestrador no encontrado.' });
-        throw new Error('Orquestador no encontrado');
+        throw new Error('Orquestrador no encontrado');
     }
 
     const orchestratorLlmOptions = resolveAgentLLMOptions(orchestrator.llmConfig);
@@ -125,36 +133,34 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
                 llmApiUrl: llmOptions.apiUrl
             };
         } else {
-             logMessage({ type: 'error', message: `Omitiendo agente ${agent.name} debido a configuración LLM inválida.` });
+            logMessage({ type: 'error', message: `Omitiendo agente ${agent.name} debido a configuración LLM inválida.` });
         }
         return acc;
     }, {} as WorkgroupTurnPayload['participantAgentConfigs']);
-
 
     if (Object.keys(participantAgentConfigs).length === 0) {
         throw new Error("No hay agentes participantes con configuración LLM válida.");
     }
 
     const payload: WorkgroupTurnPayload = {
-      workgroupName: workgroup.name,
-      task: workgroup.task,
-      conversationHistory: currentHistory, // Use the passed history
-      orchestrator: {
-          id: orchestrator.id,
-          name: orchestrator.name,
-          systemMessage: orchestrator.systemMessage,
-          llmProviderId: orchestratorLlmOptions.providerId,
-          llmModelName: orchestratorLlmOptions.modelName,
-          llmApiKey: orchestratorLlmOptions.apiKey,
-          llmApiUrl: orchestratorLlmOptions.apiUrl
-      },
-      participantAgentConfigs: participantAgentConfigs,
-      currentTurn: turnNumber, // Use the passed turn number
-      maxTurns: MAX_TURNS
+        workgroupName: workgroup.name,
+        task: workgroup.task,
+        conversationHistory: history, // Use current history for this turn
+        orchestrator: {
+            id: orchestrator.id,
+            name: orchestrator.name,
+            systemMessage: orchestrator.systemMessage,
+            llmProviderId: orchestratorLlmOptions.providerId,
+            llmModelName: orchestratorLlmOptions.modelName,
+            llmApiKey: orchestratorLlmOptions.apiKey,
+            llmApiUrl: orchestratorLlmOptions.apiUrl
+        },
+        participantAgentConfigs: participantAgentConfigs,
+        currentTurn: turn, // Pass the current turn number
+        maxTurns: MAX_TURNS
     };
 
-    logMessage({ type: 'debug', message: `Enviando payload al servidor para el turno ${turnNumber}`, llmRequest: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
-
+    logMessage({ type: 'debug', message: `Enviando payload al servidor para el turno ${turn}`, llmRequest: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
 
     try {
         const result: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
@@ -162,85 +168,83 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
         // Log server-side logs first
         if (result.serverLogs && result.serverLogs.length > 0) {
             result.serverLogs.forEach(log => {
-                 // Attempt to parse server log format
-                 const match = log.match(/^\[(.*?)\] \[(.*?)\] (.*)$/);
-                 if (match) {
-                     const [, timestamp, type, message] = match;
-                     logMessage({
-                         timestamp: timestamp, // Use server timestamp
-                         type: type.toLowerCase() as LogEntry['type'] || 'debug',
-                         message: message,
-                     });
-                 } else {
-                     logMessage({ type: 'debug', message: `[SERVER] ${log}` }); // Log raw if format unknown
-                 }
+                const match = log.match(/^\[(.*?)\] \[(.*?)\] (.*)$/);
+                if (match) {
+                    const [, timestamp, type, message] = match;
+                    logMessage({
+                        timestamp: timestamp,
+                        type: type.toLowerCase() as LogEntry['type'] || 'debug',
+                        message: message,
+                    });
+                } else {
+                    logMessage({ type: 'debug', message: `[SERVER] ${log}` });
+                }
             });
         }
 
-
         if (result.error) {
-          logMessage({ type: 'error', message: `Error en el servidor durante el turno ${turnNumber}: ${result.error}` });
-          setExecutionError(result.error);
-          setIsExecuting(false);
-          return; // Stop execution on server error
+            logMessage({ type: 'error', message: `Error en el servidor durante el turno ${turn}: ${result.error}` });
+            setExecutionError(result.error);
+            setIsExecuting(false); // Stop execution on server error
+            return; // Stop the sequence
         }
 
-        // Update conversation history from server response
-        const nextHistory = result.updatedHistory || currentHistory;
-        setConversationHistory(nextHistory); // Update the state for the UI and the next potential start
+        // Update conversation history *before* scheduling the next turn
+        const updatedHistory = result.updatedHistory || history;
+        setConversationHistory(updatedHistory); // Update state for UI and next turn
 
-        // Log the detailed interactions if provided (optional, could make logs very long)
-         if (result.orchestratorDecision) {
-             logMessage({ type: 'orchestrator', agentName: orchestrator.name, message: `Decisión: ${result.orchestratorDecision.reason}. Próximo agente: ${getAgentById(result.orchestratorDecision.nextAgentId)?.name || result.orchestratorDecision.nextAgentId}.`, llmResponse: { raw: result.orchestratorDecision.rawOutput?.substring(0,100) } });
-         }
-         if (result.agentResponse) {
-             logMessage({ type: 'agent', agentName: getAgentById(result.agentResponse.agentId)?.name || result.agentResponse.agentId, message: `Respuesta: ${result.agentResponse.content.substring(0, 200)}...`, llmResponse: { raw: result.agentResponse.rawOutput?.substring(0,100) } });
-         }
+        // Log detailed interactions if provided
+        if (result.orchestratorDecision) {
+            const nextAgentName = getAgentById(result.orchestratorDecision.nextAgentId)?.name || result.orchestratorDecision.nextAgentId;
+            logMessage({ type: 'orchestrator', agentName: orchestrator.name, message: `Decisión: ${result.orchestratorDecision.reason}. Próximo agente: ${nextAgentName}.`, llmResponse: { raw: result.orchestratorDecision.rawOutput } });
+        }
+        if (result.agentResponse) {
+             const respondingAgentName = getAgentById(result.agentResponse.agentId)?.name || result.agentResponse.agentId;
+            logMessage({ type: 'agent', agentName: respondingAgentName, message: `Respuesta: ${result.agentResponse.content}`, llmResponse: { raw: result.agentResponse.rawOutput } });
+        }
 
-        // Update the internal turn state for the UI
-        setCurrentTurnInternal(turnNumber);
 
-        if (result.isComplete || turnNumber >= MAX_TURNS) {
-            logMessage({ type: 'system', message: `Ejecución completada (Razón: ${result.isComplete ? 'Tarea completada por orquestador' : 'Límite de turnos alcanzado'}).` });
+        if (result.isComplete || turn >= MAX_TURNS) {
+            logMessage({ type: 'system', message: `Ejecución finalizada (Razón: ${result.isComplete ? 'Tarea completada por orquestador' : 'Límite de turnos alcanzado'}).` });
             setIsExecuting(false);
         } else if (!signal.aborted) {
-            // Schedule next turn after a short delay
-             await new Promise(resolve => setTimeout(resolve, 1500)); // Delay between turns
-             if (!signal.aborted) {
-                 // Make the recursive call with the *next* turn number and the *updated* history
-                 runExecutionTurn(turnNumber + 1, nextHistory, signal);
-             } else {
-                  logMessage({ type: 'system', message: 'Ejecución cancelada por el usuario.' });
-                  setIsExecuting(false);
-             }
+            // Schedule next turn after a delay
+            await new Promise(resolve => setTimeout(resolve, 1500)); // Delay between turns
+            if (!signal.aborted && isMountedRef.current) {
+                // Recursive call with the *next* turn number and the *updated* history
+                runExecutionTurn(turn + 1, updatedHistory, signal); // Pass updated history
+            } else if (signal.aborted) {
+                 logMessage({ type: 'system', message: 'Ejecución cancelada por el usuario durante la espera.' });
+                 setIsExecuting(false);
+            }
         } else {
-             logMessage({ type: 'system', message: 'Ejecución cancelada por el usuario durante la espera.' });
-             setIsExecuting(false);
+            logMessage({ type: 'system', message: 'Ejecución cancelada por el usuario.' });
+            setIsExecuting(false);
         }
 
     } catch (error) {
-       if (error instanceof Error && error.name === 'AbortError') {
+        if (error instanceof Error && error.name === 'AbortError') {
             logMessage({ type: 'system', message: 'Ejecución cancelada por el usuario.' });
         } else {
             const errorMsg = error instanceof Error ? error.message : 'Error desconocido al procesar el turno.';
-            logMessage({ type: 'error', message: `Error en el cliente durante el turno ${turnNumber}: ${errorMsg}` });
+            logMessage({ type: 'error', message: `Error en el cliente durante el turno ${turn}: ${errorMsg}` });
             setExecutionError(errorMsg);
         }
         setIsExecuting(false); // Stop execution on client error or cancellation
     }
 
-  }, [orchestrator, resolveAgentLLMOptions, participantAgents, workgroup.name, workgroup.task, logMessage, getAgentById]); // Removed conversationHistory and currentTurn from deps
+}, [orchestrator, resolveAgentLLMOptions, participantAgents, workgroup.name, workgroup.task, logMessage, getAgentById]); // Dependencies without state that changes inside the loop
 
 
   const startExecution = useCallback(() => {
     if (isExecuting) return;
     setIsExecuting(true);
     setExecutionLogs([]);
-    const initialHistory: ChatMessage[] = []; // Start with empty history
+    const initialHistory: ChatMessage[] = [];
     setConversationHistory(initialHistory);
-    setCurrentTurnInternal(0); // Reset internal turn counter
+    setCurrentTurn(0); // Start turn count before first execution
     setExecutionError(null);
-    executionControllerRef.current = new AbortController(); // Create new controller for this run
+    executionControllerRef.current = new AbortController();
 
     logMessage({ type: 'system', message: `Iniciando ejecución del grupo de trabajo "${workgroup.name}"...` });
     logMessage({ type: 'info', message: `Tarea: ${workgroup.task}` });
@@ -248,15 +252,28 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
     logMessage({ type: 'info', message: `Participantes: ${participantAgents.map(a => a.name).join(', ')}` });
     logMessage({ type: 'info', message: `Máximo de turnos: ${MAX_TURNS}` });
 
-    // Start the first turn, passing turn number 1 and the initial empty history
+    // Start the first turn (turn 1)
     runExecutionTurn(1, initialHistory, executionControllerRef.current.signal);
 
   }, [isExecuting, workgroup.name, workgroup.task, orchestrator, participantAgents, logMessage, runExecutionTurn]);
 
+   // Effect to track mount state
+   useEffect(() => {
+        isMountedRef.current = true;
+        return () => {
+            isMountedRef.current = false;
+            // Cleanup: Abort any ongoing execution when the component unmounts
+            if (executionControllerRef.current) {
+                executionControllerRef.current.abort();
+                 console.log("Workgroup execution aborted on component unmount.");
+            }
+        };
+    }, []);
+
 
   // Start execution when modal opens
   useEffect(() => {
-    if (isOpen) {
+    if (isOpen && isMountedRef.current) { // Ensure component is mounted before starting
       startExecution();
     } else {
         // Cleanup if modal is closed while executing
@@ -264,10 +281,11 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
             executionControllerRef.current.abort();
             executionControllerRef.current = null;
         }
-         setIsExecuting(false); // Ensure execution stops
+         setIsExecuting(false); // Ensure execution stops if modal closes
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]); // Trigger simulation when modal opens
+    // Add startExecution to deps, ensure it's stable with useCallback
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, startExecution]);
 
 
   // Scroll to bottom when logs update
@@ -281,7 +299,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
   }, [executionLogs]);
 
   const handleCopyLogs = () => {
-    const logText = executionLogs.map(log => `${log.timestamp} ${log.type.toUpperCase()}${log.agentName ? ` (${log.agentName})` : ''}: ${log.message}`).join('\n');
+    const logText = executionLogs.map(log => `[${log.timestamp}] [${log.type.toUpperCase()}]${log.agentName ? ` (${log.agentName})` : ''}: ${log.message}`).join('\n');
     navigator.clipboard.writeText(logText)
       .then(() => toast({ title: 'Logs Copiados', description: 'Los logs de ejecución han sido copiados.' }))
       .catch(() => toast({ title: 'Error al Copiar', description: 'No se pudieron copiar los logs.', variant: 'destructive' }));
@@ -301,7 +319,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
         <DialogHeader className="p-6 pb-4 border-b">
           <DialogTitle className="flex items-center gap-2">
             {isExecuting ? <Loader2 className="h-5 w-5 text-primary animate-spin" /> : <Play className="h-5 w-5 text-primary" />}
-            Ejecución del Grupo: {workgroup.name} {isExecuting ? `(Turno ${currentTurnInternal}/${MAX_TURNS})` : '(Finalizado)'}
+            Ejecución del Grupo: {workgroup.name} {isExecuting && currentTurn > 0 ? `(Turno ${currentTurn}/${MAX_TURNS})` : isExecuting ? '(Iniciando...)' : '(Finalizado)'}
           </DialogTitle>
           <DialogDescription>
             Observa el flujo de trabajo entre los agentes mientras colaboran en la tarea.
@@ -360,16 +378,20 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
                                         {log.type.toUpperCase()}{log.agentName ? ` (${log.agentName})` : ''}:
                                      </span>
                                      <span className="ml-1">{log.message}</span>
-                                     {/* Optionally display raw LLM request/response in debug mode? */}
-                                     {/* {isDebug && log.llmRequest && <details><summary>Req</summary>{JSON.stringify(log.llmRequest)}</details>} */}
-                                     {/* {isDebug && log.llmResponse && <details><summary>Res</summary>{JSON.stringify(log.llmResponse)}</details>} */}
+                                     {/* Log full raw LLM responses for detailed debugging */}
+                                     {isDebug && log.llmResponse?.raw && (
+                                        <details className="mt-1 ml-4 text-xs opacity-80">
+                                            <summary className="cursor-pointer italic">Respuesta LLM Cruda</summary>
+                                            <div className="mt-1 p-1 border bg-background rounded max-h-40 overflow-auto">{log.llmResponse.raw}</div>
+                                        </details>
+                                      )}
                                 </div>
                              )
                         })}
                         {isExecuting && <div className="flex items-center gap-2 mt-2"><Loader2 className="h-4 w-4 animate-spin text-primary inline-block" /><span className='text-sm text-muted-foreground'>Procesando turno...</span></div>}
                          {!isExecuting && executionError && <div className="mt-2 p-2 rounded bg-destructive/10 text-destructive text-sm font-medium">Ejecución detenida debido a un error.</div>}
-                         {!isExecuting && !executionError && currentTurnInternal >= MAX_TURNS && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución completada (Límite de turnos alcanzado).</div>}
-                         {!isExecuting && !executionError && currentTurnInternal < MAX_TURNS && executionLogs.length > 0 && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución completada o detenida antes del límite de turnos.</div>}
+                         {!isExecuting && !executionError && currentTurn >= MAX_TURNS && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución completada (Límite de turnos alcanzado).</div>}
+                         {!isExecuting && !executionError && currentTurn < MAX_TURNS && executionLogs.length > 1 && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución finalizada o detenida.</div>}
                     </pre>
                 </ScrollArea>
            </div>
@@ -389,3 +411,5 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
     </Dialog>
   );
 }
+
+    
