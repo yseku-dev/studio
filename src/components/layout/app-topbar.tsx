@@ -19,7 +19,7 @@ const navItems = [
   { href: '/project-analysis', label: 'Analizar Proyecto', icon: FolderSearch },
   { href: '/autoupdate', label: 'AutoUpdate', icon: Sparkles },
   { href: '/versions', label: 'Versiones Guardadas', icon: GitCompareArrows },
-  { href: '/settings', label: 'Configuración', icon: Settings },
+  // Settings is handled separately by a dedicated button at the end of the bar
 ];
 
 export function AppTopbar() {
@@ -28,15 +28,15 @@ export function AppTopbar() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 flex h-16 items-center justify-between border-b bg-card px-4 md:px-6 shadow-sm">
+    <header className="fixed top-0 left-0 right-0 z-50 flex h-14 items-center justify-between border-b bg-card px-4 md:px-6 shadow-sm">
       <div className="flex items-center gap-2">
         <Button variant="ghost" size="icon" className="rounded-lg" asChild>
           <Link href="/dashboard">
-            <PackageSearch className="h-7 w-7 text-primary" />
+            <PackageSearch className="h-6 w-6 text-primary" /> {/* Slightly smaller icon */}
             <span className="sr-only">CodeAlchemist Home</span>
           </Link>
         </Button>
-        <Link href="/dashboard" className="text-xl font-semibold text-primary hidden sm:block">
+        <Link href="/dashboard" className="text-lg font-semibold text-primary hidden sm:block"> {/* Slightly smaller text */}
           CodeAlchemist
         </Link>
       </div>
@@ -50,13 +50,13 @@ export function AppTopbar() {
             </Button>
           </SheetTrigger>
           <SheetContent side="left" className="w-72 p-0 bg-card">
-            <SheetHeader className="p-4 border-b flex flex-row items-center justify-start text-left space-y-0">
-                <PackageSearch className="h-7 w-7 text-primary" />
-              <SheetTitle className="text-xl font-semibold text-primary ml-2">
+            <SheetHeader className="p-4 border-b flex flex-row items-center justify-start text-left space-y-0 h-14"> {/* Match header height */}
+                <PackageSearch className="h-6 w-6 text-primary" />
+              <SheetTitle className="text-lg font-semibold text-primary ml-2">
                 CodeAlchemist
               </SheetTitle>
             </SheetHeader>
-            <ScrollArea className="h-[calc(100vh-4rem)]"> {/* Adjust height considering header */}
+            <ScrollArea className="h-[calc(100vh-3.5rem)]"> {/* Adjust height considering new header height (3.5rem = h-14) */}
               <nav className="flex flex-col gap-1 p-4">
                 {navItems.map((item) => (
                   <SheetClose asChild key={item.href}>
@@ -75,6 +75,22 @@ export function AppTopbar() {
                     </Link>
                   </SheetClose>
                 ))}
+                 {/* Add Settings link for mobile menu */}
+                <SheetClose asChild>
+                    <Link
+                      href="/settings"
+                      className={cn(
+                        'flex items-center gap-3 rounded-md px-3 py-2 text-base font-medium transition-colors',
+                        pathname === "/settings"
+                          ? 'bg-primary/10 text-primary'
+                          : 'text-foreground hover:bg-muted hover:text-foreground'
+                      )}
+                      onClick={() => setMobileMenuOpen(false)}
+                    >
+                      <Settings className="h-5 w-5" />
+                      Configuración
+                    </Link>
+                  </SheetClose>
               </nav>
             </ScrollArea>
           </SheetContent>
@@ -83,7 +99,6 @@ export function AppTopbar() {
         <div className="flex items-center gap-x-1 md:gap-x-2">
           <nav className="flex items-center">
             {navItems
-              .filter(item => item.href !== '/settings') // Exclude settings from main nav links for desktop
               .map((item) => (
               <Button
                 key={item.href}
@@ -126,3 +141,4 @@ export function AppTopbar() {
     </header>
   );
 }
+
