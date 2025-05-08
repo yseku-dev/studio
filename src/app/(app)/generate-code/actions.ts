@@ -1,4 +1,3 @@
-
 'use server';
 
 import type { GroqOptions } from '@/services/groq';
@@ -36,14 +35,21 @@ export async function handleGenerateCode(
     const result = await callGroqToGenerateCode(prompt, groqOptions);
     return { success: true, data: result };
   } catch (error) {
-    console.error("Error generando código:", error);
-    let errorMessage = "Ocurrió un error desconocido durante la generación del código.";
+    const operationName = "la generación del código";
+    console.error(`Error en ${operationName}:`, error);
+    let detailMessage = "Ocurrió un error desconocido.";
+
     if (error instanceof Error) {
-        errorMessage = error.message;
+        detailMessage = error.message;
         if (error.message.toLowerCase().includes("timeout") || error.message.toLowerCase().includes("excedió el tiempo límite")) {
-          errorMessage = `La generación de código excedió el tiempo límite de ${GROQ_API_TIMEOUT_MS_GENERATE_CODE / 1000} segundos. Intenta con un prompt más simple o revisa la conexión.`;
+          detailMessage = `La generación de código excedió el tiempo límite de ${GROQ_API_TIMEOUT_MS_GENERATE_CODE / 1000} segundos. Intenta con un prompt más simple o revisa la conexión.`;
         }
+    } else if (typeof error === 'string') {
+        detailMessage = error;
+    } else if (error && typeof error === 'object' && 'message' in error && typeof (error as any).message === 'string') {
+        detailMessage = (error as any).message;
     }
-    return { success: false, error: `Falló la generación del código: ${errorMessage}` };
+
+    return { success: false, error: `Falló ${operationName}: ${detailMessage}` };
   }
 }
