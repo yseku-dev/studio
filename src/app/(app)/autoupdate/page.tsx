@@ -1,13 +1,14 @@
+
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork, Trash2, Expand, Minimize } from "lucide-react";
+import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork, Trash2, Expand, Minimize } from "lucide-react"; // Added Settings2
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion, handleUploadToGit } from './actions';
-import type { ProjectAnalysisResponse } from '@/services/groq'; 
-import type { SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow'; // Keep this if it's still specific
+import type { ProjectAnalysisResponse } from '@/services/groq';
+import type { SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -27,17 +28,23 @@ import { Label } from '@/components/ui/label';
 import { Progress } from "@/components/ui/progress";
 import { cn } from '@/lib/utils';
 import {
-  DEFAULT_LLM_PROVIDER,
-  LLM_PROVIDERS,
-  type LLMProviderId,
-  getLocalStorageApiKeyName,
-  getLocalStorageModelName,
-  LOCALSTORAGE_PROVIDER_ID_KEY,
-  LOCALSTORAGE_GIT_REPO_URL_KEY,
-  LOCALSTORAGE_GIT_USERNAME_KEY,
-  LOCALSTORAGE_GIT_EMAIL_KEY,
-  LOCALSTORAGE_GIT_PAT_KEY
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"; // Import Select components
+import type { AgentConfig } from '@/types/agent';
+import { resolveLlmOptionsForSource } from '@/lib/llm-utils'; // Import the helper
+import type { LLMOptions } from '@/services/groq'; // Import LLMOptions type
+import { LOCALSTORAGE_AGENTS_KEY } from '@/config/agent-config'; // Import agents key
+import {
+    LOCALSTORAGE_GIT_REPO_URL_KEY,
+    LOCALSTORAGE_GIT_USERNAME_KEY,
+    LOCALSTORAGE_GIT_EMAIL_KEY,
+    LOCALSTORAGE_GIT_PAT_KEY
 } from '@/config/llm-config';
+
 
 type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "success" | "error" | "fixing_error" | "uploading_git" | "fixing_git_error";
 type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
@@ -46,11 +53,11 @@ interface SuggestionWithStatus extends Omit<ProjectAnalysisResponse['suggestions
   id: string;
   status: SuggestionStatus;
   errorMessage?: string;
-  originalContent?: string; 
-  area: string; 
-  suggestion: string; 
+  originalContent?: string;
+  area: string;
+  suggestion: string;
   priority?: 'high' | 'medium' | 'low';
-  suggestedFullFileContent?: string; 
+  suggestedFullFileContent?: string;
 }
 
 interface AnalysisProgress {
@@ -79,32 +86,36 @@ export default function AutoUpdatePage() {
   const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
   const [logsExpanded, setLogsExpanded] = useState(false);
 
-  const { toast } = useToast();
-
-  // LLM settings state
-  const [llmProviderId, setLlmProviderId] = useState<LLMProviderId>(DEFAULT_LLM_PROVIDER);
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [modelName, setModelName] = useState<string | null>(null);
-  const [apiUrl, setApiUrl] = useState<string | undefined>(undefined);
+  // Agent and config source state
+  const [agents, setAgents] = useState<AgentConfig[]>([]);
+  const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global'); // Default to global
+  const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null); // State for resolved options
 
   const [gitConfig, setGitConfig] = useState<GitConfig>({ repoUrl: null, username: null, email: null, pat: null });
 
   const [gitUploadRetryCount, setGitUploadRetryCount] = useState(0);
   const MAX_GIT_UPLOAD_RETRIES = 5;
 
-  const loadLLMSettings = useCallback(() => {
-    const storedProviderId = localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null;
-    const provider = LLM_PROVIDERS.find(p => p.id === (storedProviderId || DEFAULT_LLM_PROVIDER)) || LLM_PROVIDERS.find(p => p.id === DEFAULT_LLM_PROVIDER)!;
-    setLlmProviderId(provider.id);
-    
-    setApiKey(localStorage.getItem(getLocalStorageApiKeyName(provider.id)));
-    setModelName(localStorage.getItem(getLocalStorageModelName(provider.id)));
-    setApiUrl(localStorage.getItem(`codealchemist_apiurl_${provider.id}`) || provider.apiUrl);
+  const [currentGitError, setCurrentGitError] = useState<string | null>(null);
+
+  const { toast } = useToast();
+
+
+   // Load agents from localStorage
+  useEffect(() => {
+    const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
+    if (storedAgents) {
+      try {
+        setAgents(JSON.parse(storedAgents));
+      } catch (e) {
+        console.error("Error parsing stored agents:", e);
+        setAgents([]);
+      }
+    }
   }, []);
 
+  // Load Git settings and initial project files
   useEffect(() => {
-    loadLLMSettings();
-    
     setGitConfig({
         repoUrl: localStorage.getItem(LOCALSTORAGE_GIT_REPO_URL_KEY),
         username: localStorage.getItem(LOCALSTORAGE_GIT_USERNAME_KEY),
@@ -112,78 +123,80 @@ export default function AutoUpdatePage() {
         pat: localStorage.getItem(LOCALSTORAGE_GIT_PAT_KEY),
     });
 
-    const handleStorageChange = (event: StorageEvent) => {
-      if (event.key?.startsWith('codealchemist_')) {
-        loadLLMSettings(); // Reload LLM settings if any relevant item changes
-         setGitConfig({ // Reload Git settings too
-            repoUrl: localStorage.getItem(LOCALSTORAGE_GIT_REPO_URL_KEY),
-            username: localStorage.getItem(LOCALSTORAGE_GIT_USERNAME_KEY),
-            email: localStorage.getItem(LOCALSTORAGE_GIT_EMAIL_KEY),
-            pat: localStorage.getItem(LOCALSTORAGE_GIT_PAT_KEY),
-        });
-      }
-    };
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
+     const initialLogs: string[] = [];
+    initialLogs.push(`[CLIENT ${new Date().toISOString()}] AutoUpdatePage montado. Cargando archivos de proyecto iniciales...`);
+    fetchProjectFiles(initialLogs).finally(() => {
+        initialLogs.push(`[CLIENT ${new Date().toISOString()}] Carga inicial de archivos de proyecto completada.`);
+        setDetailedLogs(initialLogs);
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Run only on mount
 
-  }, [loadLLMSettings]);
+    // Update resolved LLM options when config source or agents change
+  useEffect(() => {
+    const options = resolveLlmOptionsForSource(selectedConfigSource, agents);
+    setResolvedLlmOptions(options);
+  }, [selectedConfigSource, agents]);
+
 
   const fetchProjectFiles = async (targetLogs?: string[]) => {
-     const bundleResult = await getApplicationSourceBundle(false, targetLogs); 
+     const bundleResult = await getApplicationSourceBundle(false, targetLogs);
      if (bundleResult.success && bundleResult.files) {
        setProjectFiles(bundleResult.files);
        if (targetLogs) targetLogs.push(`[CLIENT] Archivos del proyecto cargados en el estado local: ${bundleResult.files.length} archivos.`);
      } else {
        toast({ title: "Error", description: "No se pudieron cargar los archivos del proyecto para la referencia de sugerencias.", variant: "destructive" });
-       setProjectFiles([]); 
+       setProjectFiles([]);
        if (targetLogs) targetLogs.push(`[CLIENT ERROR] No se pudieron cargar los archivos del proyecto. Error: ${bundleResult.error}`);
      }
   };
 
   const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
-    const currentProviderConfig = LLM_PROVIDERS.find(p => p.id === llmProviderId);
-    if (!currentProviderConfig) {
-      toast({title: 'Error de Configuración', description: 'Proveedor LLM no encontrado.', variant: 'destructive'});
-      return;
-    }
-    if (currentProviderConfig.requiresApiKey && !apiKey) {
-      toast({ title: 'Configuración Faltante', description: `Por favor, establece tu Clave API para ${currentProviderConfig.name} en Configuración.`, variant: 'destructive' });
-      return;
-    }
-    if (!modelName) {
-      toast({ title: 'Configuración Faltante', description: `Por favor, establece el Nombre de Modelo para ${currentProviderConfig.name} en Configuración.`, variant: 'destructive' });
-      return;
-    }
+      const options = resolvedLlmOptions; // Use the state which reflects the selected source
+     if (!options) {
+        toast({
+            title: "Configuración LLM Incompleta",
+            description: `La configuración LLM seleccionada (${getSourceName(selectedConfigSource)}) está incompleta o no se pudo resolver. Revisa los Ajustes o la configuración del Agente.`,
+            variant: "destructive",
+            duration: 7000,
+        });
+        return;
+     }
 
-
-    const initialLogs = isRetry ? [...detailedLogs] : []; 
-    initialLogs.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? 'Reintentando' : 'Iniciando'} auto-análisis de la aplicación con ${currentProviderConfig.name}...`);
-    setStatus("loading_source"); 
+    const initialLogs = isRetry ? [...detailedLogs] : [];
+    initialLogs.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? 'Reintentando' : 'Iniciando'} auto-análisis de la aplicación con ${options.providerId} (${options.modelName})...`);
+    setStatus("loading_source");
     setAnalysisResult(null);
-    setCurrentAnalysisError(null); 
-    setCurrentGitError(null); 
+    setCurrentAnalysisError(null);
+    setCurrentGitError(null);
     setSuggestionsWithStatus([]);
-    setAnalysisProgress({ processed: 0, total: 0 }); 
+    setAnalysisProgress({ processed: 0, total: 0 });
     setAutoFixSuggestion(null);
     setDetailedLogs(initialLogs);
 
     toast({
       title: isRetry ? "Reintentando Auto-Análisis" : "Auto-Análisis Iniciado",
-      description: `Cargando y preparando el código fuente de CodeAlchemist con ${currentProviderConfig.name}...`
+      description: `Cargando y preparando el código fuente de CodeAlchemist con ${options.providerId}...`
     });
 
-    await fetchProjectFiles(initialLogs); 
+    await fetchProjectFiles(initialLogs);
     initialLogs.push(`[CLIENT ${new Date().toISOString()}] Estado cambiado a 'analyzing'. Llamando a handleAutoAnalyzeAppSource.`);
-    setStatus("analyzing"); 
+    setStatus("analyzing");
 
-    // Pass the LLM config to the server action
-    const result = await handleAutoAnalyzeAppSource(llmProviderId, apiKey!, modelName!, apiUrl, analysisPreferences);
-    
+    // Pass the resolved LLM config to the server action
+    const result = await handleAutoAnalyzeAppSource(
+        options.providerId,
+        options.apiKey,
+        options.modelName,
+        options.apiUrl,
+        analysisPreferences
+    );
+
     setDetailedLogs(prevLogs => [...prevLogs, ...(result.detailedExecutionLogs || [`[CLIENT ${new Date().toISOString()}] Llamada a handleAutoAnalyzeAppSource completada.`])]);
 
-    setAnalysisProgress({ 
-        processed: result.chunksProcessed || 0, 
-        total: result.totalChunks || 0 
+    setAnalysisProgress({
+        processed: result.chunksProcessed || 0,
+        total: result.totalChunks || 0
     });
 
     if (result.success && result.data) {
@@ -194,10 +207,13 @@ export default function AutoUpdatePage() {
             const normalizePath = (p: string) => p.replace(/^\.\//, '').replace(/^src\//, '');
             const areaLower = normalizePath(s.area.toLowerCase());
             const fileNameLower = normalizePath(f.fileName.toLowerCase());
-            return fileNameLower === areaLower || fileNameLower === areaLower.split(' (parte ')[0];
+            // Match ignoring potential "(part X)" suffix added during chunking
+            const baseAreaLower = areaLower.split(' (parte ')[0];
+            return fileNameLower === baseAreaLower;
         });
         let currentStatus: SuggestionStatus = "pending";
-        if (!s.suggestedFullFileContent || !relatedFile?.content) { 
+        // Check if the *required* data for application is present
+        if (!s.area || !s.suggestedFullFileContent || !relatedFile?.content) {
             currentStatus = "not_applicable";
         }
 
@@ -205,7 +221,7 @@ export default function AutoUpdatePage() {
           ...s,
           id: `suggestion-${index}-${Date.now()}`,
           status: currentStatus,
-          originalContent: relatedFile?.content,
+          originalContent: relatedFile?.content, // Store original content found
 		  area: s.area,
 		  suggestion: s.suggestion,
 		  priority: s.priority,
@@ -222,38 +238,33 @@ export default function AutoUpdatePage() {
     } else {
       setStatus("error");
       setCurrentAnalysisError(result.error || "Ocurrió un error desconocido durante el auto-análisis.");
-      setCurrentGitError(null); 
+      setCurrentGitError(null);
       toast({
         title: "Error en Auto-Análisis",
         description: result.error || "Ocurrió un error desconocido.",
         variant: "destructive",
-        duration: 10000, 
+        duration: 10000,
       });
        setDetailedLogs(prevLogs => [...prevLogs, `[CLIENT ERROR ${new Date().toISOString()}] Error en auto-análisis: ${result.error || "Desconocido"}`]);
     }
   };
-  
+
   const handleAttemptAutoFix = async (errorToFix?: string | null, errorContext?: string) => {
     const targetError = errorToFix || currentAnalysisError || currentGitError;
-    const currentProviderConfig = LLM_PROVIDERS.find(p => p.id === llmProviderId);
-
-    if (!targetError || !currentProviderConfig) {
-      toast({ title: "Información Faltante", description: "No hay error actual para corregir o proveedor LLM no configurado.", variant: "destructive"});
-      return;
-    }
-    if (currentProviderConfig.requiresApiKey && !apiKey) {
-      toast({ title: "Configuración Faltante", description: `Clave API para ${currentProviderConfig.name} no configurada.`, variant: "destructive"});
-      return;
-    }
-    if (!modelName) {
-      toast({ title: "Configuración Faltante", description: `Modelo para ${currentProviderConfig.name} no configurado.`, variant: "destructive"});
+     const options = resolvedLlmOptions; // Use the state reflecting the selected source
+     if (!options) {
+        toast({ title: "Configuración Faltante", description: "La configuración LLM seleccionada está incompleta o no se pudo resolver.", variant: "destructive"});
+        return;
+     }
+    if (!targetError) {
+      toast({ title: "Información Faltante", description: "No hay error actual para corregir.", variant: "destructive"});
       return;
     }
 
     const newLogs = [...detailedLogs];
-    newLogs.push(`[CLIENT ${new Date().toISOString()}] Intentando auto-corrección para el error: ${targetError.substring(0, 100)}... con ${currentProviderConfig.name}`);
+    newLogs.push(`[CLIENT ${new Date().toISOString()}] Intentando auto-corrección para el error: ${targetError.substring(0, 100)}... con ${options.providerId}`);
     const prevStatus = status;
-    
+
     let fixingStatus: AutoUpdateStatus = "fixing_error";
     if (errorContext?.toLowerCase().includes("git") || currentGitError) {
         fixingStatus = "fixing_git_error";
@@ -261,25 +272,37 @@ export default function AutoUpdatePage() {
     setStatus(fixingStatus);
     setAutoFixSuggestion(null);
     setDetailedLogs(newLogs);
-    toast({ title: "Intentando Auto-Corrección", description: `Consultando a ${currentProviderConfig.name} para una posible solución...` });
+    toast({ title: "Intentando Auto-Corrección", description: `Consultando a ${options.providerId} para una posible solución...` });
 
-    const fixResult = await handleGetErrorFixSuggestion(targetError, llmProviderId, apiKey!, modelName!, apiUrl, newLogs, errorContext);
+    // Pass resolved LLM options to the fix suggestion action
+    const fixResult = await handleGetErrorFixSuggestion(
+        targetError,
+        options.providerId,
+        options.apiKey,
+        options.modelName,
+        options.apiUrl,
+        newLogs,
+        errorContext
+    );
     setDetailedLogs(newLogs);
 
     if (fixResult.success && fixResult.data) {
       setAutoFixSuggestion(fixResult.data);
-      setIsAutoFixModalOpen(true); 
-      toast({ title: "Sugerencia de Corrección Recibida", description: `La IA (${currentProviderConfig.name}) ha proporcionado una sugerencia.` });
+      setIsAutoFixModalOpen(true);
+      toast({ title: "Sugerencia de Corrección Recibida", description: `La IA (${options.providerId}) ha proporcionado una sugerencia.` });
       newLogs.push(`[CLIENT ${new Date().toISOString()}] Sugerencia de corrección recibida de la IA.`);
     } else {
       toast({
         title: "Error en Auto-Corrección",
-        description: fixResult.error || `No se pudo obtener una sugerencia de ${currentProviderConfig.name}.`,
+        description: fixResult.error || `No se pudo obtener una sugerencia de ${options.providerId}.`,
         variant: "destructive"
       });
       newLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener sugerencia de corrección: ${fixResult.error || "Desconocido"}`);
     }
-    setStatus(prevStatus === "fixing_error" || prevStatus === "fixing_git_error" ? (currentGitError || currentAnalysisError ? "error" : (analysisResult ? "success" : "idle")) : prevStatus ); 
+     // Restore previous relevant status after attempting fix
+    setStatus(prevStatus === "fixing_error" || prevStatus === "fixing_git_error"
+                ? (currentGitError || currentAnalysisError ? "error" : (analysisResult ? "success" : "idle"))
+                : prevStatus );
     setDetailedLogs(newLogs);
   };
 
@@ -293,7 +316,7 @@ export default function AutoUpdatePage() {
     }
 
     const suggestionToApply = suggestionsWithStatus[suggestionIndex];
-    
+
     currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Iniciando aplicación de sugerencia a: ${suggestionToApply.area || 'área desconocida'}`);
 
     if (!suggestionToApply.area) {
@@ -321,16 +344,16 @@ export default function AutoUpdatePage() {
     setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "applying"} : s));
     toast({ title: "Aplicando Sugerencia...", description: `Aplicando cambio a ${suggestionToApply.area}` });
     currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Estado: 'applying'. Llamando a applySuggestedChange para ${suggestionToApply.area}.`);
-    
+
     const baseFilePath = suggestionToApply.area.includes(" (parte ") ? suggestionToApply.area.split(" (parte ")[0] : suggestionToApply.area;
 
     const result = await applySuggestedChange(baseFilePath, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent, currentLogsCopy);
-    
+
     if (result.success && result.newContent !== undefined) {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {
-          ...s, 
-          status: "applied", 
-          originalContent: result.newContent, 
+          ...s,
+          status: "applied",
+          originalContent: result.newContent,
 		  area: s.area,
 		  suggestion: s.suggestion,
 		  priority: s.priority,
@@ -338,7 +361,7 @@ export default function AutoUpdatePage() {
         } : s));
       toast({ title: "Sugerencia Aplicada", description: `El cambio para ${baseFilePath} se ha aplicado. Revisa la consola y los logs.`});
       currentLogsCopy.push(`[CLIENT SUCCESS ${new Date().toISOString()}] Sugerencia aplicada a ${baseFilePath}. El contenido del archivo ha sido actualizado.`);
-      
+
       setProjectFiles(prevFiles => (prevFiles || []).map(pf => {
         const normalizePath = (p: string) => p.replace(/^\.\//, '').replace(/^src\//, '');
         if (normalizePath(pf.fileName.toLowerCase()) === normalizePath(baseFilePath.toLowerCase())) {
@@ -394,7 +417,7 @@ export default function AutoUpdatePage() {
     let filesToZip = projectFiles;
     if (!filesToZip || filesToZip.length === 0) {
         currentLogsCopy.push(`[CLIENT WARN ${new Date().toISOString()}] projectFiles está vacío o nulo, intentando obtener de nuevo.`);
-        const bundleResult = await getApplicationSourceBundle(false, currentLogsCopy); 
+        const bundleResult = await getApplicationSourceBundle(false, currentLogsCopy);
         if (bundleResult.success && bundleResult.files) {
             filesToZip = bundleResult.files;
             setProjectFiles(filesToZip);
@@ -410,14 +433,14 @@ export default function AutoUpdatePage() {
             return;
         }
     }
-    
+
     currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Se empaquetarán ${filesToZip?.length || 0} archivos.`);
 
     if (filesToZip && filesToZip.length > 0) {
       try {
         const zip = new JSZip();
         filesToZip.forEach(file => {
-          if (file.fileName && file.fileName.trim() !== "" && !file.content.startsWith("// Archivo binario") && !file.content.startsWith("// Error:")) { 
+          if (file.fileName && file.fileName.trim() !== "" && !file.content.startsWith("// Archivo binario") && !file.content.startsWith("// Error:")) {
             zip.file(file.fileName, file.content);
             currentLogsCopy.push(`[CLIENT DETAIL ${new Date().toISOString()}] Añadido al ZIP: ${file.fileName} (${file.content.length} bytes)`);
           } else {
@@ -462,7 +485,6 @@ export default function AutoUpdatePage() {
     setIsDownloading(false);
   };
 
-  const [currentGitError, setCurrentGitError] = useState<string | null>(null);
 
   const performGitUpload = async (isRetry: boolean = false) => {
     const { repoUrl, username, email, pat } = gitConfig;
@@ -476,8 +498,8 @@ export default function AutoUpdatePage() {
         return;
     }
 
-    setCurrentGitError(null); 
-    setCurrentAnalysisError(null); 
+    setCurrentGitError(null);
+    setCurrentAnalysisError(null);
     setStatus("uploading_git");
     const currentLogsCopy = [...detailedLogs];
 
@@ -485,14 +507,14 @@ export default function AutoUpdatePage() {
     if (isRetry) setGitUploadRetryCount(attemptNumber);
 
     const commitMsg = `CodeAlchemist: AutoUpdate Sync (Attempt ${attemptNumber})`;
-    
+
     currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? `Retrying (${attemptNumber}/${MAX_GIT_UPLOAD_RETRIES})` : 'Initiating'} Git upload to: ${repoUrl.replace(pat, '********')}`);
     setDetailedLogs(currentLogsCopy);
     toast({ title: `${isRetry ? `Retrying Git Upload (Attempt ${attemptNumber})` : "Subiendo a Git..."}` , description: `Intentando subir el código fuente a ${repoUrl.split('/').pop()?.replace('.git',' ')}`});
 
     const result = await handleUploadToGit({ repoUrl, username, email, pat }, commitMsg, currentLogsCopy);
-    
-    setDetailedLogs(currentLogsCopy); 
+
+    setDetailedLogs(currentLogsCopy);
 
     if (result.success) {
         toast({
@@ -509,9 +531,9 @@ export default function AutoUpdatePage() {
             description: result.message,
             variant: "destructive",
             duration: 10000,
-             action: (attemptNumber < MAX_GIT_UPLOAD_RETRIES) ? ( 
-                <Button 
-                    variant="outline" 
+             action: (attemptNumber < MAX_GIT_UPLOAD_RETRIES) ? (
+                <Button
+                    variant="outline"
                     size="sm"
                     className="ml-auto border-destructive/50 text-destructive hover:bg-destructive/20 hover:text-destructive-foreground"
                     onClick={() => handleAttemptAutoFix(result.message, "Error ocurrido durante la subida del código fuente a un repositorio Git.")}
@@ -520,7 +542,7 @@ export default function AutoUpdatePage() {
                 </Button>
             ) : undefined
         });
-        setStatus("error"); 
+        setStatus("error");
     }
   };
 
@@ -529,20 +551,19 @@ export default function AutoUpdatePage() {
     performGitUpload(false);
   };
 
-  useEffect(() => { 
-    const initialLogs: string[] = [];
-    initialLogs.push(`[CLIENT ${new Date().toISOString()}] AutoUpdatePage montado. Cargando archivos de proyecto iniciales...`);
-    fetchProjectFiles(initialLogs).finally(() => {
-        initialLogs.push(`[CLIENT ${new Date().toISOString()}] Carga inicial de archivos de proyecto completada.`);
-        setDetailedLogs(initialLogs); 
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+   const handleRetryGitUploadFromModal = () => {
+    setIsAutoFixModalOpen(false); // Close the modal first
+    performGitUpload(true); // Call with retry flag
+   };
+
+  const getSourceName = (sourceId: string): string => {
+    if (sourceId === 'global') return 'Global';
+    return agents.find(a => a.id === sourceId)?.name || 'Desconocido';
+  }
 
 
   const isGitConfigured = gitConfig.repoUrl && gitConfig.username && gitConfig.email && gitConfig.pat;
   const isProcessing = status === "analyzing" || status === "loading_source" || status === "fixing_error" || status === "uploading_git" || status === "fixing_git_error";
-  const currentProviderConfig = LLM_PROVIDERS.find(p => p.id === llmProviderId);
 
 
   return (
@@ -554,13 +575,41 @@ export default function AutoUpdatePage() {
             AutoUpdate: Análisis de CodeAlchemist
           </CardTitle>
           <CardDescription className="text-lg text-foreground">
-            Esta sección permite a la IA analizar el propio código fuente completo de la aplicación CodeAlchemist para proponer mejoras y optimizaciones.
-             {!currentProviderConfig || (currentProviderConfig.requiresApiKey && !apiKey) || !modelName ? (
-                <span className="text-destructive block mt-1"> (Configuración de LLM incompleta en Ajustes)</span>
-            ) : <span className="text-foreground block mt-1">(Usando Proveedor: {currentProviderConfig.name}, Modelo: {modelName})</span>}
+            Esta sección permite a la IA analizar el propio código fuente completo de la aplicación CodeAlchemist para proponer mejoras y optimizaciones, usando la configuración LLM seleccionada.
+             {!resolvedLlmOptions && selectedConfigSource ? (
+                 <span className="text-destructive block mt-1"> (Configuración LLM para '{getSourceName(selectedConfigSource)}' incompleta o inválida)</span>
+             ) : resolvedLlmOptions ? (
+                <span className="text-foreground block mt-1">(Usando: {getSourceName(selectedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
+             ) : (
+                 <span className="text-muted-foreground block mt-1">(Selecciona una fuente de configuración)</span>
+             )}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+           {/* LLM Configuration Source Selector */}
+            <div className="space-y-2">
+                <Label htmlFor="configSource" className="text-base flex items-center gap-1">
+                   <Settings2 className="h-4 w-4"/> Usar Configuración LLM De:
+                </Label>
+                <Select onValueChange={setSelectedConfigSource} value={selectedConfigSource}>
+                    <SelectTrigger id="configSource" className="w-full md:w-1/2">
+                        <SelectValue placeholder="Seleccionar fuente de configuración" />
+                    </SelectTrigger>
+                    <SelectContent>
+                        <SelectItem value="global">Ajustes Globales</SelectItem>
+                        {agents.map(agent => (
+                            <SelectItem key={agent.id} value={agent.id}>
+                                Agente: {agent.name}
+                            </SelectItem>
+                        ))}
+                    </SelectContent>
+                </Select>
+                 {!resolvedLlmOptions && selectedConfigSource && (
+                     <p className="text-xs text-destructive mt-1">La configuración para '{getSourceName(selectedConfigSource)}' parece incompleta. Revisa los <a href="/settings" className="underline">Ajustes Globales</a> o la configuración del agente en <a href="/agents" className="underline">Gestión de Agentes</a>.</p>
+                )}
+            </div>
+
+
           <p className="text-muted-foreground">
             Al hacer clic en &quot;Iniciar Auto-Análisis&quot;, CodeAlchemist recopilará su código fuente, lo dividirá en fragmentos si es necesario, y lo enviará
             al modelo de IA configurado para obtener un resumen de posibles mejoras. También puedes descargar el código fuente completo o subirlo a un repositorio Git si está configurado.
@@ -581,11 +630,11 @@ export default function AutoUpdatePage() {
             />
             <p className="text-xs text-muted-foreground">Describe qué tipo de actualizaciones o áreas específicas te gustaría que la IA priorizara.</p>
           </div>
-          
+
           <div className="flex flex-wrap gap-4">
-            <Button 
-              onClick={() => handleStartAutoAnalysis(false)} 
-              disabled={isProcessing || !currentProviderConfig || (currentProviderConfig.requiresApiKey && !apiKey) || !modelName}
+            <Button
+              onClick={() => handleStartAutoAnalysis(false)}
+              disabled={isProcessing || !resolvedLlmOptions}
               className="text-base py-3 px-6"
             >
               {status === "analyzing" || status === "loading_source" ? (
@@ -595,8 +644,8 @@ export default function AutoUpdatePage() {
               )}
               Iniciar Auto-Análisis
             </Button>
-            <Button 
-              onClick={handleDownloadSource} 
+            <Button
+              onClick={handleDownloadSource}
               disabled={isDownloading || projectFiles === null || projectFiles.length === 0 || isProcessing}
               variant="outline"
               className="text-base py-3 px-6 text-foreground"
@@ -608,8 +657,8 @@ export default function AutoUpdatePage() {
               )}
               Descargar Código Fuente (ZIP)
             </Button>
-             <Button 
-              onClick={handleInitialGitUpload} 
+             <Button
+              onClick={handleInitialGitUpload}
               disabled={!isGitConfigured || projectFiles === null || projectFiles.length === 0 || isProcessing}
               variant="outline"
               className="text-base py-3 px-6 text-foreground"
@@ -628,23 +677,23 @@ export default function AutoUpdatePage() {
             <div className="mt-4 space-y-2">
                 <Label className="text-sm text-foreground">
                     {status === "loading_source" ? "Cargando código fuente..." :
-                     status === "analyzing" ? 
-                        (analysisProgress.total > 0 ? `Procesando fragmentos... (${analysisProgress.processed}/${analysisProgress.total})` : "Iniciando análisis, calculando total de fragmentos...") : 
-                     status === "success" ? `Análisis completado (${analysisProgress.processed}/${analysisProgress.total} fragmentos).` : 
+                     status === "analyzing" ?
+                        (analysisProgress.total > 0 ? `Procesando fragmentos... (${analysisProgress.processed}/${analysisProgress.total})` : "Iniciando análisis, calculando total de fragmentos...") :
+                     status === "success" ? `Análisis completado (${analysisProgress.processed}/${analysisProgress.total} fragmentos).` :
                      status === "error" && currentAnalysisError ? `Análisis interrumpido (${analysisProgress.processed > 0 ? `${analysisProgress.processed}/` : ''}${analysisProgress.total > 0 ? analysisProgress.total : 'desconocido'} fragmentos).` :
                      status === "error" && currentGitError ? "Error durante operación Git." :
                      status === "uploading_git" ? `Subiendo a Git (Intento ${gitUploadRetryCount+1}/${MAX_GIT_UPLOAD_RETRIES})...` : // Use count+1 for display
                      status === "fixing_error" ? "Intentando auto-corrección de error de análisis..." :
                      status === "fixing_git_error" ? "Intentando auto-corrección de error de Git..." : ""}
                 </Label>
-                <Progress 
+                <Progress
                     value={
-                        status === "loading_source" ? 5 : 
-                        status === "analyzing" && analysisProgress.total === 0 ? 10 : 
-                        analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 : 
-                        (status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error" ? 100 : 0) 
-                    } 
-                    className="w-full h-3" 
+                        status === "loading_source" ? 5 :
+                        status === "analyzing" && analysisProgress.total === 0 ? 10 :
+                        analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 :
+                        (status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error" ? 100 : 0)
+                    }
+                    className="w-full h-3"
                 />
                 {(analysisProgress.total > 0 || (status === "error" && analysisProgress.processed > 0 && currentAnalysisError)) && (
                     <p className="text-xs text-muted-foreground">
@@ -693,6 +742,7 @@ export default function AutoUpdatePage() {
                   <FileCode className="h-6 w-6" />
                   {analysisResult.analysisTitle}
                 </CardTitle>
+                 <CardDescription>Analizado usando la configuración de '{getSourceName(selectedConfigSource)}'.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
@@ -719,7 +769,7 @@ export default function AutoUpdatePage() {
                     <div className="p-3 my-2 bg-yellow-100 dark:bg-yellow-900/30 border border-yellow-400 dark:border-yellow-600 rounded-md flex items-start gap-2">
                         <ShieldAlert className="h-5 w-5 text-yellow-700 dark:text-yellow-300 shrink-0 mt-0.5" />
                         <p className="text-xs text-yellow-800 dark:text-yellow-200">
-                        <strong>¡Atención!</strong> Aplicar estas sugerencias modificará directamente los archivos del código fuente de esta aplicación. 
+                        <strong>¡Atención!</strong> Aplicar estas sugerencias modificará directamente los archivos del código fuente de esta aplicación.
                         Asegúrate de entender los cambios y de tener una copia de seguridad si es necesario. Los cambios incorrectos podrían afectar la funcionalidad de la aplicación.
                         </p>
                     </div>
@@ -736,7 +786,7 @@ export default function AutoUpdatePage() {
                                 )}
                             </div>
                             <p className="text-xs text-muted-foreground mb-2">{s.suggestion}</p>
-                            
+
                             {s.status === "error_applying" && s.errorMessage && (
                                 <div className="p-2 my-1 bg-destructive/10 border border-destructive/30 rounded-md">
                                     <p className="text-xs text-destructive ">Error al aplicar: {s.errorMessage}</p>
@@ -754,11 +804,11 @@ export default function AutoUpdatePage() {
                             <div className="flex items-center gap-2 mt-2">
                                 <AlertDialog>
                                     <AlertDialogTrigger asChild>
-                                        <Button 
-                                            size="sm" 
-                                            variant="outline" 
-                                            disabled={s.status === "applying" || s.status === "applied" || s.status === "not_applicable" || !s.area || !s.originalContent || !s.suggestedFullFileContent}
-                                            className={cn(s.status === "applied" ? "border-green-500 text-green-700 dark:text-green-400 hover:border-green-600 hover:bg-green-50 dark:hover:bg-green-900/50" : 
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={s.status === "applying" || s.status === "applied" || s.status === "not_applicable"}
+                                            className={cn(s.status === "applied" ? "border-green-500 text-green-700 dark:text-green-400 hover:border-green-600 hover:bg-green-50 dark:hover:bg-green-900/50" :
                                                        s.status === "error_applying" ? "border-destructive text-destructive hover:border-destructive hover:bg-destructive/10" :
                                                        "text-foreground")}
                                         >
@@ -768,45 +818,47 @@ export default function AutoUpdatePage() {
                                         {s.status === "pending" && <Wand2 className="mr-2 h-4 w-4" />}
                                         {s.status === "not_applicable" && <Info className="mr-2 h-4 w-4 text-muted-foreground" />}
 
-                                        {s.status === "applied" ? "Aplicada" 
-                                            : s.status === "applying" ? "Aplicando..." 
-                                            : s.status === "error_applying" ? "Reintentar Aplicar" 
+                                        {s.status === "applied" ? "Aplicada"
+                                            : s.status === "applying" ? "Aplicando..."
+                                            : s.status === "error_applying" ? "Reintentar Aplicar"
                                             : s.status === "not_applicable" ? "No Aplicable"
                                             : "Aplicar Sugerencia"}
                                         </Button>
                                     </AlertDialogTrigger>
-                                    <AlertDialogContent className="max-w-3xl">
-                                        <AlertDialogHeader>
-                                        <AlertDialogTitle className="text-foreground flex items-center gap-2"><ShieldAlert className="text-destructive h-6 w-6"/>¿Aplicar esta sugerencia?</AlertDialogTitle>
-                                        <AlertDialogDescription className="text-muted-foreground">
-                                            Se intentará aplicar la siguiente sugerencia al archivo <strong className="text-foreground">{s.area}</strong>:
-                                            <blockquote className="mt-2 pl-3 border-l-2 italic text-xs text-muted-foreground">
-                                            {s.suggestion}
-                                            </blockquote>
-                                            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[50vh] text-xs">
-                                                <div>
-                                                    <p className="font-semibold mb-1 text-foreground">Contenido Original (Fragmento):</p>
-                                                    <ScrollArea className="h-60 border rounded p-2 bg-muted/30">
-                                                        <pre className="text-xs font-mono whitespace-pre-wrap text-foreground">{s.originalContent?.substring(0,1500) + (s.originalContent && s.originalContent.length > 1500 ? "..." : "") || "No disponible"}</pre>
-                                                    </ScrollArea>
+                                     {s.status !== "not_applicable" && s.status !== "applied" && ( // Only show confirmation if applicable and not already applied
+                                        <AlertDialogContent className="max-w-3xl">
+                                            <AlertDialogHeader>
+                                            <AlertDialogTitle className="text-foreground flex items-center gap-2"><ShieldAlert className="text-destructive h-6 w-6"/>¿Aplicar esta sugerencia?</AlertDialogTitle>
+                                            <AlertDialogDescription className="text-muted-foreground">
+                                                Se intentará aplicar la siguiente sugerencia al archivo <strong className="text-foreground">{s.area}</strong>:
+                                                <blockquote className="mt-2 pl-3 border-l-2 italic text-xs text-muted-foreground">
+                                                {s.suggestion}
+                                                </blockquote>
+                                                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[50vh] text-xs">
+                                                    <div>
+                                                        <p className="font-semibold mb-1 text-foreground">Contenido Original (Fragmento):</p>
+                                                        <ScrollArea className="h-60 border rounded p-2 bg-muted/30">
+                                                            <pre className="text-xs font-mono whitespace-pre-wrap text-foreground">{s.originalContent?.substring(0,1500) + (s.originalContent && s.originalContent.length > 1500 ? "..." : "") || "No disponible"}</pre>
+                                                        </ScrollArea>
+                                                    </div>
+                                                    <div>
+                                                        <p className="font-semibold mb-1 text-foreground">Contenido Sugerido por IA (Fragmento):</p>
+                                                        <ScrollArea className="h-60 border rounded p-2 bg-muted/30">
+                                                          <pre className="text-xs font-mono whitespace-pre-wrap text-foreground">{s.suggestedFullFileContent?.substring(0,1500) + (s.suggestedFullFileContent && s.suggestedFullFileContent.length > 1500 ? "..." : "") || "No disponible"}</pre>
+                                                        </ScrollArea>
+                                                    </div>
                                                 </div>
-                                                <div>
-                                                    <p className="font-semibold mb-1 text-foreground">Contenido Sugerido por IA (Fragmento):</p>
-                                                    <ScrollArea className="h-60 border rounded p-2 bg-muted/30">
-                                                      <pre className="text-xs font-mono whitespace-pre-wrap text-foreground">{s.suggestedFullFileContent?.substring(0,1500) + (s.suggestedFullFileContent && s.suggestedFullFileContent.length > 1500 ? "..." : "") || "No disponible"}</pre>
-                                                    </ScrollArea>
-                                                </div>
-                                            </div>
-                                            <strong className="block mt-3 text-destructive">¡Importante!</strong> Esta acción modificará el archivo en el sistema. Asegúrate de que es lo que deseas.
-                                        </AlertDialogDescription>
-                                        </AlertDialogHeader>
-                                        <AlertDialogFooter>
-                                        <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                        <AlertDialogAction onClick={() => handleApplySuggestion(s.id)} className="bg-destructive hover:bg-destructive/90">
-                                            Sí, aplicar cambio
-                                        </AlertDialogAction>
-                                        </AlertDialogFooter>
-                                    </AlertDialogContent>
+                                                <strong className="block mt-3 text-destructive">¡Importante!</strong> Esta acción modificará el archivo en el sistema. Asegúrate de que es lo que deseas.
+                                            </AlertDialogDescription>
+                                            </AlertDialogHeader>
+                                            <AlertDialogFooter>
+                                            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                            <AlertDialogAction onClick={() => handleApplySuggestion(s.id)} className="bg-destructive hover:bg-destructive/90">
+                                                Sí, aplicar cambio
+                                            </AlertDialogAction>
+                                            </AlertDialogFooter>
+                                        </AlertDialogContent>
+                                    )}
                                 </AlertDialog>
                             </div>
                             </li>
@@ -818,8 +870,8 @@ export default function AutoUpdatePage() {
               </CardContent>
             </Card>
           )}
-           {(status === "loading_source" || (status === "analyzing" && (!analysisProgress || analysisProgress.total === 0))) && ( 
-            <div 
+           {(status === "loading_source" || (status === "analyzing" && (!analysisProgress || analysisProgress.total === 0))) && (
+            <div
               data-ai-hint="code processing animation"
               className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6"
             >
@@ -830,28 +882,28 @@ export default function AutoUpdatePage() {
               <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos, especialmente si el código es extenso.</p>
             </div>
           )}
-          {status === "error" && (currentAnalysisError || currentGitError) && ( 
+          {status === "error" && (currentAnalysisError || currentGitError) && (
              <Card className="mt-6 border-destructive bg-destructive/10">
                <CardHeader className="pb-2">
-                <CardTitle className="text-lg flex items-center gap-2 text-destructive"> 
+                <CardTitle className="text-lg flex items-center gap-2 text-destructive">
                   <AlertTriangle className="h-6 w-6" />
                   Error en Operación
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                <p className="text-destructive font-medium">Ocurrió un error:</p> 
+                <p className="text-destructive font-medium">Ocurrió un error:</p>
                 <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50">
-                    <pre className="text-xs text-foreground whitespace-pre-wrap">{currentAnalysisError || currentGitError}</pre> 
+                    <pre className="text-xs text-foreground whitespace-pre-wrap">{currentAnalysisError || currentGitError}</pre>
                 </ScrollArea>
                 <div className="flex gap-2 mt-2">
                     <Button variant="outline" size="sm" onClick={() => handleCopyLogsToClipboard(currentAnalysisError || currentGitError)} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground">
                         <Copy className="mr-2 h-4 w-4"/> Copiar Mensaje de Error
                     </Button>
-                    <Button 
-                        variant="outline" 
-                        size="sm" 
-                        onClick={() => handleAttemptAutoFix(currentAnalysisError || currentGitError, currentGitError ? "Error ocurrido durante la subida del código fuente a un repositorio Git." : "Error ocurrido durante el auto-análisis del código fuente.")} 
-                        disabled={status === "fixing_error" || status === "fixing_git_error" || !currentProviderConfig || (currentProviderConfig.requiresApiKey && !apiKey) || !modelName}
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleAttemptAutoFix(currentAnalysisError || currentGitError, currentGitError ? "Error ocurrido durante la subida del código fuente a un repositorio Git." : "Error ocurrido durante el auto-análisis del código fuente.")}
+                        disabled={status === "fixing_error" || status === "fixing_git_error" || !resolvedLlmOptions}
                         className="text-accent border-accent/50 hover:bg-accent/20 hover:text-accent-foreground"
                     >
                         {(status === "fixing_error" || status === "fixing_git_error") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Settings2 className="mr-2 h-4 w-4"/>}
@@ -907,8 +959,8 @@ export default function AutoUpdatePage() {
               <AlertDialogFooter className="mt-4">
                   <AlertDialogCancel onClick={() => setIsAutoFixModalOpen(false)}>Cerrar</AlertDialogCancel>
                   {(status === "error" && currentGitError && gitUploadRetryCount < MAX_GIT_UPLOAD_RETRIES) && (
-                    <AlertDialogAction 
-                      onClick={() => handleRetryGitUploadFromModal()}
+                    <AlertDialogAction
+                      onClick={handleRetryGitUploadFromModal}
                       className="bg-primary hover:bg-primary/90"
                       disabled={isProcessing}
                     >
@@ -917,7 +969,7 @@ export default function AutoUpdatePage() {
                     </AlertDialogAction>
                   )}
                   {(status === "error" && currentAnalysisError) && (
-                     <AlertDialogAction 
+                     <AlertDialogAction
                       onClick={() => {
                         setIsAutoFixModalOpen(false);
                         handleStartAutoAnalysis(true); // true for retry

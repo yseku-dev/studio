@@ -1,3 +1,4 @@
+
 // src/components/workgroup-execution-modal.tsx
 'use client';
 
@@ -23,6 +24,8 @@ import {
     getLocalStorageModelName,
     LOCALSTORAGE_PROVIDER_ID_KEY
 } from '@/config/llm-config';
+import { ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS } from '@/config/agent-config'; // Use constants
+import { resolveLlmOptionsForSource } from '@/lib/llm-utils'; // Import the helper
 
 interface WorkgroupExecutionModalProps {
   isOpen: boolean;
@@ -31,8 +34,6 @@ interface WorkgroupExecutionModalProps {
   agents: AgentConfig[]; // Pass available agents to find names and orchestrator
 }
 
-const ORCHESTRATOR_AGENT_NAME = "OrquestadorFlujoAgentes";
-const MAX_TURNS = 10; // Limit the number of turns to prevent infinite loops
 
 type LogEntry = {
     timestamp: string;
@@ -68,46 +69,14 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
   }, [agents]);
 
 
-  const resolveAgentLLMOptions = useCallback((agentConfig: AgentLLMConfig): { providerId: LLMProviderId; modelName: string; apiKey: string | null, apiUrl: string | undefined } | null => {
-        let providerId: LLMProviderId;
-        let modelName: string | null;
-        let apiKey: string | null = null;
-        let apiUrl: string | undefined;
-        let providerConfig = null;
-
-        if (agentConfig === 'default') {
-            const globalProviderId = localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null || DEFAULT_LLM_PROVIDER;
-            providerConfig = LLM_PROVIDERS.find(p => p.id === globalProviderId);
-            modelName = localStorage.getItem(getLocalStorageModelName(globalProviderId));
-            apiKey = localStorage.getItem(getLocalStorageApiKeyName(globalProviderId));
-            apiUrl = localStorage.getItem(`codealchemist_apiurl_${globalProviderId}`) || providerConfig?.apiUrl;
-            providerId = globalProviderId;
-        } else {
-            providerId = agentConfig.providerId;
-            providerConfig = LLM_PROVIDERS.find(p => p.id === providerId);
-            modelName = agentConfig.modelName;
-            // Use agent's specific key/URL if provided, otherwise fallback to global for that provider, then provider default
-            apiKey = agentConfig.apiKey || localStorage.getItem(getLocalStorageApiKeyName(providerId));
-            apiUrl = agentConfig.apiUrl || localStorage.getItem(`codealchemist_apiurl_${providerId}`) || providerConfig?.apiUrl;
-        }
-
-         if (!providerConfig || !modelName || (providerConfig.requiresApiKey && !apiKey)) {
-            logMessage({ type: 'error', message: `Configuración LLM inválida o incompleta para un agente (Proveedor: ${providerId}, Modelo: ${modelName}, API Key requerida: ${providerConfig?.requiresApiKey}). Revisa la configuración global y del agente.` });
-            return null;
-        }
-
-        return { providerId, modelName, apiKey, apiUrl };
-   }, [logMessage]);
-
-
-   const runExecutionTurn = useCallback(async (turn: number, history: ChatMessage[], signal: AbortSignal) => {
+  const runExecutionTurn = useCallback(async (turn: number, history: ChatMessage[], signal: AbortSignal) => {
     if (!isMountedRef.current || signal.aborted) {
         logMessage({ type: 'system', message: 'Ejecución detenida (Componente desmontado o señal cancelada).' });
         setIsExecuting(false);
         return;
     }
 
-    logMessage({ type: 'system', message: `Iniciando turno ${turn}/${MAX_TURNS}...` });
+    logMessage({ type: 'system', message: `Iniciando turno ${turn}/${MAX_WORKGROUP_TURNS}...` });
     setCurrentTurn(turn); // Update UI turn count
 
     if (!orchestrator) {
@@ -115,13 +84,15 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
         throw new Error('Orquestrador no encontrado');
     }
 
-    const orchestratorLlmOptions = resolveAgentLLMOptions(orchestrator.llmConfig);
+    // Resolve orchestrator options using the utility
+    const orchestratorLlmOptions = resolveLlmOptionsForSource(orchestrator.id, agents);
     if (!orchestratorLlmOptions) {
         throw new Error(`Configuración LLM inválida para el Orquestrador (${orchestrator.name})`);
     }
 
+    // Resolve participant agent options using the utility
     const participantAgentConfigs = participantAgents.reduce((acc, agent) => {
-        const llmOptions = resolveAgentLLMOptions(agent.llmConfig);
+        const llmOptions = resolveLlmOptionsForSource(agent.id, agents); // Resolve using utility
         if (llmOptions) {
             acc[agent.id] = {
                 id: agent.id,
@@ -146,7 +117,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
         workgroupName: workgroup.name,
         task: workgroup.task,
         conversationHistory: history, // Use current history for this turn
-        orchestrator: {
+        orchestrator: { // Use resolved options
             id: orchestrator.id,
             name: orchestrator.name,
             systemMessage: orchestrator.systemMessage,
@@ -157,7 +128,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
         },
         participantAgentConfigs: participantAgentConfigs,
         currentTurn: turn, // Pass the current turn number
-        maxTurns: MAX_TURNS
+        maxTurns: MAX_WORKGROUP_TURNS // Use constant
     };
 
     logMessage({ type: 'debug', message: `Enviando payload al servidor para el turno ${turn}`, llmRequest: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
@@ -200,11 +171,11 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
         }
         if (result.agentResponse) {
              const respondingAgentName = getAgentById(result.agentResponse.agentId)?.name || result.agentResponse.agentId;
-            logMessage({ type: 'agent', agentName: respondingAgentName, message: `Respuesta: ${result.agentResponse.content}`, llmResponse: { raw: result.agentResponse.rawOutput } });
+            logMessage({ type: 'agent', agentName: respondingAgentName, message: `Respuesta: ${result.agentResponse.content.substring(0,500)}${result.agentResponse.content.length > 500 ? '...' : ''}`, llmResponse: { raw: result.agentResponse.rawOutput } }); // Log truncated message, full response in debug
         }
 
 
-        if (result.isComplete || turn >= MAX_TURNS) {
+        if (result.isComplete || turn >= MAX_WORKGROUP_TURNS) {
             logMessage({ type: 'system', message: `Ejecución finalizada (Razón: ${result.isComplete ? 'Tarea completada por orquestador' : 'Límite de turnos alcanzado'}).` });
             setIsExecuting(false);
         } else if (!signal.aborted) {
@@ -233,7 +204,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
         setIsExecuting(false); // Stop execution on client error or cancellation
     }
 
-}, [orchestrator, resolveAgentLLMOptions, participantAgents, workgroup.name, workgroup.task, logMessage, getAgentById]); // Dependencies without state that changes inside the loop
+}, [orchestrator, resolveLlmOptionsForSource, participantAgents, workgroup.name, workgroup.task, logMessage, getAgentById, agents]); // Added 'agents' dependency for resolveLlmOptionsForSource
 
 
   const startExecution = useCallback(() => {
@@ -250,7 +221,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
     logMessage({ type: 'info', message: `Tarea: ${workgroup.task}` });
     logMessage({ type: 'info', message: `Orquestador: ${orchestrator?.name}` });
     logMessage({ type: 'info', message: `Participantes: ${participantAgents.map(a => a.name).join(', ')}` });
-    logMessage({ type: 'info', message: `Máximo de turnos: ${MAX_TURNS}` });
+    logMessage({ type: 'info', message: `Máximo de turnos: ${MAX_WORKGROUP_TURNS}` });
 
     // Start the first turn (turn 1)
     runExecutionTurn(1, initialHistory, executionControllerRef.current.signal);
@@ -319,7 +290,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
         <DialogHeader className="p-6 pb-4 border-b">
           <DialogTitle className="flex items-center gap-2">
             {isExecuting ? <Loader2 className="h-5 w-5 text-primary animate-spin" /> : <Play className="h-5 w-5 text-primary" />}
-            Ejecución del Grupo: {workgroup.name} {isExecuting && currentTurn > 0 ? `(Turno ${currentTurn}/${MAX_TURNS})` : isExecuting ? '(Iniciando...)' : '(Finalizado)'}
+            Ejecución del Grupo: {workgroup.name} {isExecuting && currentTurn > 0 ? `(Turno ${currentTurn}/${MAX_WORKGROUP_TURNS})` : isExecuting ? '(Iniciando...)' : '(Finalizado)'}
           </DialogTitle>
           <DialogDescription>
             Observa el flujo de trabajo entre los agentes mientras colaboran en la tarea.
@@ -379,10 +350,16 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
                                      </span>
                                      <span className="ml-1">{log.message}</span>
                                      {/* Log full raw LLM responses for detailed debugging */}
-                                     {isDebug && log.llmResponse?.raw && (
+                                     {log.llmResponse?.raw && (
                                         <details className="mt-1 ml-4 text-xs opacity-80">
                                             <summary className="cursor-pointer italic">Respuesta LLM Cruda</summary>
                                             <div className="mt-1 p-1 border bg-background rounded max-h-40 overflow-auto">{log.llmResponse.raw}</div>
+                                        </details>
+                                      )}
+                                       {log.llmRequest && (
+                                        <details className="mt-1 ml-4 text-xs opacity-80">
+                                            <summary className="cursor-pointer italic">Detalles de Solicitud LLM</summary>
+                                             <div className="mt-1 p-1 border bg-background rounded max-h-40 overflow-auto">{JSON.stringify(log.llmRequest, null, 2)}</div>
                                         </details>
                                       )}
                                 </div>
@@ -390,8 +367,8 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
                         })}
                         {isExecuting && <div className="flex items-center gap-2 mt-2"><Loader2 className="h-4 w-4 animate-spin text-primary inline-block" /><span className='text-sm text-muted-foreground'>Procesando turno...</span></div>}
                          {!isExecuting && executionError && <div className="mt-2 p-2 rounded bg-destructive/10 text-destructive text-sm font-medium">Ejecución detenida debido a un error.</div>}
-                         {!isExecuting && !executionError && currentTurn >= MAX_TURNS && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución completada (Límite de turnos alcanzado).</div>}
-                         {!isExecuting && !executionError && currentTurn < MAX_TURNS && executionLogs.length > 1 && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución finalizada o detenida.</div>}
+                         {!isExecuting && !executionError && currentTurn >= MAX_WORKGROUP_TURNS && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución completada (Límite de turnos alcanzado).</div>}
+                         {!isExecuting && !executionError && currentTurn < MAX_WORKGROUP_TURNS && executionLogs.length > 1 && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución finalizada o detenida.</div>}
                     </pre>
                 </ScrollArea>
            </div>
@@ -411,5 +388,3 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
     </Dialog>
   );
 }
-
-    

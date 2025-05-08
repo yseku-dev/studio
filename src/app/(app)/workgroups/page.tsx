@@ -1,3 +1,4 @@
+
 // src/app/(app)/workgroups/page.tsx
 'use client';
 
@@ -29,22 +30,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { WorkgroupExecutionModal } from '@/components/workgroup-execution-modal'; // Import the new modal
-
-const ORCHESTRATOR_AGENT_NAME = "OrquestadorFlujoAgentes";
-
-const workgroupSchema = z.object({
-  name: z.string().min(3, 'El nombre debe tener al menos 3 caracteres.'),
-  description: z.string().min(10, 'La descripción debe tener al menos 10 caracteres.'),
-  task: z.string().min(20, 'La tarea debe tener al menos 20 caracteres.'),
-  // AgentIds from the form will NOT include the orchestrator, we add it manually.
-  // Ensure at least one *other* agent is selected.
-  agentIds: z.array(z.string()).min(1, 'Debes seleccionar al menos un agente (además del Orquestador).'),
-});
-
-type WorkgroupFormData = z.infer<typeof workgroupSchema>;
-
-const LOCALSTORAGE_WORKGROUPS_KEY = 'codealchemist_workgroups';
-const LOCALSTORAGE_AGENTS_KEY = 'codealchemist_agents'; // To load available agents
+import { LOCALSTORAGE_WORKGROUPS_KEY, LOCALSTORAGE_AGENTS_KEY, ORCHESTRATOR_AGENT_NAME } from '@/config/agent-config'; // Use constants
 
 // Default workgroup using default agent names (IDs will be resolved dynamically)
 const defaultWorkgroup: Omit<WorkgroupConfig, 'id' | 'agentIds'> & { agentNames: string[] } = {
@@ -58,9 +44,23 @@ const defaultWorkgroup: Omit<WorkgroupConfig, 'id' | 'agentIds'> & { agentNames:
     "IngenieroPruebas",
     "IngenieroDevOps",
     "RepresentanteUsuario",
-    // "OrquestadorFlujoAgentes" // Removed from explicit default list, added automatically
+    // Orchestrator name removed, added automatically
   ],
 };
+
+
+const workgroupSchema = z.object({
+  name: z.string().min(3, 'El nombre debe tener al menos 3 caracteres.'),
+  description: z.string().min(10, 'La descripción debe tener al menos 10 caracteres.'),
+  task: z.string().min(20, 'La tarea debe tener al menos 20 caracteres.'),
+  // AgentIds from the form will NOT include the orchestrator, we add it manually.
+  // Ensure at least one *other* agent is selected.
+  agentIds: z.array(z.string()).min(1, 'Debes seleccionar al menos un agente (además del Orquestador).'),
+});
+
+type WorkgroupFormData = z.infer<typeof workgroupSchema>;
+
+
 
 export default function WorkgroupsPage() {
   const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
@@ -242,8 +242,8 @@ export default function WorkgroupsPage() {
                 Crea, configura y ejecuta grupos de trabajo con tus agentes de IA. El Orquestador se incluye automáticamente.
               </CardDescription>
             </div>
-            <DialogTrigger asChild>
-               <Button onClick={() => handleOpenForm()} disabled={availableAgents.length <= 1 && !orchestratorAgent}> {/* Disable if only orchestrator exists */}
+             <DialogTrigger asChild>
+               <Button onClick={() => handleOpenForm()} disabled={availableAgents.length <= 1 || !orchestratorAgent}> {/* Adjusted disabled condition */}
                 <PlusCircle className="mr-2 h-4 w-4" /> Crear Grupo
               </Button>
             </DialogTrigger>

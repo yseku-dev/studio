@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useForm, SubmitHandler } from 'react-hook-form';
+import { useForm, SubmitHandler, Controller } from 'react-hook-form'; // Import Controller
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Button } from '@/components/ui/button';
@@ -10,10 +10,10 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, CodeXml, Wand2, AlertTriangle, Copy, CheckCircle } from 'lucide-react';
+import { Loader2, CodeXml, Wand2, AlertTriangle, Copy, CheckCircle, Settings2 } from 'lucide-react'; // Added Settings2
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { handleGenerateCode } from './actions';
-import type { HandleGenerateCodeResult } from './actions'; // Use result type from action
+import type { HandleGenerateCodeResult } from './actions';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,99 +26,117 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import {
-  DEFAULT_LLM_PROVIDER,
-  LLM_PROVIDERS,
-  type LLMProviderId,
-  getLocalStorageApiKeyName,
-  getLocalStorageModelName,
-  LOCALSTORAGE_PROVIDER_ID_KEY
-} from '@/config/llm-config';
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"; // Import Select components
+import type { AgentConfig } from '@/types/agent';
+import { resolveLlmOptionsForSource } from '@/lib/llm-utils'; // Import the helper
+import type { LLMOptions } from '@/services/groq'; // Import LLMOptions type
+import { LOCALSTORAGE_AGENTS_KEY } from '@/config/agent-config'; // Import agents key
 
 const formSchema = z.object({
   prompt: z.string().min(10, 'El prompt debe tener al menos 10 caracteres.'),
+  configSource: z.string().min(1, 'Debes seleccionar una fuente de configuración LLM.'), // Add config source validation
 });
 
 type FormData = z.infer<typeof formSchema>;
 
 export default function GenerateCodePage() {
-  // LLM settings state
-  const [llmProviderId, setLlmProviderId] = useState<LLMProviderId>(DEFAULT_LLM_PROVIDER);
-  const [apiKey, setApiKey] = useState<string | null>(null);
-  const [modelName, setModelName] = useState<string | null>(null);
-  const [apiUrl, setApiUrl] = useState<string | undefined>(undefined);
-
   const [isLoading, setIsLoading] = useState(false);
   const [generationResult, setGenerationResult] = useState<HandleGenerateCodeResult['data'] | null>(null);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [isConfirming, setIsConfirming] = useState(false);
   const [promptToConfirm, setPromptToConfirm] = useState<string>("");
+  const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null); // State for resolved options
+
+  // Agent and config source state
+  const [agents, setAgents] = useState<AgentConfig[]>([]);
+  const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global'); // Default to global
 
   const { toast } = useToast();
-
-  const loadLLMSettings = useCallback(() => {
-    const storedProviderId = localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null;
-    const provider = LLM_PROVIDERS.find(p => p.id === (storedProviderId || DEFAULT_LLM_PROVIDER)) || LLM_PROVIDERS.find(p => p.id === DEFAULT_LLM_PROVIDER)!;
-    setLlmProviderId(provider.id);
-    
-    setApiKey(localStorage.getItem(getLocalStorageApiKeyName(provider.id)));
-    setModelName(localStorage.getItem(getLocalStorageModelName(provider.id)));
-    setApiUrl(localStorage.getItem(`codealchemist_apiurl_${provider.id}`) || provider.apiUrl);
-  }, []);
-
-  useEffect(() => {
-    loadLLMSettings();
-    // Listen for storage changes
-    const handleStorageChange = (event: StorageEvent) => {
-      if (event.key?.startsWith('codealchemist_')) {
-        loadLLMSettings();
-      }
-    };
-    window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, [loadLLMSettings]);
 
   const {
     register,
     handleSubmit,
     formState: { errors },
     watch,
+    control, // Need control for Select
+    setValue,
   } = useForm<FormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       prompt: '',
+      configSource: 'global', // Set default value
     }
   });
 
   const currentPrompt = watch('prompt');
+  const watchedConfigSource = watch('configSource');
+
+  // Load agents from localStorage
+  useEffect(() => {
+    const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
+    if (storedAgents) {
+      try {
+        setAgents(JSON.parse(storedAgents));
+      } catch (e) {
+        console.error("Error parsing stored agents:", e);
+        setAgents([]);
+      }
+    }
+    // Set default value for the form after agents are potentially loaded
+    setValue('configSource', 'global');
+  }, [setValue]);
+
+  // Update resolved LLM options when config source or agents change
+  useEffect(() => {
+    const options = resolveLlmOptionsForSource(watchedConfigSource, agents);
+    setResolvedLlmOptions(options);
+  }, [watchedConfigSource, agents]);
+
 
   const onSubmit: SubmitHandler<FormData> = async (data) => {
+     const options = resolveLlmOptionsForSource(data.configSource, agents);
+     if (!options) {
+        toast({
+            title: "Configuración LLM Incompleta",
+            description: `La configuración LLM seleccionada (${data.configSource === 'global' ? 'Global' : agents.find(a => a.id === data.configSource)?.name || 'Agente Desconocido'}) está incompleta o no se pudo resolver. Revisa los Ajustes o la configuración del Agente.`,
+            variant: "destructive",
+            duration: 7000,
+        });
+        return;
+     }
+     setResolvedLlmOptions(options); // Store resolved options for confirmation/generation
     setPromptToConfirm(data.prompt);
     setIsConfirming(true);
   };
 
   const proceedWithGeneration = async () => {
     setIsConfirming(false);
-    if (!promptToConfirm) return;
+    if (!promptToConfirm || !resolvedLlmOptions) {
+        toast({
+            title: "Error Interno",
+            description: "Falta el prompt o las opciones LLM resueltas.",
+            variant: "destructive",
+        });
+        return;
+    };
 
-    const currentProviderConfig = LLM_PROVIDERS.find(p => p.id === llmProviderId);
-    if (!currentProviderConfig) {
-      toast({ title: 'Error de Configuración', description: 'Proveedor LLM no encontrado.', variant: 'destructive' });
-      return;
-    }
-     if (currentProviderConfig.requiresApiKey && !apiKey) {
-      toast({ title: 'Configuración Faltante', description: `Por favor, establece tu Clave API para ${currentProviderConfig.name} en Configuración.`, variant: 'destructive' });
-      return;
-    }
-    if (!modelName) {
-      toast({ title: 'Configuración Faltante', description: `Por favor, establece el Nombre de Modelo para ${currentProviderConfig.name} en Configuración.`, variant: 'destructive' });
-      return;
-    }
-    
     setIsLoading(true);
     setGenerationResult(null);
     setGenerationError(null);
 
-    const result = await handleGenerateCode(promptToConfirm, llmProviderId, apiKey!, modelName!, apiUrl);
+    // Use the resolved LLM options
+    const result = await handleGenerateCode(
+        promptToConfirm,
+        resolvedLlmOptions.providerId,
+        resolvedLlmOptions.apiKey,
+        resolvedLlmOptions.modelName,
+        resolvedLlmOptions.apiUrl
+    );
 
     if (result.success && result.data) {
       setGenerationResult(result.data);
@@ -131,7 +149,7 @@ export default function GenerateCodePage() {
       setGenerationError(result.error || 'Ocurrió un error desconocido durante la generación.');
       toast({
         title: 'Generación Fallida',
-        description: result.error || 'No se pudo generar el código. Revisa el mensaje de error.',
+        description: result.error || `No se pudo generar el código con ${resolvedLlmOptions.providerId}. Revisa el mensaje de error.`,
         variant: 'destructive',
       });
     }
@@ -149,7 +167,7 @@ export default function GenerateCodePage() {
         toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el código.', variant: 'destructive' });
       });
   };
-  
+
   const handleCopyError = (errorText: string | undefined) => {
     if (!errorText) return;
     navigator.clipboard.writeText(errorText)
@@ -161,9 +179,11 @@ export default function GenerateCodePage() {
         toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el error al portapapeles.', variant: 'destructive' });
       });
   };
-  
-  const currentProviderConfig = LLM_PROVIDERS.find(p => p.id === llmProviderId);
-  const isConfigComplete = currentProviderConfig && modelName && (!currentProviderConfig.requiresApiKey || apiKey);
+
+  const getSourceName = (sourceId: string): string => {
+    if (sourceId === 'global') return 'Global';
+    return agents.find(a => a.id === sourceId)?.name || 'Desconocido';
+  }
 
 
   return (
@@ -175,10 +195,14 @@ export default function GenerateCodePage() {
             Generar Código
           </CardTitle>
           <CardDescription>
-            Describe el código que necesitas y la IA lo generará por ti. 
-            {!isConfigComplete ? (
-                <span className="text-destructive block mt-1"> (Configuración de LLM incompleta en Ajustes)</span>
-            ) : <span className="text-foreground block mt-1">(Usando Proveedor: {currentProviderConfig?.name}, Modelo: {modelName})</span>}
+            Describe el código que necesitas y la IA lo generará por ti usando la configuración LLM seleccionada.
+            {!resolvedLlmOptions && watchedConfigSource ? (
+                 <span className="text-destructive block mt-1"> (Configuración LLM para '{getSourceName(watchedConfigSource)}' incompleta o inválida)</span>
+             ) : resolvedLlmOptions ? (
+                <span className="text-foreground block mt-1">(Usando: {getSourceName(watchedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
+             ) : (
+                 <span className="text-muted-foreground block mt-1">(Selecciona una fuente de configuración)</span>
+             )}
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit(onSubmit)}>
@@ -196,11 +220,42 @@ export default function GenerateCodePage() {
                 <p className="text-sm text-destructive mt-1">{errors.prompt.message}</p>
               )}
             </div>
+
+            {/* LLM Configuration Source Selector */}
+            <div className="space-y-2">
+                <Label htmlFor="configSource" className="text-base flex items-center gap-1">
+                   <Settings2 className="h-4 w-4"/> Usar Configuración LLM De:
+                </Label>
+                <Controller
+                    name="configSource"
+                    control={control}
+                    render={({ field }) => (
+                        <Select onValueChange={field.onChange} value={field.value}>
+                            <SelectTrigger id="configSource">
+                                <SelectValue placeholder="Seleccionar fuente de configuración" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="global">Ajustes Globales</SelectItem>
+                                {agents.map(agent => (
+                                    <SelectItem key={agent.id} value={agent.id}>
+                                        Agente: {agent.name}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    )}
+                />
+                {errors.configSource && <p className="text-sm text-destructive mt-1">{errors.configSource.message}</p>}
+                 {!resolvedLlmOptions && watchedConfigSource && (
+                     <p className="text-xs text-destructive mt-1">La configuración para '{getSourceName(watchedConfigSource)}' parece incompleta. Revisa los <a href="/settings" className="underline">Ajustes Globales</a> o la configuración del agente en <a href="/agents" className="underline">Gestión de Agentes</a>.</p>
+                )}
+            </div>
+
           </CardContent>
           <CardFooter>
             <AlertDialog open={isConfirming} onOpenChange={setIsConfirming}>
               <AlertDialogTrigger asChild>
-                 <Button type="submit" disabled={isLoading || !currentPrompt || !isConfigComplete} className="w-full md:w-auto">
+                 <Button type="submit" disabled={isLoading || !currentPrompt || !resolvedLlmOptions} className="w-full md:w-auto">
                   {isLoading ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : (
@@ -213,7 +268,10 @@ export default function GenerateCodePage() {
                 <AlertDialogHeader>
                   <AlertDialogTitle>Confirmar Generación</AlertDialogTitle>
                   <AlertDialogDescription>
-                    ¿Estás seguro de que deseas generar código basado en el siguiente prompt usando {currentProviderConfig?.name} con el modelo {modelName}?
+                    ¿Estás seguro de que deseas generar código basado en el siguiente prompt usando la configuración de '{getSourceName(watchedConfigSource)}'?
+                    <div className="mt-1 text-xs text-muted-foreground">
+                        (Proveedor: {resolvedLlmOptions?.providerId}, Modelo: {resolvedLlmOptions?.modelName})
+                    </div>
                     <ScrollArea className="h-[150px] mt-2 p-2 border rounded bg-muted/30">
                         <pre className="text-xs text-foreground whitespace-pre-wrap">{promptToConfirm}</pre>
                     </ScrollArea>
@@ -232,7 +290,7 @@ export default function GenerateCodePage() {
       </Card>
 
       {isLoading && (
-        <div 
+        <div
           data-ai-hint="code generation loading"
           className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6"
         >
@@ -266,6 +324,7 @@ export default function GenerateCodePage() {
         <Card className="shadow-lg mt-6">
           <CardHeader>
             <CardTitle className="text-2xl">Código Generado</CardTitle>
+            <CardDescription>Generado usando la configuración de '{getSourceName(watchedConfigSource)}'.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {generationResult.explanation && (

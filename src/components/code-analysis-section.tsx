@@ -1,8 +1,8 @@
 
 'use client';
 
-import { useState, useEffect, ChangeEvent } from 'react';
-import { useForm, SubmitHandler } from 'react-hook-form';
+import { useState, useEffect, ChangeEvent, useCallback } from 'react';
+import { useForm, SubmitHandler, Controller } from 'react-hook-form'; // Import Controller
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { handleAnalyzeCode } from '@/app/(app)/analyze/actions';
@@ -12,12 +12,23 @@ import { Input } from '@/components/ui/input';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Wand2, Save, UploadCloud, XCircle, AlertTriangle, Copy } from 'lucide-react';
+import { Loader2, Wand2, Save, UploadCloud, XCircle, AlertTriangle, Copy, Settings2 } from 'lucide-react'; // Added Settings2
 import { ScrollArea } from './ui/scroll-area';
-import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"; // Import Select components
+import type { AgentConfig } from '@/types/agent';
+import { resolveLlmOptionsForSource } from '@/lib/llm-utils'; // Import the helper
+import type { LLMOptions } from '@/services/groq'; // Import LLMOptions type
+import { LOCALSTORAGE_AGENTS_KEY } from '@/config/agent-config'; // Import agents key
 
 const formSchema = z.object({
   code: z.string().min(10, 'El código debe tener al menos 10 caracteres.'),
+  configSource: z.string().min(1, 'Debes seleccionar una fuente de configuración LLM.'), // Add config source validation
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -29,25 +40,24 @@ interface AnalysisResult {
 
 interface CodeAnalysisSectionProps {
   onSaveSnapshot: (code: string, nameSuffix: string) => void;
-  llmProviderId: LLMProviderId;
-  apiKey: string | null;
-  modelName: string | null;
-  apiUrl?: string;
+  // Removed LLM props: llmProviderId, apiKey, modelName, apiUrl
 }
 
-export function CodeAnalysisSection({ 
-    onSaveSnapshot, 
-    llmProviderId, 
-    apiKey, 
-    modelName, 
-    apiUrl 
+export function CodeAnalysisSection({
+    onSaveSnapshot,
 }: CodeAnalysisSectionProps) {
-  
+
   const [isLoading, setIsLoading] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [originalCode, setOriginalCode] = useState<string>('');
   const [fileName, setFileName] = useState<string | null>(null);
+  const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null); // State for resolved options
+
+  // Agent and config source state
+  const [agents, setAgents] = useState<AgentConfig[]>([]);
+  const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global'); // Default to global
+
   const { toast } = useToast();
 
   const {
@@ -57,16 +67,40 @@ export function CodeAnalysisSection({
     reset,
     setValue,
     watch,
+    control, // Need control for Select
   } = useForm<FormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       code: '',
+      configSource: 'global', // Set default value
     }
   });
 
   const codeValue = watch('code');
-  const currentProviderConfig = LLM_PROVIDERS.find(p => p.id === llmProviderId);
-  const isConfigComplete = currentProviderConfig && modelName && (!currentProviderConfig.requiresApiKey || apiKey);
+  const watchedConfigSource = watch('configSource');
+
+  // Load agents from localStorage
+  useEffect(() => {
+    const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
+    if (storedAgents) {
+      try {
+        setAgents(JSON.parse(storedAgents));
+      } catch (e) {
+        console.error("Error parsing stored agents:", e);
+        setAgents([]);
+      }
+    }
+    // Set default value for the form after agents are potentially loaded
+    setValue('configSource', 'global');
+  }, [setValue]);
+
+   // Update resolved LLM options when config source or agents change
+  useEffect(() => {
+    const options = resolveLlmOptionsForSource(watchedConfigSource, agents);
+    setResolvedLlmOptions(options);
+     // Update the local selectedConfigSource state if needed for display, although watching the form value is often sufficient
+    setSelectedConfigSource(watchedConfigSource);
+  }, [watchedConfigSource, agents]);
 
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -92,14 +126,14 @@ export function CodeAnalysisSection({
       };
       reader.readAsText(file);
     } else {
-      if (fileName) { 
+      if (fileName) {
         setValue('code', '');
         setFileName(null);
       }
     }
     event.target.value = '';
   };
-  
+
   const clearFile = () => {
     setValue('code', '');
     setFileName(null);
@@ -111,21 +145,30 @@ export function CodeAnalysisSection({
 
 
   const onSubmit: SubmitHandler<FormData> = async (data) => {
-    if (!isConfigComplete || !currentProviderConfig) {
-      toast({
-        title: 'Configuración Faltante',
-        description: 'Por favor, completa la configuración de LLM en Ajustes.',
-        variant: 'destructive',
-      });
-      return;
-    }
+    const options = resolveLlmOptionsForSource(data.configSource, agents);
+     if (!options) {
+        toast({
+            title: "Configuración LLM Incompleta",
+            description: `La configuración LLM seleccionada (${data.configSource === 'global' ? 'Global' : agents.find(a => a.id === data.configSource)?.name || 'Agente Desconocido'}) está incompleta o no se pudo resolver. Revisa los Ajustes o la configuración del Agente.`,
+            variant: "destructive",
+            duration: 7000,
+        });
+        return;
+     }
+
     setIsLoading(true);
     setAnalysisResult(null);
     setAnalysisError(null);
     setOriginalCode(data.code);
 
-    // Pass the LLM config received via props to the server action
-    const result = await handleAnalyzeCode(data.code, llmProviderId, apiKey!, modelName!, apiUrl);
+    // Pass the resolved LLM options to the server action
+    const result = await handleAnalyzeCode(
+        data.code,
+        options.providerId,
+        options.apiKey,
+        options.modelName,
+        options.apiUrl
+    );
 
     if (result.success && result.data) {
       setAnalysisResult(result.data);
@@ -137,13 +180,13 @@ export function CodeAnalysisSection({
       setAnalysisError(result.error || 'Ocurrió un error desconocido durante el análisis.');
       toast({
         title: 'Análisis Fallido',
-        description: `No se pudieron generar sugerencias con ${currentProviderConfig.name}. Revisa el mensaje de error.`,
+        description: `No se pudieron generar sugerencias con ${options.providerId}. Revisa el mensaje de error.`,
         variant: 'destructive',
       });
     }
     setIsLoading(false);
   };
-  
+
   const handleSaveOriginal = () => {
     if (originalCode) {
       onSaveSnapshot(originalCode, "original");
@@ -172,6 +215,10 @@ export function CodeAnalysisSection({
       });
   };
 
+  const getSourceName = (sourceId: string): string => {
+    if (sourceId === 'global') return 'Global';
+    return agents.find(a => a.id === sourceId)?.name || 'Desconocido';
+  }
 
   return (
     <div className="space-y-6">
@@ -182,11 +229,14 @@ export function CodeAnalysisSection({
             Analiza Tu Código
           </CardTitle>
           <CardDescription>
-            Pega tu código abajo o sube un archivo para obtener sugerencias de mejora potenciadas por IA.
-            Las llamadas a la API tienen un tiempo de espera para evitar bloqueos.
-            {!isConfigComplete ? (
-                <span className="text-destructive block mt-1"> (Configuración de LLM incompleta en Ajustes)</span>
-            ) : <span className="text-foreground block mt-1">(Usando Proveedor: {currentProviderConfig?.name}, Modelo: {modelName})</span>}
+            Pega tu código abajo o sube un archivo para obtener sugerencias de mejora potenciadas por IA usando la configuración LLM seleccionada.
+             {!resolvedLlmOptions && watchedConfigSource ? (
+                 <span className="text-destructive block mt-1"> (Configuración LLM para '{getSourceName(watchedConfigSource)}' incompleta o inválida)</span>
+             ) : resolvedLlmOptions ? (
+                <span className="text-foreground block mt-1">(Usando: {getSourceName(watchedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
+             ) : (
+                 <span className="text-muted-foreground block mt-1">(Selecciona una fuente de configuración)</span>
+             )}
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit(onSubmit)}>
@@ -196,12 +246,12 @@ export function CodeAnalysisSection({
                     <UploadCloud className="h-5 w-5" /> Sube un archivo de código (opcional)
                 </Label>
                 <div className="flex items-center gap-2">
-                    <Input 
-                        id="code-file" 
-                        type="file" 
-                        onChange={handleFileChange} 
+                    <Input
+                        id="code-file"
+                        type="file"
+                        onChange={handleFileChange}
                         className="text-base file:text-base flex-grow"
-                        accept=".py,.js,.ts,.jsx,.tsx,.java,.c,.cpp,.cs,.go,.php,.rb,.rs,.swift,.kt,.html,.css,.json,.md, .txt" 
+                        accept=".py,.js,.ts,.jsx,.tsx,.java,.c,.cpp,.cs,.go,.php,.rb,.rs,.swift,.kt,.html,.css,.json,.md, .txt"
                     />
                     {fileName && (
                         <Button variant="ghost" size="icon" onClick={clearFile} title="Eliminar archivo cargado">
@@ -211,6 +261,37 @@ export function CodeAnalysisSection({
                 </div>
                 {fileName && <p className="text-sm text-muted-foreground">Archivo cargado: <span className="font-medium text-foreground">{fileName}</span>. Su contenido está en el área de texto.</p>}
             </div>
+
+             {/* LLM Configuration Source Selector */}
+            <div className="space-y-2">
+                <Label htmlFor="configSource" className="text-base flex items-center gap-1">
+                   <Settings2 className="h-4 w-4"/> Usar Configuración LLM De:
+                </Label>
+                <Controller
+                    name="configSource"
+                    control={control}
+                    render={({ field }) => (
+                        <Select onValueChange={field.onChange} value={field.value}>
+                            <SelectTrigger id="configSource">
+                                <SelectValue placeholder="Seleccionar fuente de configuración" />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="global">Ajustes Globales</SelectItem>
+                                {agents.map(agent => (
+                                    <SelectItem key={agent.id} value={agent.id}>
+                                        Agente: {agent.name}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    )}
+                />
+                {errors.configSource && <p className="text-sm text-destructive mt-1">{errors.configSource.message}</p>}
+                 {!resolvedLlmOptions && watchedConfigSource && (
+                     <p className="text-xs text-destructive mt-1">La configuración para '{getSourceName(watchedConfigSource)}' parece incompleta. Revisa los <a href="/settings" className="underline">Ajustes Globales</a> o la configuración del agente en <a href="/agents" className="underline">Gestión de Agentes</a>.</p>
+                )}
+            </div>
+
 
             <div className="mt-4">
               <Label htmlFor="code">Entrada de Código</Label>
@@ -227,7 +308,7 @@ export function CodeAnalysisSection({
             </div>
           </CardContent>
           <CardFooter>
-            <Button type="submit" disabled={isLoading || !codeValue || !isConfigComplete} className="w-full md:w-auto">
+            <Button type="submit" disabled={isLoading || !codeValue || !resolvedLlmOptions} className="w-full md:w-auto">
               {isLoading ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
@@ -263,6 +344,7 @@ export function CodeAnalysisSection({
         <Card className="shadow-lg">
           <CardHeader>
             <CardTitle className="text-2xl">Resultados del Análisis</CardTitle>
+             <CardDescription>Analizado usando la configuración de '{getSourceName(watchedConfigSource)}'.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             <div>
@@ -273,7 +355,7 @@ export function CodeAnalysisSection({
                 </CardContent>
               </Card>
             </div>
-            
+
             <div className="grid md:grid-cols-2 gap-4">
               <div>
                 <div className="flex justify-between items-center mb-2">
