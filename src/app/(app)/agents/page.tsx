@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useForm, SubmitHandler } from 'react-hook-form';
+import { useForm, SubmitHandler, Controller } from 'react-hook-form'; // Import Controller
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Button } from '@/components/ui/button';
@@ -76,7 +76,7 @@ export default function AgentsPage() {
   const { toast } = useToast();
   const importFileRef = useRef<HTMLInputElement>(null);
 
-  const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<AgentFormData>({
+  const { control, register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<AgentFormData>({ // Add control
     resolver: zodResolver(agentSchema),
     defaultValues: { llmConfigType: 'default' }
   });
@@ -604,5 +604,3 @@ export default function AgentsPage() {
     </>
   );
 }
-
-    
