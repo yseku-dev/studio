@@ -69,6 +69,10 @@ export default function AutoUpdatePage() {
   const [modelName, setModelName] = useState<string | null>(null);
   const [gitConfig, setGitConfig] = useState<GitConfig>({ repoUrl: null, username: null, email: null, pat: null });
 
+  const [gitUploadRetryCount, setGitUploadRetryCount] = useState(0);
+  const MAX_GIT_UPLOAD_RETRIES = 5;
+
+
   useEffect(() => {
     setApiKey(localStorage.getItem('codealchemist_groq_api_key'));
     setModelName(localStorage.getItem('codealchemist_groq_model_name'));
@@ -92,7 +96,7 @@ export default function AutoUpdatePage() {
      }
   };
 
-  const handleStartAutoAnalysis = async () => {
+  const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
     if (!apiKey || !modelName) {
       toast({
         title: 'Configuración Faltante',
@@ -102,17 +106,19 @@ export default function AutoUpdatePage() {
       return;
     }
 
-    const initialLogs = [`[CLIENT ${new Date().toISOString()}] Iniciando auto-análisis...`];
+    const initialLogs = [...detailedLogs]; // Preserve existing logs if it's a retry
+    initialLogs.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? 'Retrying' : 'Iniciando'} auto-análisis...`);
     setStatus("loading_source"); 
     setAnalysisResult(null);
-    setCurrentAnalysisError(null);
+    setCurrentAnalysisError(null); // Clear previous analysis error
+    setCurrentGitError(null); // Clear previous git error
     setSuggestionsWithStatus([]);
     setAnalysisProgress({ processed: 0, total: 0 }); 
     setAutoFixSuggestion(null);
     setDetailedLogs(initialLogs);
 
     toast({
-      title: "Auto-Análisis Iniciado",
+      title: isRetry ? "Reintentando Auto-Análisis" : "Auto-Análisis Iniciado",
       description: "Cargando y preparando el código fuente de CodeAlchemist..."
     });
 
@@ -161,6 +167,7 @@ export default function AutoUpdatePage() {
     } else {
       setStatus("error");
       setCurrentAnalysisError(result.error || "Ocurrió un error desconocido durante el auto-análisis.");
+      setCurrentGitError(null); // Clear git error if analysis fails
       toast({
         title: "Error en Auto-Análisis",
         description: result.error || "Ocurrió un error desconocido.",
@@ -172,7 +179,7 @@ export default function AutoUpdatePage() {
   };
   
   const handleAttemptAutoFix = async (errorToFix?: string | null, errorContext?: string) => {
-    const targetError = errorToFix || currentAnalysisError;
+    const targetError = errorToFix || currentAnalysisError || currentGitError;
     if (!targetError || !apiKey || !modelName) {
       toast({
         title: "Información Faltante",
@@ -184,7 +191,12 @@ export default function AutoUpdatePage() {
     const newLogs = [...detailedLogs];
     newLogs.push(`[CLIENT ${new Date().toISOString()}] Intentando auto-corrección para el error: ${targetError.substring(0, 100)}...`);
     const prevStatus = status;
-    setStatus(errorContext?.toLowerCase().includes("git") ? "fixing_git_error" : "fixing_error");
+    
+    let fixingStatus: AutoUpdateStatus = "fixing_error";
+    if (errorContext?.toLowerCase().includes("git") || currentGitError) {
+        fixingStatus = "fixing_git_error";
+    }
+    setStatus(fixingStatus);
     setAutoFixSuggestion(null);
     setDetailedLogs(newLogs);
     toast({ title: "Intentando Auto-Corrección", description: "Consultando a la IA para una posible solución..." });
@@ -206,53 +218,53 @@ export default function AutoUpdatePage() {
       newLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener sugerencia de corrección: ${fixResult.error || "Desconocido"}`);
     }
     // Revert to previous error state or success if analysis was successful before fix attempt
-    setStatus(prevStatus === "fixing_error" || prevStatus === "fixing_git_error" ? (analysisResult ? "success" : "error") : prevStatus ); 
+    setStatus(prevStatus === "fixing_error" || prevStatus === "fixing_git_error" ? (currentGitError || currentAnalysisError ? "error" : (analysisResult ? "success" : "idle")) : prevStatus ); 
     setDetailedLogs(newLogs);
   };
 
 
   const handleApplySuggestion = async (suggestionId: string) => {
-    const currentLogs = [...detailedLogs];
+    const currentLogsCopy = [...detailedLogs];
     const suggestionIndex = suggestionsWithStatus.findIndex(s => s.id === suggestionId);
     if (suggestionIndex === -1) {
-        currentLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] No se encontró la sugerencia con ID: ${suggestionId}`);
-        setDetailedLogs(currentLogs);
+        currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] No se encontró la sugerencia con ID: ${suggestionId}`);
+        setDetailedLogs(currentLogsCopy);
         return;
     }
 
     const suggestionToApply = suggestionsWithStatus[suggestionIndex];
     
-    currentLogs.push(`[CLIENT ${new Date().toISOString()}] Iniciando aplicación de sugerencia a: ${suggestionToApply.area || 'área desconocida'}`);
+    currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Iniciando aplicación de sugerencia a: ${suggestionToApply.area || 'área desconocida'}`);
 
     if (!suggestionToApply.area) {
         toast({ title: "Error de Aplicación", description: `El área (nombre de archivo) no está definida para esta sugerencia.`, variant: "destructive" });
         setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: "Falta el nombre del archivo en la sugerencia."} : s));
-        currentLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Falta nombre de archivo para sugerencia ID: ${suggestionId}`);
-        setDetailedLogs(currentLogs);
+        currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Falta nombre de archivo para sugerencia ID: ${suggestionId}`);
+        setDetailedLogs(currentLogsCopy);
         return;
     }
     if (!suggestionToApply.originalContent) {
         toast({ title: "Error de Aplicación", description: `No se encontró el contenido original para ${suggestionToApply.area}. Esto puede ocurrir si el archivo es muy grande o no se pudo leer.`, variant: "destructive" });
         setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: "Falta contenido original del archivo."} : s));
-        currentLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Falta contenido original para ${suggestionToApply.area} (ID: ${suggestionId})`);
-        setDetailedLogs(currentLogs);
+        currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Falta contenido original para ${suggestionToApply.area} (ID: ${suggestionId})`);
+        setDetailedLogs(currentLogsCopy);
         return;
     }
     if (!suggestionToApply.suggestedFullFileContent) {
         toast({ title: "No Aplicable Directamente", description: `Esta sugerencia no incluye contenido de archivo modificado para aplicar directamente a ${suggestionToApply.area}. Revisa la descripción de la sugerencia.`, variant: "default" });
         setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "not_applicable", errorMessage: "No hay contenido de archivo sugerido."} : s));
-        currentLogs.push(`[CLIENT INFO ${new Date().toISOString()}] Sugerencia ID ${suggestionId} para ${suggestionToApply.area} no es aplicable directamente (sin contenido sugerido).`);
-        setDetailedLogs(currentLogs);
+        currentLogsCopy.push(`[CLIENT INFO ${new Date().toISOString()}] Sugerencia ID ${suggestionId} para ${suggestionToApply.area} no es aplicable directamente (sin contenido sugerido).`);
+        setDetailedLogs(currentLogsCopy);
         return;
     }
 
     setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "applying"} : s));
     toast({ title: "Aplicando Sugerencia...", description: `Aplicando cambio a ${suggestionToApply.area}` });
-    currentLogs.push(`[CLIENT ${new Date().toISOString()}] Estado: 'applying'. Llamando a applySuggestedChange para ${suggestionToApply.area}.`);
+    currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Estado: 'applying'. Llamando a applySuggestedChange para ${suggestionToApply.area}.`);
     
     const baseFilePath = suggestionToApply.area.includes(" (parte ") ? suggestionToApply.area.split(" (parte ")[0] : suggestionToApply.area;
 
-    const result = await applySuggestedChange(baseFilePath, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent, currentLogs);
+    const result = await applySuggestedChange(baseFilePath, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent, currentLogsCopy);
     
     if (result.success && result.newContent !== undefined) {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {
@@ -261,12 +273,12 @@ export default function AutoUpdatePage() {
           originalContent: result.newContent, 
         } : s));
       toast({ title: "Sugerencia Aplicada", description: `El cambio para ${baseFilePath} se ha aplicado. Revisa la consola y los logs.`});
-      currentLogs.push(`[CLIENT SUCCESS ${new Date().toISOString()}] Sugerencia aplicada a ${baseFilePath}. El contenido del archivo ha sido actualizado.`);
+      currentLogsCopy.push(`[CLIENT SUCCESS ${new Date().toISOString()}] Sugerencia aplicada a ${baseFilePath}. El contenido del archivo ha sido actualizado.`);
       
       setProjectFiles(prevFiles => (prevFiles || []).map(pf => {
         const normalizePath = (p: string) => p.replace(/^\.\//, '').replace(/^src\//, '');
         if (normalizePath(pf.fileName.toLowerCase()) === normalizePath(baseFilePath.toLowerCase())) {
-          currentLogs.push(`[CLIENT DETAIL ${new Date().toISOString()}] Actualizando contenido en projectFiles para ${pf.fileName}.`);
+          currentLogsCopy.push(`[CLIENT DETAIL ${new Date().toISOString()}] Actualizando contenido en projectFiles para ${pf.fileName}.`);
           return {...pf, content: result.newContent! };
         }
         return pf;
@@ -275,9 +287,9 @@ export default function AutoUpdatePage() {
     } else {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: result.error} : s));
       toast({ title: "Error al Aplicar", description: result.error || `No se pudo aplicar el cambio a ${baseFilePath}.`, variant: "destructive"});
-      currentLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al aplicar sugerencia a ${baseFilePath}: ${result.error}`);
+      currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al aplicar sugerencia a ${baseFilePath}: ${result.error}`);
     }
-    setDetailedLogs(currentLogs);
+    setDetailedLogs(currentLogsCopy);
   };
 
   const handleCopyLogs = (logContent: string[] | string | undefined) => {
@@ -295,8 +307,8 @@ export default function AutoUpdatePage() {
 
   const handleDownloadSource = async () => {
     setIsDownloading(true);
-    const currentLogs = [...detailedLogs];
-    currentLogs.push(`[CLIENT ${new Date().toISOString()}] Iniciando preparación para descarga de código fuente.`);
+    const currentLogsCopy = [...detailedLogs];
+    currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Iniciando preparación para descarga de código fuente.`);
     toast({
       title: "Preparando Descarga",
       description: "Recopilando todos los archivos fuente de CodeAlchemist..."
@@ -304,8 +316,8 @@ export default function AutoUpdatePage() {
 
     let filesToZip = projectFiles;
     if (!filesToZip || filesToZip.length === 0) {
-        currentLogs.push(`[CLIENT WARN ${new Date().toISOString()}] projectFiles está vacío o nulo, intentando obtener de nuevo.`);
-        const bundleResult = await getApplicationSourceBundle(false, currentLogs); 
+        currentLogsCopy.push(`[CLIENT WARN ${new Date().toISOString()}] projectFiles está vacío o nulo, intentando obtener de nuevo.`);
+        const bundleResult = await getApplicationSourceBundle(false, currentLogsCopy); 
         if (bundleResult.success && bundleResult.files) {
             filesToZip = bundleResult.files;
             setProjectFiles(filesToZip);
@@ -316,13 +328,13 @@ export default function AutoUpdatePage() {
                 variant: "destructive",
             });
             setIsDownloading(false);
-            currentLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener código fuente para ZIP: ${bundleResult.error || "Desconocido"}`);
-            setDetailedLogs(currentLogs);
+            currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener código fuente para ZIP: ${bundleResult.error || "Desconocido"}`);
+            setDetailedLogs(currentLogsCopy);
             return;
         }
     }
     
-    currentLogs.push(`[CLIENT ${new Date().toISOString()}] Se empaquetarán ${filesToZip?.length || 0} archivos.`);
+    currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Se empaquetarán ${filesToZip?.length || 0} archivos.`);
 
     if (filesToZip && filesToZip.length > 0) {
       try {
@@ -330,10 +342,10 @@ export default function AutoUpdatePage() {
         filesToZip.forEach(file => {
           if (file.fileName && file.fileName.trim() !== "" && !file.content.startsWith("// Archivo binario") && !file.content.startsWith("// Error:")) { 
             zip.file(file.fileName, file.content);
-            currentLogs.push(`[CLIENT DETAIL ${new Date().toISOString()}] Añadido al ZIP: ${file.fileName} (${file.content.length} bytes)`);
+            currentLogsCopy.push(`[CLIENT DETAIL ${new Date().toISOString()}] Añadido al ZIP: ${file.fileName} (${file.content.length} bytes)`);
           } else {
             console.warn("Archivo omitido en ZIP debido a nombre inválido, contenido binario no manejable o error:", file.fileName);
-            currentLogs.push(`[CLIENT WARN ${new Date().toISOString()}] Omitido en ZIP: ${file.fileName} (razón: ${file.content.startsWith("// Archivo binario") ? "binario" : file.content.startsWith("// Error:") ? "error previo" : "nombre inválido"})`);
+            currentLogsCopy.push(`[CLIENT WARN ${new Date().toISOString()}] Omitido en ZIP: ${file.fileName} (razón: ${file.content.startsWith("// Archivo binario") ? "binario" : file.content.startsWith("// Error:") ? "error previo" : "nombre inválido"})`);
           }
         });
 
@@ -350,7 +362,7 @@ export default function AutoUpdatePage() {
           title: "Descarga Iniciada",
           description: "El paquete de código fuente (codealchemist-source.zip) se está descargando."
         });
-        currentLogs.push(`[CLIENT ${new Date().toISOString()}] Descarga ZIP iniciada (codealchemist-source.zip).`);
+        currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Descarga ZIP iniciada (codealchemist-source.zip).`);
       } catch (e) {
          const error = e instanceof Error ? e.message : "Error desconocido";
          toast({
@@ -359,7 +371,7 @@ export default function AutoUpdatePage() {
           variant: "destructive",
         });
         console.error("Error al crear ZIP:", e);
-        currentLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al crear ZIP: ${error}`);
+        currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al crear ZIP: ${error}`);
       }
     } else {
       toast({
@@ -367,15 +379,15 @@ export default function AutoUpdatePage() {
         description: "No se encontraron archivos para empaquetar.",
         variant: "destructive",
       });
-      currentLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Error: No se encontraron archivos para empaquetar en ZIP.`);
+      currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error: No se encontraron archivos para empaquetar en ZIP.`);
     }
-    setDetailedLogs(currentLogs);
+    setDetailedLogs(currentLogsCopy);
     setIsDownloading(false);
   };
 
   const [currentGitError, setCurrentGitError] = useState<string | null>(null);
 
-  const handleGitUpload = async () => {
+  const performGitUpload = async (isRetry: boolean = false) => {
     const { repoUrl, username, email, pat } = gitConfig;
     if (!repoUrl || !username || !email || !pat) {
         toast({
@@ -383,18 +395,25 @@ export default function AutoUpdatePage() {
             description: "Por favor, completa la configuración de Git en Ajustes (URL, Usuario, Email y PAT).",
             variant: "destructive",
         });
+        setStatus("error"); // Or back to previous relevant status
         return;
     }
-    setCurrentGitError(null);
-    setStatus("uploading_git");
-    const currentLogs = [...detailedLogs];
-    currentLogs.push(`[CLIENT ${new Date().toISOString()}] Iniciando subida a Git: ${repoUrl.replace(pat, '********')}`); // Don't log PAT
-    setDetailedLogs(currentLogs);
-    toast({ title: "Subiendo a Git...", description: `Intentando subir el código fuente a ${repoUrl.split('/').pop()?.replace('.git',' ')}`});
 
-    const result = await handleUploadToGit({ repoUrl, username, email, pat }, "CodeAlchemist: AutoUpdate Sync", currentLogs);
+    setCurrentGitError(null); // Clear previous Git error
+    setCurrentAnalysisError(null); // Clear previous analysis error
+    setStatus("uploading_git");
+    const currentLogsCopy = [...detailedLogs];
+
+    const attemptNumber = isRetry ? gitUploadRetryCount : 1;
+    const commitMsg = `CodeAlchemist: AutoUpdate Sync (Attempt ${attemptNumber})`;
     
-    setDetailedLogs(currentLogs); 
+    currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? `Retrying (${attemptNumber}/${MAX_GIT_UPLOAD_RETRIES})` : 'Initiating'} Git upload to: ${repoUrl.replace(pat, '********')}`);
+    setDetailedLogs(currentLogsCopy);
+    toast({ title: `${isRetry ? `Retrying Git Upload (Attempt ${attemptNumber})` : "Subiendo a Git..."}` , description: `Intentando subir el código fuente a ${repoUrl.split('/').pop()?.replace('.git',' ')}`});
+
+    const result = await handleUploadToGit({ repoUrl, username, email, pat }, commitMsg, currentLogsCopy);
+    
+    setDetailedLogs(currentLogsCopy); 
 
     if (result.success) {
         toast({
@@ -402,27 +421,44 @@ export default function AutoUpdatePage() {
             description: result.message,
             duration: 7000,
         });
-         setStatus(analysisResult ? "success" : "idle");
+        setGitUploadRetryCount(0); // Reset on success
+        setStatus(analysisResult ? "success" : "idle");
     } else {
         setCurrentGitError(result.message);
         toast({
-            title: "Error en Subida a Git",
+            title: `Error en Subida a Git${isRetry ? ` (Intento ${attemptNumber})` : ''}`,
             description: result.message,
             variant: "destructive",
             duration: 10000,
-             action: (
+             action: (gitUploadRetryCount < MAX_GIT_UPLOAD_RETRIES || !isRetry) ? ( // Show Auto-Fix only if retries are left or it's the first attempt
                 <Button 
                     variant="outline" 
                     size="sm"
                     className="ml-auto border-destructive/50 text-destructive hover:bg-destructive/20 hover:text-destructive-foreground"
-                    onClick={() => handleAttemptAutoFix(result.message, "Error ocurrido durante la subida del código fuente a un repositorio Git. Analiza este error de Git y sugiere posibles causas y soluciones. Por ejemplo, si el error es 'src refspec main does not match any', podría ser porque la rama local 'main' no existe o el repositorio remoto no tiene una rama 'main'. Sugiere comandos Git para verificar y solucionar, como verificar ramas locales y remotas, o hacer push a una rama específica.")}
+                    onClick={() => handleAttemptAutoFix(result.message, "Error ocurrido durante la subida del código fuente a un repositorio Git.")}
                 >
                     <Settings2 className="mr-2 h-4 w-4"/> Auto-Fix
                 </Button>
-            )
+            ) : undefined
         });
-        setStatus("error"); // Set to general error, or a more specific git error state if preferred
+        setStatus("error"); 
     }
+  };
+
+  const handleInitialGitUpload = () => {
+    setGitUploadRetryCount(1); // Set to 1 for the first attempt
+    performGitUpload(false);
+  };
+
+  const handleRetryGitUploadFromModal = () => {
+    if (gitUploadRetryCount >= MAX_GIT_UPLOAD_RETRIES) {
+        toast({ title: "Máximo de Reintentos Alcanzado", description: `No se pueden realizar más de ${MAX_GIT_UPLOAD_RETRIES} intentos para la subida a Git.`, variant: "destructive" });
+        setIsAutoFixModalOpen(false);
+        return;
+    }
+    setIsAutoFixModalOpen(false);
+    setGitUploadRetryCount(prev => prev + 1);
+    performGitUpload(true);
   };
 
 
@@ -431,7 +467,7 @@ export default function AutoUpdatePage() {
     initialLogs.push(`[CLIENT ${new Date().toISOString()}] AutoUpdatePage montado. Cargando archivos de proyecto iniciales...`);
     fetchProjectFiles(initialLogs).finally(() => {
         initialLogs.push(`[CLIENT ${new Date().toISOString()}] Carga inicial de archivos de proyecto completada.`);
-        setDetailedLogs(initialLogs); // Set logs after fetch
+        setDetailedLogs(initialLogs); 
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -480,7 +516,7 @@ export default function AutoUpdatePage() {
           
           <div className="flex flex-wrap gap-4">
             <Button 
-              onClick={handleStartAutoAnalysis} 
+              onClick={() => handleStartAutoAnalysis(false)} 
               disabled={isProcessing || !apiKey || !modelName}
               className="text-base py-3 px-6"
             >
@@ -505,7 +541,7 @@ export default function AutoUpdatePage() {
               Descargar Código Fuente (ZIP)
             </Button>
              <Button 
-              onClick={handleGitUpload} 
+              onClick={handleInitialGitUpload} 
               disabled={!isGitConfigured || projectFiles === null || projectFiles.length === 0 || isProcessing}
               variant="outline"
               className="text-base py-3 px-6 text-foreground"
@@ -527,8 +563,9 @@ export default function AutoUpdatePage() {
                      status === "analyzing" ? 
                         (analysisProgress.total > 0 ? `Procesando fragmentos... (${analysisProgress.processed}/${analysisProgress.total})` : "Iniciando análisis, calculando total de fragmentos...") : 
                      status === "success" ? `Análisis completado (${analysisProgress.processed}/${analysisProgress.total} fragmentos).` : 
-                     status === "error" ? `Análisis interrumpido (${analysisProgress.processed > 0 ? `${analysisProgress.processed}/` : ''}${analysisProgress.total > 0 ? analysisProgress.total : 'desconocido'} fragmentos).` :
-                     status === "uploading_git" ? "Subiendo a Git..." :
+                     status === "error" && currentAnalysisError ? `Análisis interrumpido (${analysisProgress.processed > 0 ? `${analysisProgress.processed}/` : ''}${analysisProgress.total > 0 ? analysisProgress.total : 'desconocido'} fragmentos).` :
+                     status === "error" && currentGitError ? "Error durante operación Git." :
+                     status === "uploading_git" ? `Subiendo a Git (Intento ${gitUploadRetryCount}/${MAX_GIT_UPLOAD_RETRIES})...` :
                      status === "fixing_error" ? "Intentando auto-corrección de error de análisis..." :
                      status === "fixing_git_error" ? "Intentando auto-corrección de error de Git..." : ""}
                 </Label>
@@ -536,7 +573,7 @@ export default function AutoUpdatePage() {
                     value={analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 : (status === "loading_source" || (status === "analyzing" && analysisProgress.total === 0)) ? 0 : (status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error" ? 100 : 0) } 
                     className="w-full h-3" 
                 />
-                {(analysisProgress.total > 0 || (status === "error" && analysisProgress.processed > 0)) && (
+                {(analysisProgress.total > 0 || (status === "error" && analysisProgress.processed > 0 && currentAnalysisError)) && (
                     <p className="text-xs text-muted-foreground">
                         {analysisProgress.processed} de {analysisProgress.total > 0 ? analysisProgress.total : (analysisProgress.processed > 0 ? analysisProgress.processed : '?')} fragmentos procesados.
                     </p>
@@ -733,7 +770,7 @@ export default function AutoUpdatePage() {
                     <Button 
                         variant="outline" 
                         size="sm" 
-                        onClick={() => handleAttemptAutoFix(currentAnalysisError || currentGitError, currentGitError ? "Error ocurrido durante la subida del código fuente a un repositorio Git. Analiza este error de Git y sugiere posibles causas y soluciones. Por ejemplo, si el error es 'src refspec main does not match any', podría ser porque la rama local 'main' no existe o el repositorio remoto no tiene una rama 'main'. Sugiere comandos Git para verificar y solucionar, como verificar ramas locales y remotas, o hacer push a una rama específica." : undefined)} 
+                        onClick={() => handleAttemptAutoFix(currentAnalysisError || currentGitError, currentGitError ? "Error ocurrido durante la subida del código fuente a un repositorio Git." : "Error ocurrido durante el auto-análisis del código fuente.")} 
                         disabled={status === "fixing_error" || status === "fixing_git_error" || !apiKey || !modelName}
                         className="text-accent border-accent/50 hover:bg-accent/20 hover:text-accent-foreground"
                     >
@@ -787,8 +824,31 @@ export default function AutoUpdatePage() {
                       </div>
                   </ScrollArea>
               )}
-              <AlertDialogFooter>
+              <AlertDialogFooter className="mt-4">
                   <AlertDialogCancel onClick={() => setIsAutoFixModalOpen(false)}>Cerrar</AlertDialogCancel>
+                  {(status === "error" && currentGitError && gitUploadRetryCount < MAX_GIT_UPLOAD_RETRIES) && (
+                    <AlertDialogAction 
+                      onClick={handleRetryGitUploadFromModal}
+                      className="bg-primary hover:bg-primary/90"
+                      disabled={isProcessing}
+                    >
+                      {isProcessing && status === "uploading_git" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <GitFork className="mr-2 h-4 w-4"/>}
+                      Reintentar Subida a Git ({gitUploadRetryCount}/{MAX_GIT_UPLOAD_RETRIES})
+                    </AlertDialogAction>
+                  )}
+                  {(status === "error" && currentAnalysisError) && (
+                     <AlertDialogAction 
+                      onClick={() => {
+                        setIsAutoFixModalOpen(false);
+                        handleStartAutoAnalysis(true); // true for retry
+                      }}
+                      className="bg-primary hover:bg-primary/90"
+                      disabled={isProcessing}
+                    >
+                      {isProcessing && (status === "loading_source" || status === "analyzing") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4"/>}
+                       Reintentar Análisis
+                    </AlertDialogAction>
+                  )}
               </AlertDialogFooter>
           </AlertDialogContent>
       </AlertDialog>
@@ -798,4 +858,5 @@ export default function AutoUpdatePage() {
 }
 
     
+
 
