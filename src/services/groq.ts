@@ -34,6 +34,7 @@ export interface GroqOptions {
 
 const GROQ_API_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions";
 const DEFAULT_TIMEOUT_MS = 60000; // 60 segundos
+const CHAT_COMPLETION_TIMEOUT_MS = 90000; // 90 segundos para chat
 
 /**
  * Helper function to fetch data with retry logic for rate limits and transient errors.
@@ -42,7 +43,7 @@ async function fetchWithRetry(
   url: string,
   fetchRequestOptions: RequestInit,
   maxRetries: number = 3,
-  initialDelayMs: number = 5000, // Increased base delay for exponential backoff
+  initialDelayMs: number = 5000, 
   serviceName: string = "Groq API"
 ): Promise<Response> {
   let attempt = 0;
@@ -57,9 +58,9 @@ async function fetchWithRetry(
         return response;
       }
 
-      const errorBodyText = await response.text(); // Read body for all error types
+      const errorBodyText = await response.text(); 
 
-      if (response.status === 429) { // Too Many Requests
+      if (response.status === 429) { 
         lastError = new Error(`Error de la API de Groq (${serviceName}): Límite de tasa excedido (429). Detalle: ${errorBodyText}`);
         
         if (attempt >= maxRetries) {
@@ -67,38 +68,35 @@ async function fetchWithRetry(
           throw lastError;
         }
 
-        let waitMs = initialDelayMs * Math.pow(2, attempt - 1); // Exponential backoff base
+        let waitMs = initialDelayMs * Math.pow(2, attempt - 1); 
 
-        // Intenta parsear el delay sugerido por la API desde el cuerpo del error
         const retryAfterMatch = errorBodyText.match(/try again in (\d+\.?\d*)\s*s/i);
         if (retryAfterMatch && retryAfterMatch[1]) {
           const suggestedSeconds = parseFloat(retryAfterMatch[1]);
-          const suggestedWaitMs = Math.ceil(suggestedSeconds * 1000) + (Math.random() * 1000); // Añadir jitter
-          waitMs = Math.max(waitMs, suggestedWaitMs); // Usar el mayor entre el sugerido y el exponencial
+          const suggestedWaitMs = Math.ceil(suggestedSeconds * 1000) + (Math.random() * 1000); 
+          waitMs = Math.max(waitMs, suggestedWaitMs); 
           console.warn(`${serviceName} 429: Reintentando después del retraso sugerido/calculado de ${waitMs / 1000}s. Intento ${attempt}/${maxRetries}. Error: ${errorBodyText.substring(0, 200)}`);
         } else {
           console.warn(`${serviceName} 429: Límite de tasa excedido. Reintentando en ${waitMs / 1000}s (intento ${attempt}/${maxRetries}). Error: ${errorBodyText.substring(0,200)}`);
         }
         
         await new Promise(resolve => setTimeout(resolve, waitMs));
-        continue; // Siguiente intento
-      } else if (response.status === 413) { // Payload Too Large
+        continue; 
+      } else if (response.status === 413) { 
         lastError = new Error(`Error de la API de Groq (${serviceName}): Payload Too Large (413). Detalle: ${errorBodyText}`);
         console.error(`Error de Payload Too Large (413) en ${serviceName}. El payload es demasiado grande para el modelo. Error: ${errorBodyText}`);
-        // No se reintenta automáticamente para 413, ya que el payload debe ser reducido.
         throw lastError;
       }
 
 
-      // Para otros errores HTTP no OK (4xx, 5xx distintos de 429, 413)
       console.error(`Respuesta de error HTTP de ${serviceName} - ${response.status}:`, errorBodyText);
       throw new Error(`Error HTTP de ${serviceName}: ${response.status} ${response.statusText}. Detalle: ${errorBodyText}`);
 
-    } catch (error) { // Captura errores operacionales de fetch (red, AbortError) o errores lanzados arriba
+    } catch (error) { 
       lastError = error as Error;
       if (error instanceof Error && error.name === 'AbortError') {
         console.error(`Error de timeout llamando a ${serviceName} en intento ${attempt}`);
-        throw error; // Propagar AbortError, probablemente significa timeout general de la operación
+        throw error; 
       }
       
       if (attempt >= maxRetries) {
@@ -106,13 +104,11 @@ async function fetchWithRetry(
         throw new Error(`Falló la solicitud a ${serviceName} después de ${maxRetries} intentos. Último error: ${lastError.message}`);
       }
       
-      // Para otros errores (ej. red), reintentar con backoff y jitter
       const waitMs = (initialDelayMs * Math.pow(2, attempt - 1)) + (Math.random() * 1000);
       console.warn(`${serviceName}: Error en intento ${attempt}. Reintentando en ${waitMs / 1000}s. Error: ${lastError.message}`);
       await new Promise(resolve => setTimeout(resolve, waitMs));
     }
   }
-  // Solo se alcanza si todos los reintentos fallan. lastError debería estar seteado.
   throw new Error(`Falló la solicitud a ${serviceName} después de ${maxRetries} intentos. Último error: ${lastError ? lastError.message : "Error desconocido"}`);
 }
 
@@ -166,8 +162,7 @@ export async function analyzeCodeWithGroq(
     };
 
     const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 3, 2000, `analyzeCodeWithGroq(${options.modelName})`);
-    // Si fetchWithRetry tuvo éxito, response.ok es true.
-
+    
     const data = await response.json();
     let parsedResult: GroqResponse;
 
@@ -189,18 +184,14 @@ export async function analyzeCodeWithGroq(
     return parsedResult;
 
   } catch (error) {
-    // Este catch ahora maneja errores de fetchWithRetry (AbortError, max retries agotados, errores HTTP no recuperables)
-    // y errores de parseo de JSON o validación de la respuesta.
     if (error instanceof Error && error.name === 'AbortError') {
       console.error("Error de timeout final llamando a la API de Groq (analyzeCodeWithGroq)");
       throw new Error("La solicitud a la API de Groq excedió el tiempo límite general.");
     }
     console.error("Error procesando la solicitud a Groq (analyzeCodeWithGroq):", error);
-    // Re-lanzar el error para que sea manejado por la capa superior (actions.ts)
-    // Los errores de fetchWithRetry ya son bastante descriptivos.
     throw error; 
   } finally {
-     clearTimeout(timeoutId); // Asegurar que el timeout se limpie siempre
+     clearTimeout(timeoutId); 
   }
 }
 
@@ -264,12 +255,12 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
       }
     ],
     temperature: 0.2, 
-    max_tokens: 4000, // Ajustado a un límite razonable para la respuesta JSON estructurada
+    max_tokens: 4000, 
     response_format: { type: "json_object" },
   };
 
   const controller = new AbortController();
-  const timeoutForProjectAnalysis = options.timeoutMs || DEFAULT_TIMEOUT_MS * 2; // Default 120 segundos
+  const timeoutForProjectAnalysis = options.timeoutMs || DEFAULT_TIMEOUT_MS * 2; 
   const timeoutId = setTimeout(() => controller.abort(), timeoutForProjectAnalysis);
 
   try {
@@ -283,7 +274,7 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
       signal: controller.signal,
     };
     
-    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 5, 10000, `analyzeProjectSourceWithGroq(${options.modelName})`); // Más reintentos y mayor delay para análisis de proyecto
+    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 5, 30000, `analyzeProjectSourceWithGroq(${options.modelName})`); 
 
     const data = await response.json();
     let parsedResult: ProjectAnalysisGroqResponse;
@@ -311,7 +302,7 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
       throw new Error("La solicitud de análisis de fragmento de proyecto a la API de Groq excedió el tiempo límite general.");
     }
     console.error("Error procesando la solicitud de análisis de fragmento de proyecto a Groq:", error);
-    throw error; // Re-lanzar para manejo en la capa superior
+    throw error; 
   } finally {
     clearTimeout(timeoutId);
   }
@@ -332,7 +323,7 @@ export async function testGroqConnection(options: GroqOptions): Promise<{success
   };
 
   const controller = new AbortController();
-  const timeoutForTest = options.timeoutMs || 30000; // Default 30 segundos para prueba
+  const timeoutForTest = options.timeoutMs || 30000; 
   const timeoutId = setTimeout(() => controller.abort(), timeoutForTest);
 
   try {
@@ -346,15 +337,13 @@ export async function testGroqConnection(options: GroqOptions): Promise<{success
       signal: controller.signal,
     };
 
-    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 2, 1000, `testGroqConnection(${options.modelName})`); // Menos reintentos para test
+    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 2, 1000, `testGroqConnection(${options.modelName})`); 
 
     const responseData = await response.json();
     
-    // fetchWithRetry ya asegura que response.ok es true si no lanza error.
     if (responseData.choices && responseData.choices[0] && responseData.choices[0].message) {
         return { success: true, message: "Conexión con Groq API exitosa.", data: responseData.choices[0].message.content };
     }
-    // Si la estructura de la respuesta no es la esperada, aunque la llamada HTTP fuera OK.
     console.warn("Respuesta inesperada de Groq API durante la prueba de conexión, aunque la llamada fue exitosa:", responseData);
     return { success: false, message: "Respuesta inesperada de Groq API durante la prueba de conexión.", data: responseData };
 
@@ -407,12 +396,12 @@ Si el prompt pide un lenguaje específico, úsalo. Si no, Python es una buena op
       { role: "user", content: prompt }
     ],
     temperature: 0.4,
-    max_tokens: 3000, // Permitir código más extenso
+    max_tokens: 3000, 
     response_format: { type: "json_object" },
   };
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS * 1.5); // 90s timeout
+  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS * 1.5); 
 
   try {
     const fetchRequestOptions: RequestInit = {
@@ -461,7 +450,7 @@ Si el prompt pide un lenguaje específico, úsalo. Si no, Python es una buena op
  * Estructura de un archivo de proyecto.
  */
 interface ProjectFile {
-  path: string; // Ejemplo: "src/components/Button.tsx" o "README.md"
+  path: string; 
   content: string;
 }
 
@@ -470,10 +459,10 @@ interface ProjectFile {
  */
 interface GeneratedProjectGroqResponse {
   projectStructure: {
-    projectName?: string; // Nombre sugerido para el proyecto (directorio raíz)
-    files: ProjectFile[]; // Lista de archivos con su ruta y contenido
+    projectName?: string; 
+    files: ProjectFile[]; 
   };
-  notes?: string; // Notas adicionales de la IA sobre el proyecto o cómo proceder
+  notes?: string; 
 }
 
 /**
@@ -511,12 +500,12 @@ El contenido de los archivos debe ser coherente con sus extensiones y propósito
       { role: "user", content: prompt }
     ],
     temperature: 0.3,
-    max_tokens: 4000, // Límite alto para permitir estructuras complejas y contenido de archivos.
+    max_tokens: 4000, 
     response_format: { type: "json_object" },
   };
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS * 3); // 180s timeout
+  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS * 3); 
 
   try {
     const fetchRequestOptions: RequestInit = {
@@ -539,7 +528,6 @@ El contenido de los archivos debe ser coherente con sus extensiones y propósito
           console.error("Respuesta JSON de Groq incompleta o malformada (generateProjectStructure):", parsedResult);
           throw new Error("La respuesta JSON de Groq no contiene 'projectStructure' o 'projectStructure.files' no es un array.");
         }
-        // Validar cada archivo en el array
         for (const file of parsedResult.projectStructure.files) {
             if (typeof file.path !== 'string' || typeof file.content !== 'string') {
                 console.error("Objeto de archivo inválido en la respuesta de Groq (generateProjectStructure):", file);
@@ -567,3 +555,74 @@ El contenido de los archivos debe ser coherente con sus extensiones y propósito
   }
 }
 
+export interface ChatMessage {
+  role: "user" | "assistant" | "system";
+  content: string;
+}
+
+export interface ChatGroqPayload {
+  messages: ChatMessage[];
+  options: GroqOptions;
+}
+
+export interface ChatGroqResponse {
+  content: string;
+}
+
+/**
+ * Envía una solicitud de completado de chat a la API de Groq.
+ * @param payload El payload que contiene los mensajes y las opciones.
+ * @returns Una promesa que se resuelve en un objeto ChatGroqResponse.
+ */
+export async function chatWithGroq(payload: ChatGroqPayload): Promise<ChatGroqResponse> {
+  const { messages, options } = payload;
+  console.log(`Realizando llamada a API de Groq (modelo: ${options.modelName}) para chat...`);
+
+  // Podríamos añadir un mensaje de sistema por defecto si no se proporciona,
+  // pero por ahora asumimos que el llamador lo gestiona.
+  // const systemDefault = { role: "system", content: "Eres un asistente de IA útil." };
+  // const fullMessages = messages.some(m => m.role === 'system') ? messages : [systemDefault, ...messages];
+
+  const requestBody = {
+    model: options.modelName,
+    messages: messages, // Usar directamente los mensajes proporcionados
+    temperature: 0.7, // Una temperatura más alta puede ser mejor para chat
+    max_tokens: 2048, // Ajustar según sea necesario
+    // No se usa response_format: { type: "json_object" } a menos que se espere JSON del chat
+  };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || CHAT_COMPLETION_TIMEOUT_MS);
+
+  try {
+    const fetchRequestOptions: RequestInit = {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${options.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    };
+
+    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 3, 2000, `chatWithGroq(${options.modelName})`);
+    const data = await response.json();
+
+    if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
+      return { content: data.choices[0].message.content };
+    } else {
+      console.error("Respuesta inesperada de la API de Groq (chat):", data);
+      throw new Error("Respuesta inesperada de la API de Groq (chat). No se encontró contenido en la respuesta.");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error("Error de timeout final llamando a la API de Groq (chat)");
+      throw new Error("La solicitud de chat a la API de Groq excedió el tiempo límite.");
+    }
+    console.error("Error procesando la solicitud a Groq (chat):", error);
+    // Re-lanzar el error para que sea manejado por la capa superior.
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}

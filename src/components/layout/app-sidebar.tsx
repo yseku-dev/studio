@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from '@/components/ui/sheet'; // Added SheetHeader, SheetTitle
+import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { 
   Menu, 
@@ -19,7 +19,8 @@ import {
   CodeXml, 
   FolderPlus,
   ChevronsLeft,
-  ChevronsRight
+  ChevronsRight,
+  MessageCircle
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -38,6 +39,7 @@ const navItems = [
   { href: '/project-analysis', label: 'Analizar Proyecto', icon: FolderSearch },
   { href: '/autoupdate', label: 'AutoUpdate', icon: Sparkles },
   { href: '/versions', label: 'Versiones Guardadas', icon: GitCompareArrows },
+  { href: '/chat', label: 'Chat con IA', icon: MessageCircle },
   { href: '/settings', label: 'Configuración', icon: Settings },
 ];
 

@@ -1,7 +1,7 @@
 
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import Link from "next/link";
-import { ScanLine, GitCompareArrows, Settings as SettingsIcon, FolderSearch, Sparkles, Lightbulb,Rocket, BarChart3, CodeXml, FolderPlus } from "lucide-react";
+import { ScanLine, GitCompareArrows, Settings as SettingsIcon, FolderSearch, Sparkles, Lightbulb,Rocket, BarChart3, CodeXml, FolderPlus, MessageCircle } from "lucide-react";
 
 const featureCards = [
   {
@@ -39,6 +39,12 @@ const featureCards = [
     icon: GitCompareArrows,
     title: "Versiones Guardadas",
     description: "Guarda, revisa, compara y gestiona diferentes snapshots de tu código."
+  },
+   {
+    href: "/chat",
+    icon: MessageCircle,
+    title: "Chat con IA",
+    description: "Interactúa con un asistente de IA para obtener ayuda, resolver dudas o generar ideas."
   },
   {
     href: "/settings",
@@ -111,10 +117,12 @@ export default function DashboardPage() {
           <p><strong>1. Configura tus Ajustes:</strong> Ve a la sección de <Link href="/settings" className="font-semibold text-primary hover:underline">Configuración</Link> para ingresar tu clave API de Groq y seleccionar el modelo de IA que prefieras. ¡No olvides probar la conexión!</p>
           <p><strong>2. Genera Código o Proyectos:</strong> Usa <Link href="/generate-code" className="font-semibold text-primary hover:underline">Generar Código</Link> para fragmentos o <Link href="/generate-project" className="font-semibold text-primary hover:underline">Generar Proyecto</Link> para estructuras completas.</p>
           <p><strong>3. Analiza tu Código:</strong> Dirígete a <Link href="/analyze" className="font-semibold text-primary hover:underline">Analizar Código</Link>. Pega tu código o sube un archivo para recibir análisis detallados y sugerencias de refactorización.</p>
-          <p><strong>4. Explora el AutoUpdate:</strong> En la sección de <Link href="/autoupdate" className="font-semibold text-primary hover:underline">AutoUpdate</Link>, permite que CodeAlchemist analice su propio código fuente. Puedes guiar el análisis con tus preferencias.</p>
-          <p><strong>5. Gestiona tus Versiones:</strong> Utiliza <Link href="/versions" className="font-semibold text-primary hover:underline">Versiones Guardadas</Link> para almacenar, comparar y revertir diferentes estados de tu código a lo largo del tiempo.</p>
+          <p><strong>4. Interactúa con la IA:</strong> Visita la página de <Link href="/chat" className="font-semibold text-primary hover:underline">Chat con IA</Link> para hacer preguntas, obtener explicaciones de código o generar ideas.</p>
+          <p><strong>5. Explora el AutoUpdate:</strong> En la sección de <Link href="/autoupdate" className="font-semibold text-primary hover:underline">AutoUpdate</Link>, permite que CodeAlchemist analice su propio código fuente. Puedes guiar el análisis con tus preferencias.</p>
+          <p><strong>6. Gestiona tus Versiones:</strong> Utiliza <Link href="/versions" className="font-semibold text-primary hover:underline">Versiones Guardadas</Link> para almacenar, comparar y revertir diferentes estados de tu código a lo largo del tiempo.</p>
         </CardContent>
       </Card>
     </div>
   );
 }
+
