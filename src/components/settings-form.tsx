@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { Save, Settings as SettingsIcon, Zap, Loader2, GitFork } from 'lucide-react';
+import { Save, Settings as SettingsIcon, Zap, Loader2, GitFork, CheckCircle, XCircle } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { handleTestGroqConnection } from '@/app/(app)/settings/actions';
+import { handleTestGitConnection } from '@/app/(app)/settings/actions'; // Import the new action
 import { Separator } from '@/components/ui/separator';
 
 const settingsSchema = z.object({
@@ -59,6 +60,7 @@ const groqModels = [
 export function SettingsForm() {
   const { toast } = useToast();
   const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [isTestingGitConnection, setIsTestingGitConnection] = useState(false); // New state for Git test
   const {
     register,
     handleSubmit,
@@ -153,15 +155,51 @@ export function SettingsForm() {
 
     if (result.success) {
       toast({
-        title: 'Conexión Exitosa',
+        title: 'Conexión Groq Exitosa',
         description: `Conectado correctamente a Groq con el modelo ${groqModelName}. Respuesta: ${result.data || 'OK'}`,
-        variant: 'default',
+        action: <CheckCircle className="text-green-500" />,
       });
     } else {
       toast({
-        title: 'Error de Conexión',
+        title: 'Error de Conexión Groq',
         description: result.message,
         variant: 'destructive',
+        action: <XCircle className="text-white" />,
+      });
+    }
+  };
+
+  const onTestGitConnection = async () => {
+    const { gitRepositoryUrl, gitUsername, gitPat } = getValues();
+     if (!gitRepositoryUrl || !gitUsername || !gitPat) {
+      toast({
+        title: 'Campos Git incompletos',
+        description: 'Por favor, introduce la URL del Repositorio, Nombre de Usuario Git y Token de Acceso Personal (PAT) antes de probar la conexión Git.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    setIsTestingGitConnection(true);
+    const result = await handleTestGitConnection({
+        repoUrl: gitRepositoryUrl,
+        username: gitUsername,
+        pat: gitPat,
+    });
+    setIsTestingGitConnection(false);
+
+    if (result.success) {
+      toast({
+        title: 'Conexión Git Exitosa',
+        description: result.message,
+        action: <CheckCircle className="text-green-500" />,
+      });
+    } else {
+      toast({
+        title: 'Error de Conexión Git',
+        description: result.message,
+        variant: 'destructive',
+        duration: 7000,
+        action: <XCircle className="text-white" />,
       });
     }
   };
@@ -306,6 +344,20 @@ export function SettingsForm() {
                     El PAT se utiliza para autenticar las subidas a tu repositorio. Asegúrate de que tiene los permisos necesarios (ej. `repo` o `public_repo`).
                 </p>
               </div>
+               <Button 
+                type="button" 
+                variant="outline" 
+                onClick={onTestGitConnection} 
+                disabled={isTestingGitConnection || !watch('gitRepositoryUrl') || !watch('gitUsername') || !watch('gitPat')}
+                className="w-full md:w-auto text-foreground"
+              >
+                {isTestingGitConnection ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <GitFork className="mr-2 h-4 w-4" />
+                )}
+                Probar Conexión Git
+              </Button>
             </div>
           </div>
 

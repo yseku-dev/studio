@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork } from "lucide-react";
+import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork, Trash2, Expand, Minimize } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion, handleUploadToGit } from './actions';
 import type { AnalyzeCodeAlchemistSourceOutput, SuggestionUnit as FlowSuggestionUnit } from '@/ai/flows/analyze-codealchemist-source-flow';
@@ -26,6 +26,7 @@ import { Textarea } from '@/components/ui/textarea';
 import JSZip from 'jszip';
 import { Label } from '@/components/ui/label';
 import { Progress } from "@/components/ui/progress";
+import { cn } from '@/lib/utils';
 
 
 type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "success" | "error" | "fixing_error" | "uploading_git" | "fixing_git_error";
@@ -62,6 +63,7 @@ export default function AutoUpdatePage() {
   const [autoFixSuggestion, setAutoFixSuggestion] = useState<SuggestErrorFixOutput | null>(null);
   const [isAutoFixModalOpen, setIsAutoFixModalOpen] = useState(false);
   const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
+  const [logsExpanded, setLogsExpanded] = useState(false);
 
   const { toast } = useToast();
 
@@ -106,8 +108,8 @@ export default function AutoUpdatePage() {
       return;
     }
 
-    const initialLogs = [...detailedLogs]; // Preserve existing logs if it's a retry
-    initialLogs.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? 'Retrying' : 'Iniciando'} auto-análisis...`);
+    const initialLogs = isRetry ? [...detailedLogs] : []; // Start fresh logs if not a retry, else append
+    initialLogs.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? 'Reintentando' : 'Iniciando'} auto-análisis...`);
     setStatus("loading_source"); 
     setAnalysisResult(null);
     setCurrentAnalysisError(null); // Clear previous analysis error
@@ -292,7 +294,7 @@ export default function AutoUpdatePage() {
     setDetailedLogs(currentLogsCopy);
   };
 
-  const handleCopyLogs = (logContent: string[] | string | undefined) => {
+  const handleCopyLogsToClipboard = (logContent: string[] | string | undefined) => {
     if (!logContent) return;
     const textToCopy = Array.isArray(logContent) ? logContent.join('\n') : logContent;
     navigator.clipboard.writeText(textToCopy)
@@ -304,6 +306,15 @@ export default function AutoUpdatePage() {
         toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el contenido.', variant: 'destructive' });
       });
   };
+
+  const handleClearLogs = () => {
+    setDetailedLogs(["[CLIENT INFO] Logs borrados por el usuario."]);
+    toast({title: "Logs Borrados", description: "Los logs de ejecución detallados han sido borrados."});
+  };
+
+  const handleToggleLogsExpansion = () => {
+    setLogsExpanded(prev => !prev);
+  }
 
   const handleDownloadSource = async () => {
     setIsDownloading(true);
@@ -556,7 +567,7 @@ export default function AutoUpdatePage() {
             </Button>
           </div>
 
-          {(status === "analyzing" || status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error") && (analysisProgress.total > 0 || status === "loading_source" || (status === "analyzing" && analysisProgress.total === 0)) && (
+          {(status === "analyzing" || status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error" || status === "loading_source") && (
             <div className="mt-4 space-y-2">
                 <Label className="text-sm text-foreground">
                     {status === "loading_source" ? "Cargando código fuente..." :
@@ -570,7 +581,12 @@ export default function AutoUpdatePage() {
                      status === "fixing_git_error" ? "Intentando auto-corrección de error de Git..." : ""}
                 </Label>
                 <Progress 
-                    value={analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 : (status === "loading_source" || (status === "analyzing" && analysisProgress.total === 0)) ? 0 : (status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error" ? 100 : 0) } 
+                    value={
+                        status === "loading_source" ? 5 : // Small progress for loading
+                        status === "analyzing" && analysisProgress.total === 0 ? 10 : // Small progress for initial analysis phase
+                        analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 : 
+                        (status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error" ? 100 : 0) 
+                    } 
                     className="w-full h-3" 
                 />
                 {(analysisProgress.total > 0 || (status === "error" && analysisProgress.processed > 0 && currentAnalysisError)) && (
@@ -583,13 +599,21 @@ export default function AutoUpdatePage() {
 
            {detailedLogs.length > 0 && (
              <Card className="mt-6 border-primary/30">
-               <CardHeader className="pb-2">
-                 <CardTitle className="text-lg flex items-center gap-2 text-primary">
-                   <ListOrdered className="h-5 w-5"/> Logs de Ejecución Detallados
-                 </CardTitle>
-               </CardHeader>
+                <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                    <CardTitle className="text-lg flex items-center gap-2 text-primary">
+                        <ListOrdered className="h-5 w-5"/> Logs de Ejecución Detallados
+                    </CardTitle>
+                    <div className="flex items-center gap-2">
+                        <Button variant="ghost" size="icon" onClick={handleToggleLogsExpansion} title={logsExpanded ? "Contraer Logs" : "Expandir Logs"}>
+                            {logsExpanded ? <Minimize className="h-4 w-4" /> : <Expand className="h-4 w-4" />}
+                        </Button>
+                         <Button variant="ghost" size="icon" onClick={handleClearLogs} title="Borrar Logs">
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                    </div>
+                </CardHeader>
                <CardContent>
-                 <ScrollArea className="h-[250px] p-2 border rounded bg-muted/30">
+                 <ScrollArea className={cn("p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out", logsExpanded ? "h-[500px]" : "h-[250px]")}>
                    <pre className="text-xs text-foreground whitespace-pre-wrap">
                      {detailedLogs.map((log, index) => (
                         <span key={index} className={log.includes("[ERROR") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-600 dark:text-yellow-400" : ""}>
@@ -598,7 +622,7 @@ export default function AutoUpdatePage() {
                      ))}
                    </pre>
                  </ScrollArea>
-                  <Button variant="outline" size="sm" onClick={() => handleCopyLogs(detailedLogs)} className="mt-2 text-foreground">
+                  <Button variant="outline" size="sm" onClick={() => handleCopyLogsToClipboard(detailedLogs)} className="mt-2 text-foreground">
                     <Copy className="mr-2 h-4 w-4"/> Copiar Logs
                   </Button>
                </CardContent>
@@ -660,7 +684,7 @@ export default function AutoUpdatePage() {
                             {s.status === "error_applying" && s.errorMessage && (
                                 <div className="p-2 my-1 bg-destructive/10 border border-destructive/30 rounded-md">
                                     <p className="text-xs text-destructive ">Error al aplicar: {s.errorMessage}</p>
-                                    <Button variant="ghost" size="sm" onClick={() => handleCopyLogs(s.errorMessage)} className="mt-1 h-6 px-1.5 text-xs text-destructive hover:bg-destructive/20">
+                                    <Button variant="ghost" size="sm" onClick={() => handleCopyLogsToClipboard(s.errorMessage)} className="mt-1 h-6 px-1.5 text-xs text-destructive hover:bg-destructive/20">
                                         <Copy className="mr-1 h-3 w-3"/> Copiar Error
                                     </Button>
                                 </div>
@@ -678,9 +702,9 @@ export default function AutoUpdatePage() {
                                             size="sm" 
                                             variant="outline" 
                                             disabled={s.status === "applying" || s.status === "applied" || s.status === "not_applicable" || !s.area || !s.originalContent || !s.suggestedFullFileContent}
-                                            className={s.status === "applied" ? "border-green-500 text-green-700 dark:text-green-400 hover:border-green-600 hover:bg-green-50 dark:hover:bg-green-900/50" : 
+                                            className={cn(s.status === "applied" ? "border-green-500 text-green-700 dark:text-green-400 hover:border-green-600 hover:bg-green-50 dark:hover:bg-green-900/50" : 
                                                        s.status === "error_applying" ? "border-destructive text-destructive hover:border-destructive hover:bg-destructive/10" :
-                                                       "text-foreground"}
+                                                       "text-foreground")}
                                         >
                                         {s.status === "applying" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                         {s.status === "applied" && <CheckCircle className="mr-2 h-4 w-4 text-green-600 dark:text-green-500" />}
@@ -764,7 +788,7 @@ export default function AutoUpdatePage() {
                     <pre className="text-xs text-foreground whitespace-pre-wrap">{currentAnalysisError || currentGitError}</pre> 
                 </ScrollArea>
                 <div className="flex gap-2 mt-2">
-                    <Button variant="outline" size="sm" onClick={() => handleCopyLogs(currentAnalysisError || currentGitError)} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground">
+                    <Button variant="outline" size="sm" onClick={() => handleCopyLogsToClipboard(currentAnalysisError || currentGitError)} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground">
                         <Copy className="mr-2 h-4 w-4"/> Copiar Mensaje de Error
                     </Button>
                     <Button 
@@ -858,5 +882,6 @@ export default function AutoUpdatePage() {
 }
 
     
+
 
 
