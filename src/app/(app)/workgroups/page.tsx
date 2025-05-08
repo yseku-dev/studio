@@ -35,7 +35,15 @@ const defaultWorkgroup: Omit<WorkgroupConfig, 'id' | 'agentIds'> & { agentNames:
   name: "EquipoDesarrolloSoftware",
   description: "Un equipo multidisciplinario para desarrollar una aplicación de lista de tareas.",
   task: "Desarrollar una aplicación web de lista de tareas (To-Do List) simple pero funcional. La aplicación debe permitir a los usuarios crear, ver, editar y eliminar tareas. Debe tener una interfaz de usuario intuitiva y persistencia de datos (simulada en frontend con localStorage si no hay backend).",
-  agentNames: ["JefeDeProducto", "ArquitectoSoftware", "DesarrolladorSoftware", "IngenieroPruebas", "IngenieroDevOps", "RepresentanteUsuario"],
+  agentNames: [
+    "JefeDeProducto", 
+    "ArquitectoSoftware", 
+    "DesarrolladorSoftware", 
+    "IngenieroPruebas", 
+    "IngenieroDevOps", 
+    "RepresentanteUsuario",
+    "SimuladorInteraccionUsuario" // Added the new agent
+  ],
 };
 
 export default function WorkgroupsPage() {
@@ -287,4 +295,3 @@ export default function WorkgroupsPage() {
     </Dialog>
   );
 }
-
