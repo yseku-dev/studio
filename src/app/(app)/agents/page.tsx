@@ -13,6 +13,7 @@ import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription }
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger, DialogClose } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from '@/components/ui/checkbox'; // Import Checkbox
 import {
   AlertDialog,
   AlertDialogAction,
@@ -25,11 +26,14 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"; // Import AlertDialog components
 import { useToast } from '@/hooks/use-toast';
-import { PlusCircle, Users2, Edit2, Trash2, Wand2, UploadCloud, DownloadCloud, MessageSquare } from 'lucide-react';
+import { PlusCircle, Users2, Edit2, Trash2, Wand2, UploadCloud, DownloadCloud, MessageSquare, Code, Terminal, FolderGit2, FileCode } from 'lucide-react';
 import type { AgentConfig, AgentLLMConfig, AgentSpecificLLMConfig } from '@/types/agent';
 import { LLM_PROVIDERS, MODELS_BY_PROVIDER, DEFAULT_LLM_PROVIDER, type LLMProviderId, getLocalStorageApiKeyName as getGlobalApiKeyName, getLocalStorageModelName as getGlobalModelName, LOCALSTORAGE_PROVIDER_ID_KEY as GLOBAL_PROVIDER_ID_KEY } from '@/config/llm-config';
 import { AgentTestChatModal } from '@/components/agent-test-chat-modal'; // Import the new component
 import type { LLMOptions } from '@/services/groq'; // Import LLMOptions type
+import { Separator } from '@/components/ui/separator'; // Import Separator
+import { Badge } from '@/components/ui/badge'; // Import Badge
+
 
 const agentSchema = z.object({
   name: z.string().min(3, 'El nombre debe tener al menos 3 caracteres.'),
@@ -40,6 +44,11 @@ const agentSchema = z.object({
   customModelName: z.string().optional(),
   customApiKey: z.string().optional(),
   customApiUrl: z.string().url().optional().or(z.literal('')),
+  // --- New Capability Flags ---
+  selfCodeAccess: z.boolean().optional().default(false),
+  executionCapability: z.boolean().optional().default(false),
+  virtualEnvCapability: z.boolean().optional().default(false),
+  readWriteCapability: z.boolean().optional().default(false),
 }).refine(data => {
   if (data.llmConfigType === 'custom') {
     return !!data.customProviderId && !!data.customModelName;
@@ -57,9 +66,9 @@ const LOCALSTORAGE_AGENTS_KEY = 'codealchemist_agents';
 const defaultAgents: Omit<AgentConfig, 'id'>[] = [
   { name: "JefeDeProducto", description: "Define requisitos, historias de usuario y prioridades.", systemMessage: "Eres un Jefe de Producto experimentado. Tu tarea es definir claramente los requisitos del proyecto, crear historias de usuario detalladas y establecer prioridades. Comunícate de forma efectiva con el equipo.", llmConfig: 'default' },
   { name: "ArquitectoSoftware", description: "Diseña la arquitectura del sistema y selecciona tecnologías.", systemMessage: "Eres un Arquitecto de Software senior. Tu responsabilidad es diseñar una arquitectura robusta, escalable y mantenible. Selecciona las tecnologías y patrones de diseño más adecuados.", llmConfig: 'default' },
-  { name: "DesarrolladorSoftware", description: "Escribe el código fuente de la aplicación.", systemMessage: "Eres un Desarrollador de Software competente. Tu misión es escribir código limpio, eficiente y bien documentado. Implementa las funcionalidades requeridas.", llmConfig: 'default' },
-  { name: "IngenieroPruebas", description: "Escribe y ejecuta pruebas para asegurar la calidad.", systemMessage: "Eres un Ingeniero de Pruebas meticuloso. Tu objetivo es asegurar la calidad del software mediante la creación y ejecución de planes de prueba exhaustivos. Reporta los errores de forma clara.", llmConfig: 'default' },
-  { name: "IngenieroDevOps", description: "Gestiona infraestructura, despliegues y CI/CD.", systemMessage: "Eres un Ingeniero DevOps eficiente. Tu función es automatizar los procesos de CI/CD y gestionar la infraestructura, asegurando su disponibilidad y rendimiento.", llmConfig: 'default' },
+  { name: "DesarrolladorSoftware", description: "Escribe el código fuente de la aplicación.", systemMessage: "Eres un Desarrollador de Software competente. Tu misión es escribir código limpio, eficiente y bien documentado. Implementa las funcionalidades requeridas.", llmConfig: 'default', executionCapability: true, readWriteCapability: true }, // Example capabilities
+  { name: "IngenieroPruebas", description: "Escribe y ejecuta pruebas para asegurar la calidad.", systemMessage: "Eres un Ingeniero de Pruebas meticuloso. Tu objetivo es asegurar la calidad del software mediante la creación y ejecución de planes de prueba exhaustivos. Reporta los errores de forma clara.", llmConfig: 'default', executionCapability: true }, // Example capability
+  { name: "IngenieroDevOps", description: "Gestiona infraestructura, despliegues y CI/CD.", systemMessage: "Eres un Ingeniero DevOps eficiente. Tu función es automatizar los procesos de CI/CD y gestionar la infraestructura, asegurando su disponibilidad y rendimiento.", llmConfig: 'default', executionCapability: true, virtualEnvCapability: true, readWriteCapability: true }, // Example capabilities
   { name: "RepresentanteUsuario", description: "Proporciona feedback desde la perspectiva del usuario final.", systemMessage: "Eres el Representante del Usuario. Tu perspectiva es crucial. Proporciona feedback sobre las funcionalidades desarrolladas y valida que el producto cumple con las expectativas.", llmConfig: 'default' },
   {
     name: "SimuladorInteraccionUsuario",
@@ -89,7 +98,13 @@ export default function AgentsPage() {
 
   const { control, register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<AgentFormData>({ // Add control
     resolver: zodResolver(agentSchema),
-    defaultValues: { llmConfigType: 'default' }
+    defaultValues: {
+      llmConfigType: 'default',
+      selfCodeAccess: false,
+      executionCapability: false,
+      virtualEnvCapability: false,
+      readWriteCapability: false,
+    }
   });
 
   const watchedLlmConfigType = watch('llmConfigType');
@@ -103,7 +118,15 @@ export default function AgentsPage() {
       try {
         const parsedAgents = JSON.parse(storedAgents);
         if (Array.isArray(parsedAgents)) {
-          setAgents(parsedAgents);
+          // Ensure new capability flags have default values if missing from storage
+          const agentsWithDefaults = parsedAgents.map(agent => ({
+              ...agent,
+              selfCodeAccess: agent.selfCodeAccess ?? false,
+              executionCapability: agent.executionCapability ?? false,
+              virtualEnvCapability: agent.virtualEnvCapability ?? false,
+              readWriteCapability: agent.readWriteCapability ?? false,
+          }));
+          setAgents(agentsWithDefaults);
         } else {
           throw new Error("Stored agents is not an array");
         }
@@ -118,7 +141,15 @@ export default function AgentsPage() {
   }, []);
 
   const initializeDefaultAgents = () => {
-    const initialAgents = defaultAgents.map(agent => ({ ...agent, id: crypto.randomUUID() }));
+    const initialAgents = defaultAgents.map(agent => ({
+        ...agent,
+        id: crypto.randomUUID(),
+        // Set default values for new flags
+        selfCodeAccess: agent.selfCodeAccess ?? false,
+        executionCapability: agent.executionCapability ?? false,
+        virtualEnvCapability: agent.virtualEnvCapability ?? false,
+        readWriteCapability: agent.readWriteCapability ?? false,
+    }));
     setAgents(initialAgents);
     localStorage.setItem(LOCALSTORAGE_AGENTS_KEY, JSON.stringify(initialAgents));
   };
@@ -149,6 +180,11 @@ export default function AgentsPage() {
         customModelName: agent.llmConfig !== 'default' ? agent.llmConfig.modelName : undefined,
         customApiKey: agent.llmConfig !== 'default' ? agent.llmConfig.apiKey || '' : '',
         customApiUrl: agent.llmConfig !== 'default' ? agent.llmConfig.apiUrl || '' : '',
+        // --- Set capability flags ---
+        selfCodeAccess: agent.selfCodeAccess ?? false,
+        executionCapability: agent.executionCapability ?? false,
+        virtualEnvCapability: agent.virtualEnvCapability ?? false,
+        readWriteCapability: agent.readWriteCapability ?? false,
       });
     } else {
       setEditingAgent(null);
@@ -161,6 +197,11 @@ export default function AgentsPage() {
         customModelName: undefined,
         customApiKey: '',
         customApiUrl: '',
+        // --- Reset capability flags ---
+        selfCodeAccess: false,
+        executionCapability: false,
+        virtualEnvCapability: false,
+        readWriteCapability: false,
       });
     }
     setIsFormOpen(true);
@@ -184,6 +225,11 @@ export default function AgentsPage() {
       description: data.description,
       systemMessage: data.systemMessage,
       llmConfig: llmConfigToSave,
+      // --- Save capability flags ---
+      selfCodeAccess: data.selfCodeAccess ?? false,
+      executionCapability: data.executionCapability ?? false,
+      virtualEnvCapability: data.virtualEnvCapability ?? false,
+      readWriteCapability: data.readWriteCapability ?? false,
     };
 
     let updatedAgents;
@@ -287,6 +333,11 @@ export default function AgentsPage() {
         customModelName: undefined,
         customApiKey: '',
         customApiUrl: '',
+        // --- Reset capability flags ---
+        selfCodeAccess: false,
+        executionCapability: false,
+        virtualEnvCapability: false,
+        readWriteCapability: false,
       });
     }
   };
@@ -353,8 +404,11 @@ export default function AgentsPage() {
           if (!agent.id || !agent.name || !agent.systemMessage) {
             throw new Error(`Agente importado inválido: falta id, name o systemMessage. Agente: ${JSON.stringify(agent).substring(0,100)}`);
           }
-          // Ensure new IDs if they conflict, or decide on an update strategy
-          // For simplicity, we'll add new ones, or update if ID matches
+          // Ensure new capability flags have default values if missing from import
+          agent.selfCodeAccess = agent.selfCodeAccess ?? false;
+          agent.executionCapability = agent.executionCapability ?? false;
+          agent.virtualEnvCapability = agent.virtualEnvCapability ?? false;
+          agent.readWriteCapability = agent.readWriteCapability ?? false;
         });
 
         let updatedAgents = [...agents];
@@ -448,6 +502,16 @@ export default function AgentsPage() {
                              <Label className="text-xs font-medium text-foreground">Config LLM:</Label>
                              <p className="text-xs text-muted-foreground">{getLLMConfigDisplay(agent.llmConfig)}</p>
                            </div>
+                           <div className="space-y-1">
+                                <Label className="text-xs font-medium text-foreground">Capacidades:</Label>
+                                <div className="flex flex-wrap gap-1">
+                                    {agent.selfCodeAccess && <Badge variant="outline" className="text-xs"><Code className="mr-1 h-3 w-3"/>Código Propio</Badge>}
+                                    {agent.executionCapability && <Badge variant="outline" className="text-xs"><Terminal className="mr-1 h-3 w-3"/>Ejecución</Badge>}
+                                    {agent.virtualEnvCapability && <Badge variant="outline" className="text-xs"><FolderGit2 className="mr-1 h-3 w-3"/>Entorno Virtual</Badge>}
+                                    {agent.readWriteCapability && <Badge variant="outline" className="text-xs"><FileCode className="mr-1 h-3 w-3"/>Lectura/Escritura</Badge>}
+                                    {!agent.selfCodeAccess && !agent.executionCapability && !agent.virtualEnvCapability && !agent.readWriteCapability && <span className="text-xs text-muted-foreground italic">Ninguna</span>}
+                                </div>
+                            </div>
                         </CardContent>
                         <CardFooter className="flex justify-end gap-2 border-t pt-3 pb-3 bg-muted/30">
                           <Button variant="outline" size="sm" onClick={() => handleTestAgent(agent)} className="text-xs px-2">
@@ -502,7 +566,7 @@ export default function AgentsPage() {
             <form id="agent-form-id" onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
               <ScrollArea className="max-h-[70vh] p-1 -mx-1 pr-4">
                 <div className="space-y-4 px-1">
-                  {/* Form fields remain the same */}
+                  {/* --- Basic Info --- */}
                   <div>
                     <Label htmlFor="name">Nombre del Agente</Label>
                     <Input id="name" {...register('name')} placeholder="Ej: Planificador, Programador" />
@@ -519,6 +583,59 @@ export default function AgentsPage() {
                     {errors.systemMessage && <p className="text-sm text-destructive mt-1">{errors.systemMessage.message}</p>}
                   </div>
 
+                   {/* --- Capabilities --- */}
+                   <div className="space-y-3 rounded-md border p-4 bg-muted/30">
+                        <Label className="text-base font-medium text-foreground">Capacidades del Agente</Label>
+                        <p className="text-xs text-muted-foreground">Habilita permisos específicos para el agente. ¡Ten cuidado con las capacidades de ejecución y escritura!</p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2">
+                           <Controller
+                              name="selfCodeAccess"
+                              control={control}
+                              render={({ field }) => (
+                                <div className="flex items-center space-x-2">
+                                  <Checkbox id="selfCodeAccess" checked={field.value} onCheckedChange={field.onChange} />
+                                  <Label htmlFor="selfCodeAccess" className="text-sm font-normal text-foreground flex items-center gap-1"><Code className="h-4 w-4"/> Acceso a Código Propio</Label>
+                                </div>
+                              )}
+                            />
+                           <Controller
+                              name="executionCapability"
+                              control={control}
+                              render={({ field }) => (
+                                <div className="flex items-center space-x-2">
+                                  <Checkbox id="executionCapability" checked={field.value} onCheckedChange={field.onChange} />
+                                  <Label htmlFor="executionCapability" className="text-sm font-normal text-foreground flex items-center gap-1"><Terminal className="h-4 w-4"/> Capacidad de Ejecución <Badge variant="destructive" className="h-4 px-1 py-0 text-[10px]">Peligroso</Badge></Label>
+                                </div>
+                              )}
+                            />
+                            <Controller
+                              name="virtualEnvCapability"
+                              control={control}
+                              render={({ field }) => (
+                                <div className="flex items-center space-x-2">
+                                  <Checkbox id="virtualEnvCapability" checked={field.value} onCheckedChange={field.onChange} />
+                                  <Label htmlFor="virtualEnvCapability" className="text-sm font-normal text-foreground flex items-center gap-1"><FolderGit2 className="h-4 w-4"/> Capacidad de Entorno Virtual</Label>
+                                </div>
+                              )}
+                            />
+                             <Controller
+                              name="readWriteCapability"
+                              control={control}
+                              render={({ field }) => (
+                                <div className="flex items-center space-x-2">
+                                  <Checkbox id="readWriteCapability" checked={field.value} onCheckedChange={field.onChange} />
+                                  <Label htmlFor="readWriteCapability" className="text-sm font-normal text-foreground flex items-center gap-1"><FileCode className="h-4 w-4"/> Capacidad Lectura/Escritura <Badge variant="destructive" className="h-4 px-1 py-0 text-[10px]">Peligroso</Badge></Label>
+                                </div>
+                              )}
+                            />
+                        </div>
+                        { (watch('executionCapability') || watch('readWriteCapability')) &&
+                            <p className="text-xs text-destructive mt-1">Advertencia: Habilitar la ejecución o la escritura de archivos puede tener implicaciones de seguridad.</p>
+                        }
+                   </div>
+
+
+                  {/* --- LLM Configuration --- */}
                   <div className="space-y-2 rounded-md border p-4 bg-muted/30">
                       <Label className="text-base font-medium text-foreground">Configuración LLM del Agente</Label>
                       <Controller
@@ -635,3 +752,4 @@ export default function AgentsPage() {
     </>
   );
 }
+

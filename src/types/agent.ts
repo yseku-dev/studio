@@ -20,6 +20,16 @@ export interface AgentConfig {
   description: string;
   systemMessage: string;
   llmConfig: AgentLLMConfig;
+  // --- New Capability Flags ---
+  /** Permite al agente leer el código fuente de la aplicación o su propio código. */
+  selfCodeAccess?: boolean;
+  /** Permite al agente ejecutar código (requiere un entorno seguro). */
+  executionCapability?: boolean;
+  /** Permite al agente gestionar o usar entornos virtuales (ej. Python venv). */
+  virtualEnvCapability?: boolean;
+  /** Permite al agente leer y escribir archivos en el sistema (requiere permisos y entorno seguro). */
+  readWriteCapability?: boolean;
+  // ----------------------------
   // Futuros campos: tools, function_map, human_input_mode, max_consecutive_auto_reply, etc.
 }
 
@@ -31,4 +41,5 @@ export interface WorkgroupConfig {
   task: string; // La tarea general para el grupo de trabajo
   // Futuros campos: admin_agent_id, mode (e.g., 'round_robin', 'auto'), max_rounds
 }
+
 
