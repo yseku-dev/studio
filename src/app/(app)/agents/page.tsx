@@ -418,39 +418,57 @@ export default function AgentsPage() {
               {agents.length === 0 ? (
                 <p className="text-muted-foreground text-center py-12">No hay agentes creados. ¡Empieza creando uno o importa agentes existentes!</p>
               ) : (
-                <ScrollArea className="h-[calc(100vh-18rem)]"> {/* Adjusted height */}
-                  <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                <ScrollArea className="h-[calc(100vh-20rem)] lg:h-[calc(100vh-18rem)]"> {/* Adjusted height */}
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"> {/* Adjust grid columns */}
                     {agents.map(agent => (
-                      <Card key={agent.id} className="flex flex-col bg-card hover:shadow-md transition-shadow">
-                        <CardHeader className="pb-2">
+                      <Card key={agent.id} className="flex flex-col bg-card hover:shadow-md transition-shadow duration-200">
+                        <CardHeader className="pb-3">
                           <CardTitle className="text-lg font-semibold text-primary">{agent.name}</CardTitle>
-                          <CardDescription className="text-xs text-muted-foreground h-8 line-clamp-2">{agent.description}</CardDescription>
+                          <CardDescription className="text-sm text-muted-foreground h-10 line-clamp-2">{agent.description}</CardDescription>
                         </CardHeader>
                         <CardContent className="flex-grow space-y-3 pt-2 pb-4">
-                           <div className="text-xs text-foreground">
-                             <strong>Mensaje de Sistema:</strong>
-                             <ScrollArea className="h-16 mt-1 p-1.5 border rounded bg-muted/50 text-xs">
-                               <pre className="whitespace-pre-wrap">{agent.systemMessage}</pre>
+                           <div className="space-y-1">
+                             <Label className="text-xs font-medium text-foreground">Mensaje de Sistema:</Label>
+                             <ScrollArea className="h-20 p-2 border rounded bg-muted/50 text-xs text-muted-foreground">
+                               <pre className="whitespace-pre-wrap font-mono">{agent.systemMessage}</pre>
                              </ScrollArea>
                            </div>
-                           <p className="text-xs text-foreground">
-                             <strong>Config LLM:</strong>
-                             <span className="ml-1 text-muted-foreground">{getLLMConfigDisplay(agent.llmConfig)}</span>
-                           </p>
+                           <div className="space-y-1">
+                             <Label className="text-xs font-medium text-foreground">Config LLM:</Label>
+                             <p className="text-xs text-muted-foreground">{getLLMConfigDisplay(agent.llmConfig)}</p>
+                           </div>
                         </CardContent>
-                        <CardFooter className="flex justify-end gap-2 border-t pt-3 pb-3">
-                          <Button variant="outline" size="sm" onClick={() => handleTestAgent(agent)} className="text-xs">
+                        <CardFooter className="flex justify-end gap-2 border-t pt-3 pb-3 bg-muted/30">
+                          <Button variant="outline" size="sm" onClick={() => handleTestAgent(agent)} className="text-xs px-2">
                             <MessageSquare className="mr-1 h-3 w-3" /> Probar
                           </Button>
-                          <Button variant="ghost" size="sm" onClick={() => handleExportAgent(agent.id)} className="text-xs text-muted-foreground hover:text-primary">
-                            <DownloadCloud className="mr-1 h-3 w-3" /> Exportar
+                          <Button variant="ghost" size="icon" onClick={() => handleExportAgent(agent.id)} title="Exportar Agente" className="text-muted-foreground hover:text-primary">
+                            <DownloadCloud className="h-4 w-4" />
                           </Button>
-                          <Button variant="outline" size="sm" onClick={() => handleOpenForm(agent)} className="text-xs">
-                            <Edit2 className="mr-1 h-3 w-3" /> Editar
+                          <Button variant="ghost" size="icon" onClick={() => handleOpenForm(agent)} title="Editar Agente" className="text-muted-foreground hover:text-primary">
+                            <Edit2 className="h-4 w-4" />
                           </Button>
-                          <Button variant="destructive" size="sm" onClick={() => handleDeleteAgent(agent.id)} className="text-xs">
-                            <Trash2 className="mr-1 h-3 w-3" /> Eliminar
-                          </Button>
+                           <AlertDialog>
+                             <AlertDialogTrigger asChild>
+                                <Button variant="ghost" size="icon" title="Eliminar Agente" className="text-muted-foreground hover:text-destructive">
+                                  <Trash2 className="h-4 w-4" />
+                                </Button>
+                             </AlertDialogTrigger>
+                              <AlertDialogContent>
+                                <AlertDialogHeader>
+                                  <AlertDialogTitle>¿Eliminar Agente?</AlertDialogTitle>
+                                  <AlertDialogDescription>
+                                    ¿Estás seguro de que quieres eliminar al agente "{agent.name}"? Esta acción no se puede deshacer.
+                                  </AlertDialogDescription>
+                                </AlertDialogHeader>
+                                <AlertDialogFooter>
+                                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                  <AlertDialogAction onClick={() => handleDeleteAgent(agent.id)} className="bg-destructive hover:bg-destructive/90">
+                                    Eliminar
+                                  </AlertDialogAction>
+                                </AlertDialogFooter>
+                              </AlertDialogContent>
+                            </AlertDialog>
                         </CardFooter>
                       </Card>
                     ))}
