@@ -13,6 +13,17 @@ import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription }
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger, DialogClose } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog"; // Import AlertDialog components
 import { useToast } from '@/hooks/use-toast';
 import { PlusCircle, Users2, Edit2, Trash2, Wand2, UploadCloud, DownloadCloud, MessageSquare } from 'lucide-react';
 import type { AgentConfig, AgentLLMConfig, AgentSpecificLLMConfig } from '@/types/agent';
@@ -445,9 +456,11 @@ export default function AgentsPage() {
                           <Button variant="ghost" size="icon" onClick={() => handleExportAgent(agent.id)} title="Exportar Agente" className="text-muted-foreground hover:text-primary">
                             <DownloadCloud className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => handleOpenForm(agent)} title="Editar Agente" className="text-muted-foreground hover:text-primary">
-                            <Edit2 className="h-4 w-4" />
-                          </Button>
+                          <DialogTrigger asChild>
+                            <Button variant="ghost" size="icon" onClick={() => handleOpenForm(agent)} title="Editar Agente" className="text-muted-foreground hover:text-primary">
+                              <Edit2 className="h-4 w-4" />
+                            </Button>
+                          </DialogTrigger>
                            <AlertDialog>
                              <AlertDialogTrigger asChild>
                                 <Button variant="ghost" size="icon" title="Eliminar Agente" className="text-muted-foreground hover:text-destructive">
