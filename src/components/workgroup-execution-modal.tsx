@@ -11,6 +11,7 @@ import type { WorkgroupConfig, AgentConfig } from '@/types/agent';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card'; // Import Card components
 
 interface WorkgroupExecutionModalProps {
   isOpen: boolean;
