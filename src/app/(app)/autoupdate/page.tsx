@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered } from "lucide-react";
+import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion } from './actions';
 import type { AnalyzeCodeAlchemistSourceOutput, SuggestionUnit as FlowSuggestionUnit } from '@/ai/flows/analyze-codealchemist-source-flow';
@@ -66,13 +66,15 @@ export default function AutoUpdatePage() {
     setModelName(localStorage.getItem('codealchemist_groq_model_name'));
   }, []);
 
-  const fetchProjectFiles = async () => {
-     const bundleResult = await getApplicationSourceBundle(false); 
+  const fetchProjectFiles = async (targetLogs?: string[]) => {
+     const bundleResult = await getApplicationSourceBundle(false, targetLogs); 
      if (bundleResult.success && bundleResult.files) {
        setProjectFiles(bundleResult.files);
+       if (targetLogs) targetLogs.push(`[CLIENT] Archivos del proyecto cargados en el estado local: ${bundleResult.files.length} archivos.`);
      } else {
        toast({ title: "Error", description: "No se pudieron cargar los archivos del proyecto para la referencia de sugerencias.", variant: "destructive" });
        setProjectFiles([]); 
+       if (targetLogs) targetLogs.push(`[CLIENT ERROR] No se pudieron cargar los archivos del proyecto. Error: ${bundleResult.error}`);
      }
   };
 
@@ -86,28 +88,32 @@ export default function AutoUpdatePage() {
       return;
     }
 
+    const initialLogs = [`[CLIENT ${new Date().toISOString()}] Iniciando auto-análisis...`];
     setStatus("loading_source"); 
     setAnalysisResult(null);
     setCurrentAnalysisError(null);
     setSuggestionsWithStatus([]);
     setAnalysisProgress({ processed: 0, total: 0 }); 
     setAutoFixSuggestion(null);
-    setDetailedLogs(["Iniciando auto-análisis..."]);
+    setDetailedLogs(initialLogs);
+
     toast({
       title: "Auto-Análisis Iniciado",
       description: "Cargando y preparando el código fuente de YskCodeAlchemist..."
     });
 
-    await fetchProjectFiles(); 
+    await fetchProjectFiles(initialLogs); 
+    initialLogs.push(`[CLIENT ${new Date().toISOString()}] Estado cambiado a 'analyzing'. Llamando a handleAutoAnalyzeAppSource.`);
     setStatus("analyzing"); 
 
     const result = await handleAutoAnalyzeAppSource(apiKey, modelName, analysisPreferences);
     
-    setDetailedLogs(prevLogs => [...prevLogs, ...(result.detailedExecutionLogs || [])]);
+    // Combinar logs del servidor con los logs locales existentes
+    setDetailedLogs(prevLogs => [...prevLogs, ...(result.detailedExecutionLogs || [`[CLIENT ${new Date().toISOString()}] Llamada a handleAutoAnalyzeAppSource completada.`])]);
 
     setAnalysisProgress({ 
         processed: result.chunksProcessed || 0, 
-        total: result.totalChunks || 1 
+        total: result.totalChunks || 0 // Usar 0 si no hay total
     });
 
     if (result.success && result.data) {
@@ -115,8 +121,10 @@ export default function AutoUpdatePage() {
       const initialSuggestions = result.data.suggestions.map((s, index) => {
         const relatedFile = projectFiles?.find(f => {
             if (!s.area) return false;
-            const areaLower = s.area.toLowerCase();
-            const fileNameLower = f.fileName.toLowerCase();
+            // Normalizar nombres de archivo para comparación (ej. quitar prefijos como ./ o src/)
+            const normalizePath = (p: string) => p.replace(/^\.\//, '').replace(/^src\//, '');
+            const areaLower = normalizePath(s.area.toLowerCase());
+            const fileNameLower = normalizePath(f.fileName.toLowerCase());
             return fileNameLower === areaLower || fileNameLower === areaLower.split(' (parte ')[0];
         });
         let currentStatus: SuggestionStatus = "pending";
@@ -135,9 +143,9 @@ export default function AutoUpdatePage() {
       setStatus("success");
       toast({
         title: "Auto-Análisis Completado",
-        description: `Se han generado sugerencias para YskCodeAlchemist. ${result.chunksProcessed || 0} fragmentos procesados de ${result.totalChunks || 0}.`
+        description: `Se han generado sugerencias para YskCodeAlchemist. ${result.chunksProcessed || 0} de ${result.totalChunks || 0} fragmentos procesados.`
       });
-      setDetailedLogs(prevLogs => [...prevLogs, "Análisis completado y resultados procesados."]);
+      setDetailedLogs(prevLogs => [...prevLogs, `[CLIENT ${new Date().toISOString()}] Análisis completado y resultados procesados en UI.`]);
     } else {
       setStatus("error");
       setCurrentAnalysisError(result.error || "Ocurrió un error desconocido durante el auto-análisis.");
@@ -147,7 +155,7 @@ export default function AutoUpdatePage() {
         variant: "destructive",
         duration: 10000, 
       });
-       setDetailedLogs(prevLogs => [...prevLogs, `Error en auto-análisis: ${result.error || "Desconocido"}`]);
+       setDetailedLogs(prevLogs => [...prevLogs, `[CLIENT ERROR ${new Date().toISOString()}] Error en auto-análisis: ${result.error || "Desconocido"}`]);
     }
   };
   
@@ -160,75 +168,106 @@ export default function AutoUpdatePage() {
       });
       return;
     }
+    const newLogs = [...detailedLogs];
+    newLogs.push(`[CLIENT ${new Date().toISOString()}] Intentando auto-corrección para el error: ${currentAnalysisError.substring(0, 100)}...`);
     setStatus("fixing_error");
     setAutoFixSuggestion(null);
-    setDetailedLogs(prevLogs => [...prevLogs, `Intentando auto-corrección para el error: ${currentAnalysisError.substring(0, 100)}...`]);
+    setDetailedLogs(newLogs);
     toast({ title: "Intentando Auto-Corrección", description: "Consultando a la IA para una posible solución..." });
 
-    const fixResult = await handleGetErrorFixSuggestion(currentAnalysisError, apiKey, modelName);
+    const fixResult = await handleGetErrorFixSuggestion(currentAnalysisError, apiKey, modelName, newLogs);
+    setDetailedLogs(newLogs); // Actualizar con los logs de la función
 
     if (fixResult.success && fixResult.data) {
       setAutoFixSuggestion(fixResult.data);
       setIsAutoFixModalOpen(true); 
       toast({ title: "Sugerencia de Corrección Recibida", description: "La IA ha proporcionado una sugerencia." });
-      setDetailedLogs(prevLogs => [...prevLogs, "Sugerencia de corrección recibida de la IA."]);
+      newLogs.push(`[CLIENT ${new Date().toISOString()}] Sugerencia de corrección recibida de la IA.`);
     } else {
       toast({
         title: "Error en Auto-Corrección",
         description: fixResult.error || "No se pudo obtener una sugerencia de la IA.",
         variant: "destructive"
       });
-      setDetailedLogs(prevLogs => [...prevLogs, `Error al obtener sugerencia de corrección: ${fixResult.error || "Desconocido"}`]);
+      newLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener sugerencia de corrección: ${fixResult.error || "Desconocido"}`);
     }
     setStatus("error"); 
+    setDetailedLogs(newLogs);
   };
 
 
   const handleApplySuggestion = async (suggestionId: string) => {
+    const currentLogs = [...detailedLogs];
     const suggestionIndex = suggestionsWithStatus.findIndex(s => s.id === suggestionId);
-    if (suggestionIndex === -1) return;
+    if (suggestionIndex === -1) {
+        currentLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] No se encontró la sugerencia con ID: ${suggestionId}`);
+        setDetailedLogs(currentLogs);
+        return;
+    }
 
     const suggestionToApply = suggestionsWithStatus[suggestionIndex];
     
+    currentLogs.push(`[CLIENT ${new Date().toISOString()}] Iniciando aplicación de sugerencia a: ${suggestionToApply.area || 'área desconocida'}`);
+
     if (!suggestionToApply.area) {
-        toast({ title: "Error", description: `El área (nombre de archivo) no está definida para esta sugerencia.`, variant: "destructive" });
+        toast({ title: "Error de Aplicación", description: `El área (nombre de archivo) no está definida para esta sugerencia.`, variant: "destructive" });
         setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: "Falta el nombre del archivo en la sugerencia."} : s));
+        currentLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Falta nombre de archivo para sugerencia ID: ${suggestionId}`);
+        setDetailedLogs(currentLogs);
         return;
     }
     if (!suggestionToApply.originalContent) {
-        toast({ title: "Error", description: `No se encontró el contenido original para ${suggestionToApply.area}. Esto puede ocurrir si el archivo es muy grande o no se pudo leer.`, variant: "destructive" });
-        setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: "Falta contenido original."} : s));
+        toast({ title: "Error de Aplicación", description: `No se encontró el contenido original para ${suggestionToApply.area}. Esto puede ocurrir si el archivo es muy grande o no se pudo leer.`, variant: "destructive" });
+        setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: "Falta contenido original del archivo."} : s));
+        currentLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Falta contenido original para ${suggestionToApply.area} (ID: ${suggestionId})`);
+        setDetailedLogs(currentLogs);
         return;
     }
     if (!suggestionToApply.suggestedFullFileContent) {
-        toast({ title: "No Aplicable", description: `Esta sugerencia no incluye contenido de archivo modificado para aplicar directamente a ${suggestionToApply.area}. Revisa la descripción de la sugerencia.`, variant: "default" });
+        toast({ title: "No Aplicable Directamente", description: `Esta sugerencia no incluye contenido de archivo modificado para aplicar directamente a ${suggestionToApply.area}. Revisa la descripción de la sugerencia.`, variant: "default" });
         setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "not_applicable", errorMessage: "No hay contenido de archivo sugerido."} : s));
+        currentLogs.push(`[CLIENT INFO ${new Date().toISOString()}] Sugerencia ID ${suggestionId} para ${suggestionToApply.area} no es aplicable directamente (sin contenido sugerido).`);
+        setDetailedLogs(currentLogs);
         return;
     }
 
     setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "applying"} : s));
-    toast({ title: "Aplicando Sugerencia...", description: `Simulando aplicación de cambio a ${suggestionToApply.area}` });
-    setDetailedLogs(prevLogs => [...prevLogs, `Simulando aplicación de sugerencia a: ${suggestionToApply.area}`]);
+    toast({ title: "Aplicando Sugerencia...", description: `Aplicando cambio a ${suggestionToApply.area}` });
+    currentLogs.push(`[CLIENT ${new Date().toISOString()}] Estado: 'applying'. Llamando a applySuggestedChange para ${suggestionToApply.area}.`);
     
     const baseFilePath = suggestionToApply.area.includes(" (parte ") ? suggestionToApply.area.split(" (parte ")[0] : suggestionToApply.area;
 
-    const result = await applySuggestedChange(baseFilePath, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent);
+    // Pasar currentLogs para que applySuggestedChange pueda añadir sus propios logs
+    const result = await applySuggestedChange(baseFilePath, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent, currentLogs);
     
-    if (result.success) {
+    if (result.success && result.newContent !== undefined) {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {
           ...s, 
           status: "applied", 
+          // Actualizar el originalContent con el newContent para que futuras descargas tengan la versión más reciente.
+          // Si es una parte, esto es más complejo. Por ahora, actualizamos el original del fragmento,
+          // pero la descarga del ZIP usará el estado `projectFiles` que se actualiza después.
           originalContent: result.newContent, 
         } : s));
-      toast({ title: "Sugerencia Aplicada (Simulación)", description: `El cambio para ${baseFilePath} se ha simulado. Revisa la consola.`});
-      setDetailedLogs(prevLogs => [...prevLogs, `Sugerencia aplicada (simulada) a ${baseFilePath}. El contenido interno del archivo se ha actualizado para la descarga.`]);
+      toast({ title: "Sugerencia Aplicada", description: `El cambio para ${baseFilePath} se ha aplicado. Revisa la consola y los logs.`});
+      currentLogs.push(`[CLIENT SUCCESS ${new Date().toISOString()}] Sugerencia aplicada a ${baseFilePath}. El contenido del archivo ha sido actualizado.`);
       
-      setProjectFiles(prevFiles => (prevFiles || []).map(pf => pf.fileName === baseFilePath ? {...pf, content: result.newContent!} : pf));
+      // Actualizar el estado de projectFiles para que la descarga refleje el cambio
+      setProjectFiles(prevFiles => (prevFiles || []).map(pf => {
+        const normalizePath = (p: string) => p.replace(/^\.\//, '').replace(/^src\//, '');
+        if (normalizePath(pf.fileName.toLowerCase()) === normalizePath(baseFilePath.toLowerCase())) {
+          currentLogs.push(`[CLIENT DETAIL ${new Date().toISOString()}] Actualizando contenido en projectFiles para ${pf.fileName}.`);
+          return {...pf, content: result.newContent! };
+        }
+        return pf;
+      }));
+
     } else {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: result.error} : s));
-      toast({ title: "Error al Aplicar (Simulación)", description: result.error || `No se pudo simular la aplicación del cambio a ${baseFilePath}.`, variant: "destructive"});
-      setDetailedLogs(prevLogs => [...prevLogs, `Error al aplicar sugerencia (simulada) a ${baseFilePath}: ${result.error}`]);
+      toast({ title: "Error al Aplicar", description: result.error || `No se pudo aplicar el cambio a ${baseFilePath}.`, variant: "destructive"});
+      currentLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al aplicar sugerencia a ${baseFilePath}: ${result.error}`);
     }
+    setDetailedLogs(currentLogs);
   };
 
   const handleCopyError = (errorText: string | undefined) => {
@@ -245,7 +284,8 @@ export default function AutoUpdatePage() {
 
   const handleDownloadSource = async () => {
     setIsDownloading(true);
-    setDetailedLogs(prevLogs => [...prevLogs, "Iniciando preparación para descarga de código fuente."]);
+    const currentLogs = [...detailedLogs];
+    currentLogs.push(`[CLIENT ${new Date().toISOString()}] Iniciando preparación para descarga de código fuente.`);
     toast({
       title: "Preparando Descarga",
       description: "Recopilando todos los archivos fuente de YskCodeAlchemist..."
@@ -253,9 +293,11 @@ export default function AutoUpdatePage() {
 
     let filesToZip = projectFiles;
     if (!filesToZip || filesToZip.length === 0) {
-        const bundleResult = await getApplicationSourceBundle(false, detailedLogs); // Pass logs
+        currentLogs.push(`[CLIENT WARN ${new Date().toISOString()}] projectFiles está vacío o nulo, intentando obtener de nuevo.`);
+        const bundleResult = await getApplicationSourceBundle(false, currentLogs); 
         if (bundleResult.success && bundleResult.files) {
             filesToZip = bundleResult.files;
+            setProjectFiles(filesToZip); // Actualizar estado si se obtienen de nuevo
         } else {
             toast({
                 title: "Error al Obtener Código Fuente",
@@ -263,23 +305,24 @@ export default function AutoUpdatePage() {
                 variant: "destructive",
             });
             setIsDownloading(false);
-            setDetailedLogs(prevLogs => [...prevLogs, `Error al obtener código fuente para ZIP: ${bundleResult.error || "Desconocido"}`]);
+            currentLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener código fuente para ZIP: ${bundleResult.error || "Desconocido"}`);
+            setDetailedLogs(currentLogs);
             return;
         }
     }
     
-    setDetailedLogs(prevLogs => [...prevLogs, `Se empaquetarán ${filesToZip?.length || 0} archivos.`]);
+    currentLogs.push(`[CLIENT ${new Date().toISOString()}] Se empaquetarán ${filesToZip?.length || 0} archivos.`);
 
     if (filesToZip && filesToZip.length > 0) {
       try {
         const zip = new JSZip();
         filesToZip.forEach(file => {
-          if (file.fileName && file.fileName.trim() !== "" && !file.content.startsWith("// Archivo binario")) { 
+          if (file.fileName && file.fileName.trim() !== "" && !file.content.startsWith("// Archivo binario") && !file.content.startsWith("// Error:")) { 
             zip.file(file.fileName, file.content);
-            setDetailedLogs(prevLogs => [...prevLogs, `Añadido al ZIP: ${file.fileName}`]);
+            currentLogs.push(`[CLIENT DETAIL ${new Date().toISOString()}] Añadido al ZIP: ${file.fileName} (${file.content.length} bytes)`);
           } else {
-            console.warn("Archivo omitido en ZIP debido a nombre inválido o contenido binario no manejable:", file);
-            setDetailedLogs(prevLogs => [...prevLogs, `Omitido en ZIP: ${file.fileName} (nombre inválido o binario)`]);
+            console.warn("Archivo omitido en ZIP debido a nombre inválido, contenido binario no manejable o error:", file.fileName);
+            currentLogs.push(`[CLIENT WARN ${new Date().toISOString()}] Omitido en ZIP: ${file.fileName} (razón: ${file.content.startsWith("// Archivo binario") ? "binario" : file.content.startsWith("// Error:") ? "error previo" : "nombre inválido"})`);
           }
         });
 
@@ -287,16 +330,16 @@ export default function AutoUpdatePage() {
         const url = URL.createObjectURL(zipBlob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'yskcodealchemist-full-source.zip';
+        a.download = 'yskcodealchemist-source.zip'; // Nombre más corto
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         toast({
           title: "Descarga Iniciada",
-          description: "El paquete completo de código fuente (yskcodealchemist-full-source.zip) se está descargando."
+          description: "El paquete de código fuente (yskcodealchemist-source.zip) se está descargando."
         });
-        setDetailedLogs(prevLogs => [...prevLogs, "Descarga ZIP iniciada."]);
+        currentLogs.push(`[CLIENT ${new Date().toISOString()}] Descarga ZIP iniciada (yskcodealchemist-source.zip).`);
       } catch (e) {
          const error = e instanceof Error ? e.message : "Error desconocido";
          toast({
@@ -305,7 +348,7 @@ export default function AutoUpdatePage() {
           variant: "destructive",
         });
         console.error("Error al crear ZIP:", e);
-        setDetailedLogs(prevLogs => [...prevLogs, `Error al crear ZIP: ${error}`]);
+        currentLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al crear ZIP: ${error}`);
       }
     } else {
       toast({
@@ -313,13 +356,19 @@ export default function AutoUpdatePage() {
         description: "No se encontraron archivos para empaquetar.",
         variant: "destructive",
       });
-      setDetailedLogs(prevLogs => [...prevLogs, "Error: No se encontraron archivos para empaquetar en ZIP."]);
+      currentLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Error: No se encontraron archivos para empaquetar en ZIP.`);
     }
+    setDetailedLogs(currentLogs);
     setIsDownloading(false);
   };
 
   useEffect(() => { 
-    fetchProjectFiles();
+    const initialLogs: string[] = [];
+    initialLogs.push(`[CLIENT ${new Date().toISOString()}] AutoUpdatePage montado. Cargando archivos de proyecto iniciales...`);
+    fetchProjectFiles(initialLogs).finally(() => {
+        initialLogs.push(`[CLIENT ${new Date().toISOString()}] Carga inicial de archivos de proyecto completada.`);
+        // setDetailedLogs(prev => [...prev, ...initialLogs]); // Descomentar si quieres ver estos logs iniciales
+    });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -347,7 +396,7 @@ export default function AutoUpdatePage() {
           </p>
 
           <div className="space-y-2">
-            <Label htmlFor="analysis-preferences" className="text-base flex items-center gap-2">
+            <Label htmlFor="analysis-preferences" className="text-base flex items-center gap-2 text-foreground">
                 <Edit3 className="h-5 w-5"/> Preferencias de Análisis (Opcional)
             </Label>
             <Textarea
@@ -356,7 +405,7 @@ export default function AutoUpdatePage() {
                 onChange={(e) => setAnalysisPreferences(e.target.value)}
                 placeholder="Ej: 'Enfócate en optimizar el rendimiento de los componentes React', 'Revisa la seguridad en las llamadas a API', 'Sugiere mejoras de accesibilidad'..."
                 rows={3}
-                className="bg-card"
+                className="bg-card text-foreground"
             />
             <p className="text-xs text-muted-foreground">Describe qué tipo de actualizaciones o áreas específicas te gustaría que la IA priorizara.</p>
           </div>
@@ -389,21 +438,22 @@ export default function AutoUpdatePage() {
             </Button>
           </div>
 
-          {(status === "analyzing" || status === "success" || status === "error") && analysisProgress && (
+          {(status === "analyzing" || status === "success" || status === "error") && (analysisProgress.total > 0 || status === "loading_source" || (status === "analyzing" && analysisProgress.total === 0)) && (
             <div className="mt-4 space-y-2">
                 <Label className="text-sm text-foreground">
-                    {status === "analyzing" ? 
+                    {status === "loading_source" ? "Cargando código fuente..." :
+                     status === "analyzing" ? 
                         (analysisProgress.total > 0 ? `Procesando fragmentos... (${analysisProgress.processed}/${analysisProgress.total})` : "Iniciando análisis, calculando total de fragmentos...") : 
                      status === "success" ? `Análisis completado (${analysisProgress.processed}/${analysisProgress.total} fragmentos).` : 
-                     status === "error" ? `Análisis interrumpido (${analysisProgress.processed > 0 ? `${analysisProgress.processed}/` : ''}${analysisProgress.total > 0 ? analysisProgress.total : '?'} fragmentos).` : ""}
+                     status === "error" ? `Análisis interrumpido (${analysisProgress.processed > 0 ? `${analysisProgress.processed}/` : ''}${analysisProgress.total > 0 ? analysisProgress.total : 'desconocido'} fragmentos).` : ""}
                 </Label>
                 <Progress 
-                    value={analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 : (status === "analyzing" ? 0 : 100) } 
+                    value={analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 : (status === "loading_source" || (status === "analyzing" && analysisProgress.total === 0)) ? 0 : (status === "success" || status === "error" ? 100 : 0) } 
                     className="w-full h-3" 
                 />
                 {(analysisProgress.total > 0 || (status === "error" && analysisProgress.processed > 0)) && (
                     <p className="text-xs text-muted-foreground">
-                        {analysisProgress.processed} de {analysisProgress.total > 0 ? analysisProgress.total : '?'} fragmentos procesados.
+                        {analysisProgress.processed} de {analysisProgress.total > 0 ? analysisProgress.total : (analysisProgress.processed > 0 ? analysisProgress.processed : '?')} fragmentos procesados.
                     </p>
                 )}
             </div>
@@ -417,11 +467,18 @@ export default function AutoUpdatePage() {
                  </CardTitle>
                </CardHeader>
                <CardContent>
-                 <ScrollArea className="h-[200px] p-2 border rounded bg-muted/30">
+                 <ScrollArea className="h-[250px] p-2 border rounded bg-muted/30">
                    <pre className="text-xs text-foreground whitespace-pre-wrap">
-                     {detailedLogs.join('\n')}
+                     {detailedLogs.map((log, index) => (
+                        <span key={index} className={log.includes("[ERROR") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-600 dark:text-yellow-400" : ""}>
+                            {log}\n
+                        </span>
+                     ))}
                    </pre>
                  </ScrollArea>
+                  <Button variant="outline" size="sm" onClick={() => handleCopyError(detailedLogs.join('\n'))} className="mt-2">
+                    <Copy className="mr-2 h-4 w-4"/> Copiar Logs
+                  </Button>
                </CardContent>
              </Card>
            )}
@@ -457,9 +514,13 @@ export default function AutoUpdatePage() {
                 {suggestionsWithStatus.length > 0 && (
                     <div>
                     <h4 className="font-semibold text-foreground mb-2">Sugerencias Detalladas ({suggestionsWithStatus.length}):</h4>
-                    <p className="text-xs text-muted-foreground mb-3 flex items-center gap-1">
-                        <Info className="h-3 w-3 shrink-0"/> Las sugerencias de la IA pueden proponer modificar archivos. La aplicación de cambios es una SIMULACIÓN y no modificará tus archivos reales. Revisa la consola para ver qué se habría modificado.
+                    <div className="p-3 my-2 bg-yellow-100 dark:bg-yellow-900/30 border border-yellow-400 dark:border-yellow-600 rounded-md flex items-start gap-2">
+                        <ShieldAlert className="h-5 w-5 text-yellow-700 dark:text-yellow-300 shrink-0 mt-0.5" />
+                        <p className="text-xs text-yellow-800 dark:text-yellow-200">
+                        <strong>¡Atención!</strong> Aplicar estas sugerencias modificará directamente los archivos del código fuente de esta aplicación. 
+                        Asegúrate de entender los cambios y de tener una copia de seguridad si es necesario. Los cambios incorrectos podrían afectar la funcionalidad de la aplicación.
                         </p>
+                    </div>
                     <ScrollArea className="h-[400px] pr-3">
                         <ul className="space-y-3">
                         {suggestionsWithStatus.map((s) => (
@@ -495,7 +556,9 @@ export default function AutoUpdatePage() {
                                             size="sm" 
                                             variant="outline" 
                                             disabled={s.status === "applying" || s.status === "applied" || s.status === "not_applicable" || !s.area || !s.originalContent || !s.suggestedFullFileContent}
-                                            className={s.status === "applied" ? "border-green-500 text-green-700 dark:text-green-400" : ""}
+                                            className={s.status === "applied" ? "border-green-500 text-green-700 dark:text-green-400 hover:border-green-600 hover:bg-green-50 dark:hover:bg-green-900/50" : 
+                                                       s.status === "error_applying" ? "border-destructive text-destructive hover:border-destructive hover:bg-destructive/10" :
+                                                       ""}
                                         >
                                         {s.status === "applying" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                         {s.status === "applied" && <CheckCircle className="mr-2 h-4 w-4 text-green-600 dark:text-green-500" />}
@@ -503,18 +566,18 @@ export default function AutoUpdatePage() {
                                         {s.status === "pending" && <Wand2 className="mr-2 h-4 w-4" />}
                                         {s.status === "not_applicable" && <Info className="mr-2 h-4 w-4 text-muted-foreground" />}
 
-                                        {s.status === "applied" ? "Aplicada (Sim.)" 
+                                        {s.status === "applied" ? "Aplicada" 
                                             : s.status === "applying" ? "Aplicando..." 
-                                            : s.status === "error_applying" ? "Reintentar Aplicar (Sim.)" 
+                                            : s.status === "error_applying" ? "Reintentar Aplicar" 
                                             : s.status === "not_applicable" ? "No Aplicable"
-                                            : "Aplicar Sugerencia (Sim.)"}
+                                            : "Aplicar Sugerencia"}
                                         </Button>
                                     </AlertDialogTrigger>
                                     <AlertDialogContent className="max-w-3xl">
                                         <AlertDialogHeader>
-                                        <AlertDialogTitle className="text-foreground">¿Aplicar esta sugerencia (Simulación)?</AlertDialogTitle>
+                                        <AlertDialogTitle className="text-foreground flex items-center gap-2"><ShieldAlert className="text-destructive h-6 w-6"/>¿Aplicar esta sugerencia?</AlertDialogTitle>
                                         <AlertDialogDescription className="text-muted-foreground">
-                                            Se intentará aplicar (simuladamente) la siguiente sugerencia al archivo <strong className="text-foreground">{s.area}</strong>:
+                                            Se intentará aplicar la siguiente sugerencia al archivo <strong className="text-foreground">{s.area}</strong>:
                                             <blockquote className="mt-2 pl-3 border-l-2 italic text-xs text-muted-foreground">
                                             {s.suggestion}
                                             </blockquote>
@@ -532,13 +595,13 @@ export default function AutoUpdatePage() {
                                                     </ScrollArea>
                                                 </div>
                                             </div>
-                                            <strong className="block mt-3 text-destructive">¡Importante!</strong> Esta acción es una SIMULACIÓN y NO modificará tus archivos reales. Revisa la consola del navegador y del servidor para ver los detalles de la simulación.
+                                            <strong className="block mt-3 text-destructive">¡Importante!</strong> Esta acción modificará el archivo en el sistema. Asegúrate de que es lo que deseas.
                                         </AlertDialogDescription>
                                         </AlertDialogHeader>
                                         <AlertDialogFooter>
                                         <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                        <AlertDialogAction onClick={() => handleApplySuggestion(s.id)}>
-                                            Sí, aplicar (Simulación)
+                                        <AlertDialogAction onClick={() => handleApplySuggestion(s.id)} className="bg-destructive hover:bg-destructive/90">
+                                            Sí, aplicar cambio
                                         </AlertDialogAction>
                                         </AlertDialogFooter>
                                     </AlertDialogContent>
@@ -560,7 +623,7 @@ export default function AutoUpdatePage() {
             >
               <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
               <p className="text-lg text-foreground">
-                {status === "loading_source" ? "Cargando código fuente..." : "Analizando el código fuente de YskCodeAlchemist..."}
+                {status === "loading_source" ? "Cargando código fuente..." : "Preparando análisis del código fuente de YskCodeAlchemist..."}
               </p>
               <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos, especialmente si el código es extenso.</p>
             </div>
@@ -574,7 +637,7 @@ export default function AutoUpdatePage() {
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2">
-                <p className="text-destructive">Ocurrió un error durante el auto-análisis:</p> 
+                <p className="text-destructive font-medium">Ocurrió un error durante el auto-análisis:</p> 
                 <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50">
                     <pre className="text-xs text-foreground whitespace-pre-wrap">{currentAnalysisError}</pre> 
                 </ScrollArea>
@@ -608,7 +671,7 @@ export default function AutoUpdatePage() {
           <p className="text-xs text-muted-foreground">
             <strong>Nota Importante:</strong> El análisis se realiza sobre el código fuente completo de YskCodeAlchemist, potencialmente dividido en fragmentos para manejar límites de tokens y timeouts.
             La descarga de código fuente proporciona un archivo ZIP de todos los archivos detectados.
-            Las sugerencias de IA y su aplicación (simulada) siempre deben ser revisadas cuidadosamente por un desarrollador. La capacidad de "auto-reparación" se limita a aplicar estas sugerencias simuladas.
+            Las sugerencias de IA y su aplicación siempre deben ser revisadas cuidadosamente por un desarrollador. La capacidad de "auto-reparación" se limita a aplicar estas sugerencias.
           </p>
         </CardFooter>
       </Card>
@@ -630,12 +693,12 @@ export default function AutoUpdatePage() {
                       <div className="space-y-3 p-3 border rounded-md bg-card">
                           <div>
                               <h4 className="font-semibold text-sm mb-1 text-foreground">Posible Causa Raíz:</h4>
-                              <p className="text-xs text-muted-foreground whitespace-pre-wrap">{autoFixSuggestion.root_cause_analysis}</p>
+                              <p className="text-xs text-foreground whitespace-pre-wrap">{autoFixSuggestion.root_cause_analysis}</p>
                           </div>
                           <Separator />
                           <div>
                               <h4 className="font-semibold text-sm mb-1 text-foreground">Sugerencias de Solución:</h4>
-                              <p className="text-xs text-muted-foreground whitespace-pre-wrap">{autoFixSuggestion.solution_suggestions}</p>
+                              <p className="text-xs text-foreground whitespace-pre-wrap">{autoFixSuggestion.solution_suggestions}</p>
                           </div>
                       </div>
                   </ScrollArea>
