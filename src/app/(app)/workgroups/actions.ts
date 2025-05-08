@@ -90,29 +90,57 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
         };
 
         const availableAgentNames = Object.values(payload.participantAgentConfigs).map(a => a.name).join(', ');
-        const orchestratorSystemPrompt = `${payload.orchestrator.systemMessage}\n\nCONTEXTO ACTUAL:\nTarea Principal: ${payload.task}\nAgentes Disponibles: ${availableAgentNames}\nHistorial de Conversación:\n${formatHistoryForPrompt(updatedHistory)}\n\nTU TURNO:\nBasado en la tarea y el historial, decide qué agente debe actuar a continuación O si la tarea está completada. Responde SÓLO con un objeto JSON válido que tenga las siguientes claves:\n- "next_agent_name": (string) El nombre EXACTO de uno de los agentes disponibles O la palabra "COMPLETADO" si la tarea ha finalizado.\n- "reason": (string) Una breve justificación de tu elección o del estado de completado.\n\nJSON:`;
+        // Updated prompt: More strict JSON instructions
+        const orchestratorSystemPrompt = `${payload.orchestrator.systemMessage}
+
+CONTEXTO ACTUAL:
+Tarea Principal: ${payload.task}
+Agentes Disponibles: ${availableAgentNames}
+Historial de Conversación Reciente:
+${formatHistoryForPrompt(updatedHistory)}
+
+TU TURNO:
+Basado en la tarea y el historial, decide qué agente debe actuar a continuación O si la tarea está completada.
+
+IMPORTANTE: Tu respuesta DEBE SER EXCLUSIVAMENTE un objeto JSON válido, sin ningún texto, explicación, pensamiento o etiqueta (como <think>) antes o después. El JSON debe contener las siguientes claves EXACTAS:
+- "next_agent_name": (string) El nombre EXACTO de uno de los agentes disponibles O la palabra "COMPLETADO" si la tarea ha finalizado.
+- "reason": (string) Una breve justificación concisa de tu elección o del estado de completado.
+
+No incluyas nada más en tu respuesta. Solo el objeto JSON.
+
+JSON:`;
+
 
         const orchestratorPayload: ChatLLMPayload = {
             messages: [{ role: 'system', content: orchestratorSystemPrompt }], // System prompt only for orchestrator
             options: orchestratorOptions,
         };
-        log('DEBUG', 'Llamando a LLM del Orquestador...', { model: orchestratorOptions.modelName, promptStart: orchestratorSystemPrompt.substring(0, 200) });
+        log('DEBUG', 'Llamando a LLM del Orquestrador...', { model: orchestratorOptions.modelName, promptStart: orchestratorSystemPrompt.substring(0, 200) });
 
         // Make the call - Expecting JSON response based on the prompt
         let orchestratorRawResponse = '';
         try {
             const decisionResult = await chatWithLLM(orchestratorPayload);
             orchestratorRawResponse = decisionResult.content;
-             log('DEBUG', `Respuesta cruda del Orquestador recibida`, {raw: orchestratorRawResponse.substring(0,300) });
+             log('DEBUG', `Respuesta cruda del Orquestrador recibida`, {raw: orchestratorRawResponse.substring(0,300) });
 
-            // Attempt to parse the response as JSON
-            const decisionJson = JSON.parse(orchestratorRawResponse.replace(/^```json\s*/, '').replace(/\s*```$/, ''));
+            // Attempt to parse the response as JSON - Added basic cleaning
+            let cleanedResponse = orchestratorRawResponse.trim();
+            // Attempt to remove common wrappers like ```json ... ``` or potential XML-like tags
+            cleanedResponse = cleanedResponse.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+             const jsonMatch = cleanedResponse.match(/\{.*\}/s); // Find first valid-looking JSON object
+            
+            if (!jsonMatch) {
+                throw new Error("No se encontró un objeto JSON válido en la respuesta del Orquestrador.");
+            }
+            
+            const decisionJson = JSON.parse(jsonMatch[0]); // Parse only the matched JSON part
 
             if (!decisionJson.next_agent_name || !decisionJson.reason) {
-                throw new Error("Respuesta JSON del Orquestador inválida: faltan 'next_agent_name' o 'reason'.");
+                throw new Error("Respuesta JSON del Orquestrador inválida: faltan 'next_agent_name' o 'reason'.");
             }
 
-             log('INFO', `Decisión del Orquestador: ${decisionJson.reason}. Próximo: ${decisionJson.next_agent_name}`);
+             log('INFO', `Decisión del Orquestrador: ${decisionJson.reason}. Próximo: ${decisionJson.next_agent_name}`);
              updatedHistory.push({ role: 'system', content: `[Orquestador decide: ${decisionJson.reason}. Próximo: ${decisionJson.next_agent_name}]`}); // Add decision to history
 
             if (decisionJson.next_agent_name.toUpperCase() === "COMPLETADO") {
@@ -127,7 +155,7 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
                 // Find the agent ID by name
                 const nextAgent = Object.values(payload.participantAgentConfigs).find(a => a.name === decisionJson.next_agent_name);
                 if (!nextAgent) {
-                    throw new Error(`Orquestador eligió un agente inválido o no disponible: ${decisionJson.next_agent_name}`);
+                    throw new Error(`Orquestrador eligió un agente inválido o no disponible: ${decisionJson.next_agent_name}`);
                 }
                  orchestratorDecision = {
                     nextAgentId: nextAgent.id,
@@ -146,11 +174,9 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
                         timeoutMs: AGENT_RESPONSE_TIMEOUT_MS
                     };
 
-                    const agentSystemPrompt = `${nextAgent.systemMessage}\n\nCONTEXTO:\nTarea Principal: ${payload.task}\nHistorial de Conversación Reciente:\n${formatHistoryForPrompt(updatedHistory)}\n\nTU TURNO:\nConsidera el historial y la tarea. Realiza tu contribución o responde.`;
+                    const agentSystemPrompt = `${nextAgent.systemMessage}\n\nCONTEXTO:\nTarea Principal: ${payload.task}\nHistorial de Conversación Reciente:\n${formatHistoryForPrompt(updatedHistory)}\n\nTU TURNO:\nConsidera el historial y la tarea. Realiza tu contribución o responde. Sé conciso y directo.`;
 
                     const agentPayload: ChatLLMPayload = {
-                        // Pass system message separately if needed by provider? Groq/OpenAI handle it in messages. Anthropic needs it separate.
-                        // For simplicity, let's assume compatible providers handle it in messages.
                         messages: [
                             { role: 'system', content: agentSystemPrompt },
                              // Maybe filter history further? Or provide summary? For now, pass recent.
@@ -177,11 +203,11 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
 
         } catch (err) {
             const error = err as Error;
-             log('ERROR', `Error durante la llamada LLM del Orquestador: ${error.message}`, { stack: error.stack });
+             log('ERROR', `Error durante la llamada LLM del Orquestrador o al procesar su respuesta: ${error.message}`, { rawResponse: orchestratorRawResponse, stack: error.stack });
              // Add error to history?
              updatedHistory.push({ role: 'system', content: `[Error procesando decisión del Orquestador: ${error.message}]` });
              // Don't mark as complete, let client decide to retry or stop? Or just return error.
-             return { error: `Error del Orquestador: ${error.message}`, isComplete: false, updatedHistory, serverLogs, orchestratorDecision: { nextAgentId: 'ERROR', reason: error.message, rawOutput: orchestratorRawResponse || undefined } };
+             return { error: `Error del Orquestrador: ${error.message}`, isComplete: false, updatedHistory, serverLogs, orchestratorDecision: { nextAgentId: 'ERROR', reason: error.message, rawOutput: orchestratorRawResponse || undefined } };
         }
 
 
