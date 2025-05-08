@@ -42,7 +42,7 @@ async function fetchWithRetry(
   url: string,
   fetchRequestOptions: RequestInit,
   maxRetries: number = 3,
-  initialDelayMs: number = 2000, // Base delay for exponential backoff
+  initialDelayMs: number = 5000, // Increased base delay for exponential backoff
   serviceName: string = "Groq API"
 ): Promise<Response> {
   let attempt = 0;
@@ -82,9 +82,15 @@ async function fetchWithRetry(
         
         await new Promise(resolve => setTimeout(resolve, waitMs));
         continue; // Siguiente intento
+      } else if (response.status === 413) { // Payload Too Large
+        lastError = new Error(`Error de la API de Groq (${serviceName}): Payload Too Large (413). Detalle: ${errorBodyText}`);
+        console.error(`Error de Payload Too Large (413) en ${serviceName}. El payload es demasiado grande para el modelo. Error: ${errorBodyText}`);
+        // No se reintenta automáticamente para 413, ya que el payload debe ser reducido.
+        throw lastError;
       }
 
-      // Para otros errores HTTP no OK (4xx, 5xx distintos de 429)
+
+      // Para otros errores HTTP no OK (4xx, 5xx distintos de 429, 413)
       console.error(`Respuesta de error HTTP de ${serviceName} - ${response.status}:`, errorBodyText);
       throw new Error(`Error HTTP de ${serviceName}: ${response.status} ${response.statusText}. Detalle: ${errorBodyText}`);
 
@@ -277,7 +283,7 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
       signal: controller.signal,
     };
     
-    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 5, 3000, `analyzeProjectSourceWithGroq(${options.modelName})`); // Más reintentos para análisis de proyecto
+    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 5, 10000, `analyzeProjectSourceWithGroq(${options.modelName})`); // Más reintentos y mayor delay para análisis de proyecto
 
     const data = await response.json();
     let parsedResult: ProjectAnalysisGroqResponse;
@@ -560,3 +566,4 @@ El contenido de los archivos debe ser coherente con sus extensiones y propósito
     clearTimeout(timeoutId);
   }
 }
+

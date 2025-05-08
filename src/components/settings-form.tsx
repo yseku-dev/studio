@@ -32,15 +32,29 @@ const settingsSchema = z.object({
 
 type SettingsFormData = z.infer<typeof settingsSchema>;
 
+// Updated model list based on provided limits, ordered by TPM and then other factors
 const groqModels = [
-  "llama3-8b-8192",
-  "llama3-70b-8192",
-  "mixtral-8x7b-32768",
-  "gemma-7b-it",
+  // 70000 TPM
+  "compound-beta",
+  "compound-beta-mini",
+  // 30000 TPM
+  "meta-llama/llama-4-scout-17b-16e-instruct",
+  // 15000 TPM
   "gemma2-9b-it",
-  "llama-3.1-8b-instant",
+  "llama-guard-3-8b", // Note: Guard model, specific purpose
+  // 12000 TPM
   "llama-3.1-70b-versatile",
+  // 6000 TPM (Ordered by perceived capability/size then alphabetically)
+  "deepseek-r1-distill-llama-70b",
+  "llama3-70b-8192",
+  "meta-llama/llama-4-maverick-17b-128e-instruct",
+  "mistral-saba-24b",
+  "qwen-qwq-32b",
+  "allam-2-7b",
+  "llama-3.1-8b-instant",
+  "llama3-8b-8192",
 ];
+
 
 export function SettingsForm() {
   const { toast } = useToast();
@@ -57,7 +71,7 @@ export function SettingsForm() {
     resolver: zodResolver(settingsSchema),
     defaultValues: {
       groqApiKey: '',
-      groqModelName: groqModels[0],
+      groqModelName: groqModels[0], // Default to the first model in the new list
       gitRepositoryUrl: '',
       gitUsername: '',
       gitEmail: '',
@@ -69,17 +83,21 @@ export function SettingsForm() {
     const apiKey = localStorage.getItem('codealchemist_groq_api_key');
     const modelName = localStorage.getItem('codealchemist_groq_model_name');
     if (apiKey) setValue('groqApiKey', apiKey, { shouldDirty: false });
+    
     if (modelName && groqModels.includes(modelName)) {
       setValue('groqModelName', modelName, { shouldDirty: false });
-    } else if (modelName) {
-      setValue('groqModelName', groqModels[0], { shouldDirty: true });
+    } else if (modelName) { // Model was saved but not in the new list
+      setValue('groqModelName', groqModels[0], { shouldDirty: true }); // Default to new first model
        toast({
-        title: 'Modelo no Encontrado',
-        description: `El modelo guardado "${modelName}" ya no está en la lista. Se ha seleccionado "${groqModels[0]}" por defecto. Por favor, guarda la configuración si es correcto.`,
+        title: 'Modelo no Encontrado o Actualizado',
+        description: `El modelo guardado "${modelName}" no está en la lista actualizada o ha cambiado. Se ha seleccionado "${groqModels[0]}" por defecto. Por favor, verifica y guarda la configuración.`,
         variant: 'default',
-        duration: 7000,
+        duration: 10000,
       });
+    } else { // No model saved, use default
+        setValue('groqModelName', groqModels[0], { shouldDirty: false });
     }
+
 
     const gitRepoUrl = localStorage.getItem('codealchemist_git_repository_url');
     const gitUsername = localStorage.getItem('codealchemist_git_username');
@@ -91,6 +109,7 @@ export function SettingsForm() {
     if (gitEmail) setValue('gitEmail', gitEmail, { shouldDirty: false });
     if (gitPat) setValue('gitPat', gitPat, { shouldDirty: false });
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [setValue, toast]);
   
   const currentModel = watch('groqModelName');
@@ -180,7 +199,7 @@ export function SettingsForm() {
               <div className="space-y-2">
                 <Label htmlFor="groqModelName" className="text-foreground">Nombre del Modelo de Groq</Label>
                 <Select
-                  value={currentModel}
+                  value={currentModel || groqModels[0]} // Fallback to first model if currentModel is somehow undefined
                   onValueChange={(value) => setValue('groqModelName', value, { shouldDirty: true })}
                 >
                   <SelectTrigger id="groqModelName" className="w-full bg-card text-foreground">
@@ -197,6 +216,10 @@ export function SettingsForm() {
                 {errors.groqModelName && (
                   <p className="text-sm text-destructive">{errors.groqModelName.message}</p>
                 )}
+                 <p className="text-xs text-muted-foreground">
+                    Los modelos están ordenados aproximadamente por su límite de Tokens Por Minuto (TPM) y capacidad. 
+                    Modelos con TPM más alto pueden permitir un procesamiento más rápido de múltiples fragmentos.
+                </p>
               </div>
               <Button 
                 type="button" 

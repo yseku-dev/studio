@@ -19,9 +19,9 @@ interface AutoUpdateAnalysisResult {
   detailedExecutionLogs?: string[];
 }
 
-const MAX_CHARS_PER_CHUNK = 5500; // Reduced from 7500 to 5500
+const MAX_CHARS_PER_CHUNK = 3500; // Reduced from 5500 to 3500
 const GROQ_API_TIMEOUT_MS = 60000 * 1; // 1 minuto por chunk
-const INTER_CHUNK_PROCESSING_DELAY_MS = 5000; // Increased from 2000ms to 5000ms (5 seconds)
+const INTER_CHUNK_PROCESSING_DELAY_MS = 30000; // Increased from 5000ms to 30000ms (30 seconds)
 
 export async function handleAutoAnalyzeAppSource(
   apiKey: string,
@@ -722,3 +722,4 @@ export async function handleUploadToGit(
         }
     }
 }
+
