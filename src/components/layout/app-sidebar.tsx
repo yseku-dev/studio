@@ -1,4 +1,3 @@
-
 'use client';
 
 import Link from 'next/link';
@@ -21,8 +20,8 @@ import {
   ChevronsLeft,
   ChevronsRight,
   MessageCircle,
-  Users2, // Icon for Agents
-  Workflow // Icon for Workgroups
+  Users2, 
+  Workflow
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -72,33 +71,31 @@ export function AppSidebar() {
     }
   };
 
-  const SidebarContent = () => (
-    <div className={cn(
-      "flex flex-col h-full bg-card border-r transition-all duration-300 ease-in-out",
-      isCollapsed && !isMobile ? "w-20" : "w-72"
-    )}>
-       <SheetHeader className="p-0 m-0 border-none">
-        <SheetTitle className="sr-only">Barra lateral principal</SheetTitle>
-      </SheetHeader>
+  // Common visual elements for both mobile and desktop sidebar
+  const SidebarVisualElements = (
+    <>
       <div className={cn(
           "flex items-center border-b p-4 h-14", 
           isCollapsed && !isMobile ? "justify-center" : "justify-between"
         )}>
-        <Link href="/dashboard" className={cn("flex items-center gap-2", isCollapsed && !isMobile && "justify-center w-full")}>
+        <Link 
+          href="/dashboard" 
+          className={cn("flex items-center gap-2", isCollapsed && !isMobile && "justify-center w-full")}
+          onClick={() => { if (isMobile) setMobileMenuOpen(false); }}
+        >
           <FlaskConical className="h-7 w-7 text-primary" /> 
           {!isCollapsed || isMobile ? (
             <span className="text-xl font-semibold text-primary">CodeAlchemist</span>
           ) : null}
         </Link>
-        {!isMobile && (
+        {!isMobile && !isCollapsed && ( // Only show this specific collapse button if sidebar is expanded on desktop
           <Button
             variant="ghost"
             size="icon"
             onClick={toggleCollapse}
-            className={cn(isCollapsed ? "block" : "hidden md:block")}
-            aria-label={isCollapsed ? "Mostrar sidebar" : "Ocultar sidebar"}
+            aria-label={"Ocultar sidebar"}
           >
-            {isCollapsed ? <ChevronsRight className="h-5 w-5" /> : <ChevronsLeft className="h-5 w-5" />}
+            <ChevronsLeft className="h-5 w-5" />
           </Button>
         )}
       </div>
@@ -126,7 +123,7 @@ export function AppSidebar() {
                             ? 'bg-primary/10 text-primary'
                             : 'text-foreground hover:bg-muted hover:text-foreground'
                         )}
-                        onClick={() => isMobile && setMobileMenuOpen(false)}
+                        onClick={() => { if (isMobile) setMobileMenuOpen(false); }}
                         aria-label={item.label}
                       >
                         <NavLinkContent />
@@ -150,7 +147,7 @@ export function AppSidebar() {
                     ? 'bg-primary/10 text-primary'
                     : 'text-foreground hover:bg-muted hover:text-foreground'
                 )}
-                onClick={() => isMobile && setMobileMenuOpen(false)}
+                onClick={() => { if (isMobile) setMobileMenuOpen(false); }}
               >
                 <NavLinkContent />
               </Link>
@@ -172,7 +169,7 @@ export function AppSidebar() {
             </Button>
          </div>
        )}
-    </div>
+    </>
   );
 
 
@@ -187,12 +184,22 @@ export function AppSidebar() {
             </Button>
           </SheetTrigger>
         </div>
-        <SheetContent side="left" className="w-72 p-0 bg-card border-r-0">
-          <SidebarContent />
+        <SheetContent side="left" className="w-72 p-0 bg-card border-r-0 flex flex-col">
+          {/* Accessible title for the sheet (dialog) */}
+          <SheetTitle className="sr-only">Barra lateral principal</SheetTitle>
+          {SidebarVisualElements}
         </SheetContent>
       </Sheet>
     );
   }
 
-  return <SidebarContent />;
+  // Desktop sidebar
+  return (
+    <div className={cn(
+      "flex flex-col h-full bg-card border-r transition-all duration-300 ease-in-out",
+      isCollapsed ? "w-20" : "w-72"
+    )}>
+      {SidebarVisualElements}
+    </div>
+  );
 }
