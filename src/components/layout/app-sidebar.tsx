@@ -5,11 +5,11 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent, SheetTrigger, SheetClose } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from '@/components/ui/sheet'; // Added SheetHeader, SheetTitle
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { 
   Menu, 
-  FlaskConical, // Changed from PackageSearch
+  FlaskConical,
   LayoutDashboard, 
   ScanLine, 
   GitCompareArrows, 
@@ -178,9 +178,10 @@ export function AppSidebar() {
             </Button>
           </SheetTrigger>
         </div>
-        <SheetContent side="left" className="w-72 p-0 bg-card border-r-0" aria-describedby={undefined} aria-label="Barra lateral principal">
-           {/* SheetHeader is automatically added by SheetContent if not specified, 
-               but we use a custom SidebarContent which includes its own header styling */}
+        <SheetContent side="left" className="w-72 p-0 bg-card border-r-0">
+           <SheetHeader>
+             <SheetTitle className="sr-only">Barra lateral principal</SheetTitle>
+           </SheetHeader>
           <SidebarContent />
         </SheetContent>
       </Sheet>
@@ -189,3 +190,4 @@ export function AppSidebar() {
 
   return <SidebarContent />;
 }
+
