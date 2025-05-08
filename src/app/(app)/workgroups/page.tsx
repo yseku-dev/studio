@@ -42,7 +42,8 @@ const defaultWorkgroup: Omit<WorkgroupConfig, 'id' | 'agentIds'> & { agentNames:
     "IngenieroPruebas", 
     "IngenieroDevOps", 
     "RepresentanteUsuario",
-    "SimuladorInteraccionUsuario" // Added the new agent
+    "SimuladorInteraccionUsuario",
+    "OrquestadorFlujoAgentes" // Added the new agent
   ],
 };
 
@@ -295,3 +296,4 @@ export default function WorkgroupsPage() {
     </Dialog>
   );
 }
+

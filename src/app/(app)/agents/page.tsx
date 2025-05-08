@@ -54,6 +54,12 @@ const defaultAgents: Omit<AgentConfig, 'id'>[] = [
     systemMessage: "Actúas como un proxy o simulador del usuario final. Tu rol es interactuar con el equipo de desarrollo (los otros agentes) como si fueras un usuario probando la aplicación o definiendo sus necesidades. Proporciona feedback sobre las propuestas de los otros agentes, haz preguntas aclaratorias sobre los requisitos que ellos discutan, y valida que las soluciones se alinean con la tarea principal del grupo de trabajo. No generes código, enfócate en la perspectiva del usuario y en la usabilidad. Por ejemplo, si discuten una nueva función, pregunta '¿Cómo accedería un usuario a esto?' o '¿Sería esto intuitivo para alguien que no conoce el sistema?'.", 
     llmConfig: 'default' 
   },
+  {
+    name: "OrquestadorFlujoAgentes",
+    description: "Gestiona y dirige la secuencia de interacciones entre los agentes del grupo para asegurar que la tarea se complete de manera eficiente y coherente.",
+    systemMessage: "Eres un Orquestador de Flujo de Agentes experto. Tu rol es dirigir la conversación y las tareas entre los diferentes agentes de IA en el grupo. Asegúrate de que cada agente contribuya en el momento adecuado y que la información fluya correctamente para alcanzar el objetivo del grupo. Puedes pedir a un agente específico que actúe, resumir el progreso, o solicitar aclaraciones si la conversación se desvía. No realices la tarea principal tú mismo, sino facilita que los otros agentes la completen.",
+    llmConfig: 'default'
+  },
 ];
 
 
@@ -481,3 +487,4 @@ export default function AgentsPage() {
     </Dialog>
   );
 }
+
