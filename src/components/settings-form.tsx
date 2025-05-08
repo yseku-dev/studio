@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -9,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { Save, Settings as SettingsIcon, Zap, Loader2 } from 'lucide-react';
+import { Save, Settings as SettingsIcon, Zap, Loader2, GitFork } from 'lucide-react';
 import {
   Select,
   SelectContent,
@@ -18,10 +19,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { handleTestGroqConnection } from '@/app/(app)/settings/actions';
+import { Separator } from '@/components/ui/separator';
 
 const settingsSchema = z.object({
   groqApiKey: z.string().min(1, 'La clave API de Groq es obligatoria.'),
   groqModelName: z.string().min(1, 'El nombre del modelo de Groq es obligatorio.'),
+  gitRepositoryUrl: z.string().url({ message: "Por favor, introduce una URL válida para el repositorio Git." }).optional().or(z.literal('')),
+  gitUsername: z.string().optional(),
+  gitEmail: z.string().email({ message: "Por favor, introduce un email válido." }).optional().or(z.literal('')),
+  gitPat: z.string().optional(),
 });
 
 type SettingsFormData = z.infer<typeof settingsSchema>;
@@ -31,7 +37,7 @@ const groqModels = [
   "llama3-70b-8192",
   "mixtral-8x7b-32768",
   "gemma-7b-it",
-  "gemma2-9b-it", // Added a newer model
+  "gemma2-9b-it",
   "llama-3.1-8b-instant",
   "llama-3.1-70b-versatile",
 ];
@@ -46,12 +52,16 @@ export function SettingsForm() {
     watch,
     formState: { errors, isDirty },
     reset,
-    getValues, // Added to get current form values for testing
+    getValues,
   } = useForm<SettingsFormData>({
     resolver: zodResolver(settingsSchema),
     defaultValues: {
       groqApiKey: '',
-      groqModelName: groqModels[0], // Default to the first model in the list
+      groqModelName: groqModels[0],
+      gitRepositoryUrl: '',
+      gitUsername: '',
+      gitEmail: '',
+      gitPat: '',
     },
   });
 
@@ -62,7 +72,6 @@ export function SettingsForm() {
     if (modelName && groqModels.includes(modelName)) {
       setValue('groqModelName', modelName, { shouldDirty: false });
     } else if (modelName) {
-      // If stored model is not in the list, default to first and notify user
       setValue('groqModelName', groqModels[0], { shouldDirty: true });
        toast({
         title: 'Modelo no Encontrado',
@@ -71,6 +80,17 @@ export function SettingsForm() {
         duration: 7000,
       });
     }
+
+    const gitRepoUrl = localStorage.getItem('codealchemist_git_repository_url');
+    const gitUsername = localStorage.getItem('codealchemist_git_username');
+    const gitEmail = localStorage.getItem('codealchemist_git_email');
+    const gitPat = localStorage.getItem('codealchemist_git_pat');
+
+    if (gitRepoUrl) setValue('gitRepositoryUrl', gitRepoUrl, { shouldDirty: false });
+    if (gitUsername) setValue('gitUsername', gitUsername, { shouldDirty: false });
+    if (gitEmail) setValue('gitEmail', gitEmail, { shouldDirty: false });
+    if (gitPat) setValue('gitPat', gitPat, { shouldDirty: false });
+
   }, [setValue, toast]);
   
   const currentModel = watch('groqModelName');
@@ -78,9 +98,22 @@ export function SettingsForm() {
   const onSubmit: SubmitHandler<SettingsFormData> = (data) => {
     localStorage.setItem('codealchemist_groq_api_key', data.groqApiKey);
     localStorage.setItem('codealchemist_groq_model_name', data.groqModelName);
+    
+    if (data.gitRepositoryUrl) localStorage.setItem('codealchemist_git_repository_url', data.gitRepositoryUrl);
+    else localStorage.removeItem('codealchemist_git_repository_url');
+    
+    if (data.gitUsername) localStorage.setItem('codealchemist_git_username', data.gitUsername);
+    else localStorage.removeItem('codealchemist_git_username');
+
+    if (data.gitEmail) localStorage.setItem('codealchemist_git_email', data.gitEmail);
+    else localStorage.removeItem('codealchemist_git_email');
+
+    if (data.gitPat) localStorage.setItem('codealchemist_git_pat', data.gitPat);
+    else localStorage.removeItem('codealchemist_git_pat');
+    
     toast({
       title: 'Configuración Guardada',
-      description: 'Tu clave API de Groq y el nombre del modelo han sido actualizados.',
+      description: 'Tus configuraciones han sido actualizadas.',
     });
     reset(data, { keepValues: true, keepDirty: false }); 
   };
@@ -123,62 +156,143 @@ export function SettingsForm() {
           Configuración de la Aplicación
         </CardTitle>
         <CardDescription>
-          Configura tus claves API y selecciona tu modelo de IA preferido. Estos ajustes se guardan en el almacenamiento local de tu navegador.
+          Configura tus claves API, modelo de IA preferido y detalles de Git. Estos ajustes se guardan en el almacenamiento local de tu navegador.
         </CardDescription>
       </CardHeader>
       <form onSubmit={handleSubmit(onSubmit)}>
         <CardContent className="space-y-6">
-          <div className="space-y-2">
-            <Label htmlFor="groqApiKey">Clave API de Groq</Label>
-            <Input
-              id="groqApiKey"
-              type="password"
-              {...register('groqApiKey')}
-              placeholder="Introduce tu clave API de Groq"
-              className="bg-card"
-            />
-            {errors.groqApiKey && (
-              <p className="text-sm text-destructive">{errors.groqApiKey.message}</p>
-            )}
+          <div>
+            <h3 className="text-lg font-medium text-primary mb-2">Configuración de Groq API</h3>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="groqApiKey" className="text-foreground">Clave API de Groq</Label>
+                <Input
+                  id="groqApiKey"
+                  type="password"
+                  {...register('groqApiKey')}
+                  placeholder="Introduce tu clave API de Groq"
+                  className="bg-card text-foreground"
+                />
+                {errors.groqApiKey && (
+                  <p className="text-sm text-destructive">{errors.groqApiKey.message}</p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="groqModelName" className="text-foreground">Nombre del Modelo de Groq</Label>
+                <Select
+                  value={currentModel}
+                  onValueChange={(value) => setValue('groqModelName', value, { shouldDirty: true })}
+                >
+                  <SelectTrigger id="groqModelName" className="w-full bg-card text-foreground">
+                    <SelectValue placeholder="Selecciona un modelo de Groq" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {groqModels.map((model) => (
+                      <SelectItem key={model} value={model}>
+                        {model}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {errors.groqModelName && (
+                  <p className="text-sm text-destructive">{errors.groqModelName.message}</p>
+                )}
+              </div>
+              <Button 
+                type="button" 
+                variant="outline" 
+                onClick={onTestConnection} 
+                disabled={isTestingConnection}
+                className="w-full md:w-auto text-foreground"
+              >
+                {isTestingConnection ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <Zap className="mr-2 h-4 w-4" />
+                )}
+                Probar Conexión Groq
+              </Button>
+            </div>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="groqModelName">Nombre del Modelo de Groq</Label>
-            <Select
-              value={currentModel}
-              onValueChange={(value) => setValue('groqModelName', value, { shouldDirty: true })}
-            >
-              <SelectTrigger id="groqModelName" className="w-full bg-card">
-                <SelectValue placeholder="Selecciona un modelo de Groq" />
-              </SelectTrigger>
-              <SelectContent>
-                {groqModels.map((model) => (
-                  <SelectItem key={model} value={model}>
-                    {model}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {errors.groqModelName && (
-              <p className="text-sm text-destructive">{errors.groqModelName.message}</p>
-            )}
+
+          <Separator />
+
+          <div>
+            <h3 className="text-lg font-medium text-primary mb-2 flex items-center gap-2">
+              <GitFork className="h-5 w-5" />
+              Configuración de Git (Opcional)
+            </h3>
+            <CardDescription className="mb-3 text-muted-foreground">
+              Configura los detalles de tu repositorio Git para subir el código fuente desde la sección AutoUpdate.
+              El Token de Acceso Personal (PAT) se usa para la autenticación.
+            </CardDescription>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="gitRepositoryUrl" className="text-foreground">URL del Repositorio Git</Label>
+                <Input
+                  id="gitRepositoryUrl"
+                  type="url"
+                  {...register('gitRepositoryUrl')}
+                  placeholder="https://github.com/tu-usuario/tu-repositorio.git"
+                  className="bg-card text-foreground"
+                />
+                {errors.gitRepositoryUrl && (
+                  <p className="text-sm text-destructive">{errors.gitRepositoryUrl.message}</p>
+                )}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="gitUsername" className="text-foreground">Nombre de Usuario Git</Label>
+                  <Input
+                    id="gitUsername"
+                    {...register('gitUsername')}
+                    placeholder="Tu nombre de usuario de Git"
+                    className="bg-card text-foreground"
+                  />
+                  {errors.gitUsername && (
+                    <p className="text-sm text-destructive">{errors.gitUsername.message}</p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="gitEmail" className="text-foreground">Email de Git</Label>
+                  <Input
+                    id="gitEmail"
+                    type="email"
+                    {...register('gitEmail')}
+                    placeholder="tu-email@ejemplo.com"
+                    className="bg-card text-foreground"
+                  />
+                  {errors.gitEmail && (
+                    <p className="text-sm text-destructive">{errors.gitEmail.message}</p>
+                  )}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="gitPat" className="text-foreground">Token de Acceso Personal (PAT) de Git</Label>
+                <Input
+                  id="gitPat"
+                  type="password"
+                  {...register('gitPat')}
+                  placeholder="Introduce tu PAT de Git"
+                  className="bg-card text-foreground"
+                />
+                {errors.gitPat && (
+                  <p className="text-sm text-destructive">{errors.gitPat.message}</p>
+                )}
+                 <p className="text-xs text-muted-foreground">
+                    El PAT se utiliza para autenticar las subidas a tu repositorio. Asegúrate de que tiene los permisos necesarios (ej. `repo` o `public_repo`).
+                </p>
+              </div>
+            </div>
           </div>
-          <Button 
-            type="button" 
-            variant="outline" 
-            onClick={onTestConnection} 
-            disabled={isTestingConnection}
-            className="w-full md:w-auto"
-          >
-            {isTestingConnection ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Zap className="mr-2 h-4 w-4" />
-            )}
-            Probar Conexión
-          </Button>
+
         </CardContent>
         <CardFooter>
-          <Button type="submit" disabled={!isDirty && !watch('groqApiKey') && !watch('groqModelName')} className="w-full md:w-auto">
+          <Button 
+            type="submit" 
+            disabled={!isDirty && !watch('groqApiKey') && !watch('groqModelName') && !watch('gitRepositoryUrl') && !watch('gitUsername') && !watch('gitEmail') && !watch('gitPat')} 
+            className="w-full md:w-auto"
+          >
             <Save className="mr-2 h-4 w-4" />
             Guardar Configuración
           </Button>
@@ -187,3 +301,5 @@ export function SettingsForm() {
     </Card>
   );
 }
+
+    

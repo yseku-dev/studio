@@ -4,9 +4,9 @@
 import { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert } from "lucide-react";
+import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
-import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion } from './actions';
+import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion, handleUploadToGit } from './actions';
 import type { AnalyzeCodeAlchemistSourceOutput, SuggestionUnit as FlowSuggestionUnit } from '@/ai/flows/analyze-codealchemist-source-flow';
 import type { SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -28,7 +28,7 @@ import { Label } from '@/components/ui/label';
 import { Progress } from "@/components/ui/progress";
 
 
-type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "success" | "error" | "fixing_error";
+type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "success" | "error" | "fixing_error" | "uploading_git";
 type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
 
 interface SuggestionWithStatus extends FlowSuggestionUnit {
@@ -41,6 +41,13 @@ interface SuggestionWithStatus extends FlowSuggestionUnit {
 interface AnalysisProgress {
   processed: number;
   total: number;
+}
+
+interface GitConfig {
+  repoUrl: string | null;
+  username: string | null;
+  email: string | null;
+  pat: string | null;
 }
 
 export default function AutoUpdatePage() {
@@ -60,10 +67,17 @@ export default function AutoUpdatePage() {
 
   const [apiKey, setApiKey] = useState<string | null>(null);
   const [modelName, setModelName] = useState<string | null>(null);
+  const [gitConfig, setGitConfig] = useState<GitConfig>({ repoUrl: null, username: null, email: null, pat: null });
 
   useEffect(() => {
     setApiKey(localStorage.getItem('codealchemist_groq_api_key'));
     setModelName(localStorage.getItem('codealchemist_groq_model_name'));
+    setGitConfig({
+        repoUrl: localStorage.getItem('codealchemist_git_repository_url'),
+        username: localStorage.getItem('codealchemist_git_username'),
+        email: localStorage.getItem('codealchemist_git_email'),
+        pat: localStorage.getItem('codealchemist_git_pat'),
+    });
   }, []);
 
   const fetchProjectFiles = async (targetLogs?: string[]) => {
@@ -108,12 +122,11 @@ export default function AutoUpdatePage() {
 
     const result = await handleAutoAnalyzeAppSource(apiKey, modelName, analysisPreferences);
     
-    // Combinar logs del servidor con los logs locales existentes
     setDetailedLogs(prevLogs => [...prevLogs, ...(result.detailedExecutionLogs || [`[CLIENT ${new Date().toISOString()}] Llamada a handleAutoAnalyzeAppSource completada.`])]);
 
     setAnalysisProgress({ 
         processed: result.chunksProcessed || 0, 
-        total: result.totalChunks || 0 // Usar 0 si no hay total
+        total: result.totalChunks || 0 
     });
 
     if (result.success && result.data) {
@@ -121,7 +134,6 @@ export default function AutoUpdatePage() {
       const initialSuggestions = result.data.suggestions.map((s, index) => {
         const relatedFile = projectFiles?.find(f => {
             if (!s.area) return false;
-            // Normalizar nombres de archivo para comparación (ej. quitar prefijos como ./ o src/)
             const normalizePath = (p: string) => p.replace(/^\.\//, '').replace(/^src\//, '');
             const areaLower = normalizePath(s.area.toLowerCase());
             const fileNameLower = normalizePath(f.fileName.toLowerCase());
@@ -176,7 +188,7 @@ export default function AutoUpdatePage() {
     toast({ title: "Intentando Auto-Corrección", description: "Consultando a la IA para una posible solución..." });
 
     const fixResult = await handleGetErrorFixSuggestion(currentAnalysisError, apiKey, modelName, newLogs);
-    setDetailedLogs(newLogs); // Actualizar con los logs de la función
+    setDetailedLogs(newLogs);
 
     if (fixResult.success && fixResult.data) {
       setAutoFixSuggestion(fixResult.data);
@@ -237,22 +249,17 @@ export default function AutoUpdatePage() {
     
     const baseFilePath = suggestionToApply.area.includes(" (parte ") ? suggestionToApply.area.split(" (parte ")[0] : suggestionToApply.area;
 
-    // Pasar currentLogs para que applySuggestedChange pueda añadir sus propios logs
     const result = await applySuggestedChange(baseFilePath, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent, currentLogs);
     
     if (result.success && result.newContent !== undefined) {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {
           ...s, 
           status: "applied", 
-          // Actualizar el originalContent con el newContent para que futuras descargas tengan la versión más reciente.
-          // Si es una parte, esto es más complejo. Por ahora, actualizamos el original del fragmento,
-          // pero la descarga del ZIP usará el estado `projectFiles` que se actualiza después.
           originalContent: result.newContent, 
         } : s));
       toast({ title: "Sugerencia Aplicada", description: `El cambio para ${baseFilePath} se ha aplicado. Revisa la consola y los logs.`});
       currentLogs.push(`[CLIENT SUCCESS ${new Date().toISOString()}] Sugerencia aplicada a ${baseFilePath}. El contenido del archivo ha sido actualizado.`);
       
-      // Actualizar el estado de projectFiles para que la descarga refleje el cambio
       setProjectFiles(prevFiles => (prevFiles || []).map(pf => {
         const normalizePath = (p: string) => p.replace(/^\.\//, '').replace(/^src\//, '');
         if (normalizePath(pf.fileName.toLowerCase()) === normalizePath(baseFilePath.toLowerCase())) {
@@ -270,15 +277,16 @@ export default function AutoUpdatePage() {
     setDetailedLogs(currentLogs);
   };
 
-  const handleCopyError = (errorText: string | undefined) => {
-    if (!errorText) return;
-    navigator.clipboard.writeText(errorText)
+  const handleCopyLogs = (logContent: string[] | string | undefined) => {
+    if (!logContent) return;
+    const textToCopy = Array.isArray(logContent) ? logContent.join('\n') : logContent;
+    navigator.clipboard.writeText(textToCopy)
       .then(() => {
-        toast({ title: 'Error Copiado', description: 'El mensaje de error ha sido copiado al portapapeles.' });
+        toast({ title: 'Copiado', description: 'El contenido ha sido copiado al portapapeles.' });
       })
       .catch(err => {
-        console.error('Error al copiar el error:', err);
-        toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el error al portapapeles.', variant: 'destructive' });
+        console.error('Error al copiar:', err);
+        toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el contenido.', variant: 'destructive' });
       });
   };
 
@@ -297,7 +305,7 @@ export default function AutoUpdatePage() {
         const bundleResult = await getApplicationSourceBundle(false, currentLogs); 
         if (bundleResult.success && bundleResult.files) {
             filesToZip = bundleResult.files;
-            setProjectFiles(filesToZip); // Actualizar estado si se obtienen de nuevo
+            setProjectFiles(filesToZip);
         } else {
             toast({
                 title: "Error al Obtener Código Fuente",
@@ -362,15 +370,56 @@ export default function AutoUpdatePage() {
     setIsDownloading(false);
   };
 
+  const handleGitUpload = async () => {
+    const { repoUrl, username, email, pat } = gitConfig;
+    if (!repoUrl || !username || !email || !pat) {
+        toast({
+            title: "Configuración de Git Incompleta",
+            description: "Por favor, completa la configuración de Git en Ajustes (URL, Usuario, Email y PAT).",
+            variant: "destructive",
+        });
+        return;
+    }
+
+    setStatus("uploading_git");
+    const currentLogs = [...detailedLogs];
+    currentLogs.push(`[CLIENT ${new Date().toISOString()}] Iniciando subida a Git: ${repoUrl}`);
+    setDetailedLogs(currentLogs);
+    toast({ title: "Subiendo a Git...", description: `Intentando subir el código fuente a ${repoUrl.split('/').pop()}`});
+
+    const result = await handleUploadToGit({ repoUrl, username, email, pat }, "CodeAlchemist: AutoUpdate Sync", currentLogs);
+    
+    setDetailedLogs(currentLogs); // Actualizar logs con los de la función handleUploadToGit
+
+    if (result.success) {
+        toast({
+            title: "Subida a Git (Simulada) Exitosa",
+            description: result.message
+        });
+    } else {
+        toast({
+            title: "Error en Subida a Git",
+            description: result.message,
+            variant: "destructive",
+            duration: 10000,
+        });
+    }
+    setStatus(analysisResult ? "success" : "idle"); // Volver al estado anterior o idle
+  };
+
+
   useEffect(() => { 
     const initialLogs: string[] = [];
     initialLogs.push(`[CLIENT ${new Date().toISOString()}] AutoUpdatePage montado. Cargando archivos de proyecto iniciales...`);
     fetchProjectFiles(initialLogs).finally(() => {
         initialLogs.push(`[CLIENT ${new Date().toISOString()}] Carga inicial de archivos de proyecto completada.`);
-        // setDetailedLogs(prev => [...prev, ...initialLogs]); // Descomentar si quieres ver estos logs iniciales
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+
+  const isGitConfigured = gitConfig.repoUrl && gitConfig.username && gitConfig.email && gitConfig.pat;
+  const isProcessing = status === "analyzing" || status === "loading_source" || status === "fixing_error" || status === "uploading_git";
 
 
   return (
@@ -381,7 +430,7 @@ export default function AutoUpdatePage() {
             <Sparkles className="h-8 w-8" />
             AutoUpdate: Análisis de CodeAlchemist
           </CardTitle>
-          <CardDescription className="text-lg">
+          <CardDescription className="text-lg text-foreground">
             Esta sección permite a la IA analizar el propio código fuente completo de la aplicación CodeAlchemist para proponer mejoras y optimizaciones.
              {!apiKey || !modelName ? (
                 <span className="text-destructive block mt-1"> (Clave API o Modelo no configurado en Ajustes)</span>
@@ -391,7 +440,7 @@ export default function AutoUpdatePage() {
         <CardContent className="space-y-6">
           <p className="text-muted-foreground">
             Al hacer clic en &quot;Iniciar Auto-Análisis&quot;, CodeAlchemist recopilará su código fuente, lo dividirá en fragmentos si es necesario, y lo enviará
-            al modelo de IA configurado para obtener un resumen de posibles mejoras. También puedes descargar el código fuente completo.
+            al modelo de IA configurado para obtener un resumen de posibles mejoras. También puedes descargar el código fuente completo o subirlo a un repositorio Git si está configurado.
             Las llamadas a la API tienen un tiempo de espera para evitar bloqueos indefinidos.
           </p>
 
@@ -413,10 +462,10 @@ export default function AutoUpdatePage() {
           <div className="flex flex-wrap gap-4">
             <Button 
               onClick={handleStartAutoAnalysis} 
-              disabled={status === "analyzing" || status === "loading_source" || status === "fixing_error" || !apiKey || !modelName}
+              disabled={isProcessing || !apiKey || !modelName}
               className="text-base py-3 px-6"
             >
-              {(status === "analyzing" || status === "loading_source") ? (
+              {status === "analyzing" || status === "loading_source" ? (
                 <Loader2 className="mr-2 h-5 w-5 animate-spin" />
               ) : (
                 <Sparkles className="mr-2 h-5 w-5" />
@@ -425,9 +474,9 @@ export default function AutoUpdatePage() {
             </Button>
             <Button 
               onClick={handleDownloadSource} 
-              disabled={isDownloading || projectFiles === null || projectFiles.length === 0}
+              disabled={isDownloading || projectFiles === null || projectFiles.length === 0 || isProcessing}
               variant="outline"
-              className="text-base py-3 px-6"
+              className="text-base py-3 px-6 text-foreground"
             >
               {isDownloading ? (
                 <Loader2 className="mr-2 h-5 w-5 animate-spin" />
@@ -436,19 +485,34 @@ export default function AutoUpdatePage() {
               )}
               Descargar Código Fuente (ZIP)
             </Button>
+             <Button 
+              onClick={handleGitUpload} 
+              disabled={!isGitConfigured || projectFiles === null || projectFiles.length === 0 || isProcessing}
+              variant="outline"
+              className="text-base py-3 px-6 text-foreground"
+              title={!isGitConfigured ? "Configura los detalles de Git en Ajustes para habilitar esta opción." : "Subir código fuente a Git"}
+            >
+              {status === "uploading_git" ? (
+                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+              ) : (
+                <GitFork className="mr-2 h-5 w-5" />
+              )}
+              Subir a Git (Simulado)
+            </Button>
           </div>
 
-          {(status === "analyzing" || status === "success" || status === "error") && (analysisProgress.total > 0 || status === "loading_source" || (status === "analyzing" && analysisProgress.total === 0)) && (
+          {(status === "analyzing" || status === "success" || status === "error" || status === "uploading_git") && (analysisProgress.total > 0 || status === "loading_source" || (status === "analyzing" && analysisProgress.total === 0)) && (
             <div className="mt-4 space-y-2">
                 <Label className="text-sm text-foreground">
                     {status === "loading_source" ? "Cargando código fuente..." :
                      status === "analyzing" ? 
                         (analysisProgress.total > 0 ? `Procesando fragmentos... (${analysisProgress.processed}/${analysisProgress.total})` : "Iniciando análisis, calculando total de fragmentos...") : 
                      status === "success" ? `Análisis completado (${analysisProgress.processed}/${analysisProgress.total} fragmentos).` : 
-                     status === "error" ? `Análisis interrumpido (${analysisProgress.processed > 0 ? `${analysisProgress.processed}/` : ''}${analysisProgress.total > 0 ? analysisProgress.total : 'desconocido'} fragmentos).` : ""}
+                     status === "error" ? `Análisis interrumpido (${analysisProgress.processed > 0 ? `${analysisProgress.processed}/` : ''}${analysisProgress.total > 0 ? analysisProgress.total : 'desconocido'} fragmentos).` :
+                     status === "uploading_git" ? "Subiendo a Git..." : ""}
                 </Label>
                 <Progress 
-                    value={analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 : (status === "loading_source" || (status === "analyzing" && analysisProgress.total === 0)) ? 0 : (status === "success" || status === "error" ? 100 : 0) } 
+                    value={analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 : (status === "loading_source" || (status === "analyzing" && analysisProgress.total === 0)) ? 0 : (status === "success" || status === "error" || status === "uploading_git" ? 100 : 0) } 
                     className="w-full h-3" 
                 />
                 {(analysisProgress.total > 0 || (status === "error" && analysisProgress.processed > 0)) && (
@@ -476,7 +540,7 @@ export default function AutoUpdatePage() {
                      ))}
                    </pre>
                  </ScrollArea>
-                  <Button variant="outline" size="sm" onClick={() => handleCopyError(detailedLogs.join('\n'))} className="mt-2">
+                  <Button variant="outline" size="sm" onClick={() => handleCopyLogs(detailedLogs)} className="mt-2 text-foreground">
                     <Copy className="mr-2 h-4 w-4"/> Copiar Logs
                   </Button>
                </CardContent>
@@ -538,7 +602,7 @@ export default function AutoUpdatePage() {
                             {s.status === "error_applying" && s.errorMessage && (
                                 <div className="p-2 my-1 bg-destructive/10 border border-destructive/30 rounded-md">
                                     <p className="text-xs text-destructive ">Error al aplicar: {s.errorMessage}</p>
-                                    <Button variant="ghost" size="sm" onClick={() => handleCopyError(s.errorMessage)} className="mt-1 h-6 px-1.5 text-xs text-destructive hover:bg-destructive/20">
+                                    <Button variant="ghost" size="sm" onClick={() => handleCopyLogs(s.errorMessage)} className="mt-1 h-6 px-1.5 text-xs text-destructive hover:bg-destructive/20">
                                         <Copy className="mr-1 h-3 w-3"/> Copiar Error
                                     </Button>
                                 </div>
@@ -558,7 +622,7 @@ export default function AutoUpdatePage() {
                                             disabled={s.status === "applying" || s.status === "applied" || s.status === "not_applicable" || !s.area || !s.originalContent || !s.suggestedFullFileContent}
                                             className={s.status === "applied" ? "border-green-500 text-green-700 dark:text-green-400 hover:border-green-600 hover:bg-green-50 dark:hover:bg-green-900/50" : 
                                                        s.status === "error_applying" ? "border-destructive text-destructive hover:border-destructive hover:bg-destructive/10" :
-                                                       ""}
+                                                       "text-foreground"}
                                         >
                                         {s.status === "applying" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                         {s.status === "applied" && <CheckCircle className="mr-2 h-4 w-4 text-green-600 dark:text-green-500" />}
@@ -642,7 +706,7 @@ export default function AutoUpdatePage() {
                     <pre className="text-xs text-foreground whitespace-pre-wrap">{currentAnalysisError}</pre> 
                 </ScrollArea>
                 <div className="flex gap-2 mt-2">
-                    <Button variant="outline" size="sm" onClick={() => handleCopyError(currentAnalysisError)} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground">
+                    <Button variant="outline" size="sm" onClick={() => handleCopyLogs(currentAnalysisError)} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground">
                         <Copy className="mr-2 h-4 w-4"/> Copiar Mensaje de Error
                     </Button>
                     <Button 
@@ -670,13 +734,12 @@ export default function AutoUpdatePage() {
         <CardFooter>
           <p className="text-xs text-muted-foreground">
             <strong>Nota Importante:</strong> El análisis se realiza sobre el código fuente completo de CodeAlchemist, potencialmente dividido en fragmentos para manejar límites de tokens y timeouts.
-            La descarga de código fuente proporciona un archivo ZIP de todos los archivos detectados.
-            Las sugerencias de IA y su aplicación siempre deben ser revisadas cuidadosamente por un desarrollador. La capacidad de "auto-reparación" se limita a aplicar estas sugerencias.
+            La descarga de código fuente proporciona un archivo ZIP. La subida a Git (simulada) también utiliza el estado actual del código.
+            Las sugerencias de IA y su aplicación siempre deben ser revisadas cuidadosamente por un desarrollador.
           </p>
         </CardFooter>
       </Card>
 
-      {/* Modal for Auto-Fix Suggestion */}
       <AlertDialog open={isAutoFixModalOpen} onOpenChange={setIsAutoFixModalOpen}>
           <AlertDialogContent className="max-w-2xl">
               <AlertDialogHeader>
@@ -712,3 +775,5 @@ export default function AutoUpdatePage() {
     </div>
   );
 }
+
+    

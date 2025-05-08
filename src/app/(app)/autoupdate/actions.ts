@@ -6,7 +6,7 @@ import { suggestErrorFix, SuggestErrorFixInput, SuggestErrorFixOutput } from '@/
 import fs from 'fs/promises';
 import path from 'path';
 import { glob } from 'glob'; 
-import type { GroqOptions } from '@/services/groq'; // Import GroqOptions
+import type { GroqOptions } from '@/services/groq';
 
 interface AutoUpdateAnalysisResult {
   success: boolean;
@@ -17,8 +17,6 @@ interface AutoUpdateAnalysisResult {
   detailedExecutionLogs?: string[];
 }
 
-// Reducido para evitar "Payload Too Large". Asumiendo ~1.9 chars/token y un límite de ~5200 tokens para contenido.
-// Aún más reducido a 7500 para dar más margen al prompt y evitar 413.
 const MAX_CHARS_PER_CHUNK = 7500; 
 const GROQ_API_TIMEOUT_MS = 60000 * 1; // 1 minuto por chunk
 
@@ -36,7 +34,6 @@ export async function handleAutoAnalyzeAppSource(
   };
   const logDetail = (message: string) => {
     const timestampedMessage = `[DETAIL ${new Date().toISOString()}] ${message}`;
-    // console.log(timestampedMessage); // Optional: console log for detail too
     executionLogs.push(timestampedMessage);
   };
   const logWarn = (message: string) => {
@@ -51,18 +48,16 @@ export async function handleAutoAnalyzeAppSource(
       try {
         errorDetail = error instanceof Error ? error.message : JSON.stringify(error);
       } catch (e) {
-        // Fallback if JSON.stringify fails
         if (error instanceof Error) {
             errorDetail = error.message;
         } else if (typeof error.toString === 'function') {
             errorDetail = error.toString();
         }
-        // else errorDetail remains "No se pudo serializar el detalle del error."
       }
       fullMessage += ` | Detalle: ${errorDetail}`;
 
       if (error instanceof Error && error.stack) {
-        fullMessage += ` | Stack: ${error.stack.substring(0, 500)}...`; // Truncate stack for brevity in logs
+        fullMessage += ` | Stack: ${error.stack.substring(0, 500)}...`;
       }
     }
     console.error(fullMessage);
@@ -114,7 +109,7 @@ export async function handleAutoAnalyzeAppSource(
     let fileEffectiveContent = file.content;
 
     const fileMarkerTemplate = `\n\n// --- Archivo: ${baseFileName}{part_info} ---\n\n`;
-    const fileMarkerLength = fileMarkerTemplate.replace("{part_info}", "").length; // Approx length without part info
+    const fileMarkerLength = fileMarkerTemplate.replace("{part_info}", "").length;
 
     if (fileEffectiveContent.length + fileMarkerLength > MAX_CHARS_PER_CHUNK) {
       logDetail(`Archivo ${baseFileName} es demasiado grande (${fileEffectiveContent.length} caracteres) para un solo fragmento, se dividirá.`);
@@ -175,7 +170,7 @@ export async function handleAutoAnalyzeAppSource(
   if (totalChunks === 0) {
     logWarn("No se generaron fragmentos de código para analizar. Esto puede ocurrir si no hay archivos o son muy pequeños.");
     return { 
-      success: true, // Success in the sense that the process ran, but no analysis done.
+      success: true, 
       data: { analysisTitle: "Sin Contenido para Analizar", identifiedAreas: [], suggestions: [], overallAssessment: "No se encontraron archivos o contenido para analizar." },
       chunksProcessed: 0, 
       totalChunks: 0, 
@@ -214,7 +209,6 @@ export async function handleAutoAnalyzeAppSource(
         errorMessage = error.message; 
       }
       logError(`Error analizando el fragmento ${currentChunkNum}/${totalChunks}.`, error);
-      // Devolver el error, los fragmentos procesados hasta ahora y los logs
       return { 
         success: false, 
         error: `Falló el análisis del fragmento ${currentChunkNum}: ${errorMessage}`, 
@@ -225,7 +219,7 @@ export async function handleAutoAnalyzeAppSource(
     }
   }
 
-  if (allResults.length === 0 && totalChunks > 0) { // totalChunks > 0 para evitar este error si no había nada que procesar.
+  if (allResults.length === 0 && totalChunks > 0) {
     logError("No se obtuvieron resultados del análisis de los fragmentos, aunque se procesaron algunos o todos.");
     return { 
         success: false, 
@@ -264,7 +258,7 @@ interface AppSourceBundleResult {
   files?: AppSourceFile[];
   concatenatedSource?: string; 
   error?: string;
-  logsBuilt?: string[]; // Logs built by this function, to be merged by caller
+  logsBuilt?: string[];
 }
 
 const ignorePatterns = [
@@ -282,6 +276,7 @@ const ignorePatterns = [
   '.env.production',
   '.env.test',
   'public/mockServiceWorker.js', 
+  '.git/**', // Ignorar directorio .git
 ];
 
 export async function getApplicationSourceBundle(
@@ -293,7 +288,7 @@ export async function getApplicationSourceBundle(
     const timestampedMessage = `[SourceBundle ${level} ${new Date().toISOString()}] ${message}`;
     switch(level) {
         case 'INFO': console.log(timestampedMessage); break;
-        case 'DETAIL': console.log(timestampedMessage); break; // Could be less verbose if needed
+        case 'DETAIL': console.log(timestampedMessage); break;
         case 'WARN': console.warn(timestampedMessage); break;
         case 'ERROR': console.error(timestampedMessage); break;
     }
@@ -334,7 +329,7 @@ export async function getApplicationSourceBundle(
             log(`Archivo omitido de la concatenación por tamaño excesivo: ${relativeFilePath} (${(stats.size / 1024).toFixed(2)} KB)`, 'WARN');
             const message = `// Archivo ${relativeFilePath} omitido de la concatenación por ser demasiado grande (${(stats.size / 1024).toFixed(2)} KB).\n`;
             concatenatedContent += `\n\n// --- Archivo: ${relativeFilePath} ---\n\n${message}`;
-            filesData.push({ fileName: relativeFilePath, content: message }); // Still include in filesData for listing
+            filesData.push({ fileName: relativeFilePath, content: message });
             continue;
         }
 
@@ -346,7 +341,7 @@ export async function getApplicationSourceBundle(
           const error = readError as NodeJS.ErrnoException;
           log(`No se pudo leer el archivo ${relativeFilePath} como texto (podría ser binario o error de permisos): ${error.message}. Código: ${error.code}`, 'WARN');
           content = `// Error: No se pudo leer el archivo ${relativeFilePath} como texto. Causa: ${error.message}.`;
-           if (!concatenate && (error.code === 'EILSEQ' || stats.size > 1024 * 1024 * 2) ) { // 2MB limit for non-concatenated binary-like content in ZIP
+           if (!concatenate && (error.code === 'EILSEQ' || stats.size > 1024 * 1024 * 2) ) {
              filesData.push({ fileName: relativeFilePath, content: "// Archivo binario o muy grande no legible, contenido omitido para ZIP." });
              log(`Contenido de ${relativeFilePath} omitido para ZIP (binario/grande o error de lectura no concatenado).`, 'WARN');
              continue; 
@@ -360,14 +355,13 @@ export async function getApplicationSourceBundle(
         }
       } catch (fileProcessingError) {
         const error = fileProcessingError as NodeJS.ErrnoException;
-        // Filter out common access/dir errors that might be expected with broad globs
         if (error.code !== 'EACCES' && error.code !== 'EISDIR' && error.code !== 'ENOENT') { 
             log(`Error al procesar el archivo ${relativeFilePath} para el paquete fuente: ${error.message}. Código: ${error.code}`, 'WARN');
         } else {
             log(`Error de acceso/directorio omitido para ${relativeFilePath}: ${error.message}. Código: ${error.code}`, 'DETAIL');
         }
         const errorMessage = `// Error: No se pudo procesar completamente el archivo ${relativeFilePath}. Causa: ${error.message}`;
-        filesData.push({ fileName: relativeFilePath, content: errorMessage }); // Include a placeholder
+        filesData.push({ fileName: relativeFilePath, content: errorMessage });
          if (concatenate) {
           concatenatedContent += `\n\n// --- Archivo: ${relativeFilePath} ---\n\n${errorMessage}`;
         }
@@ -402,9 +396,9 @@ export async function getApplicationSourceBundle(
 
 export async function applySuggestedChange(
     filePath: string, 
-    originalContent: string, // Kept for context, though not used for verification in this version
+    originalContent: string,
     suggestedContent: string,
-    executionLogs?: string[] // For detailed logging
+    executionLogs?: string[]
 ): Promise<{success: boolean, error?: string, newContent?: string}> {
     const log = (message: string, level: 'INFO' | 'ERROR' = 'INFO') => {
         const timestampedMessage = `[ApplyChange ${level} ${new Date().toISOString()}] ${message}`;
@@ -415,15 +409,14 @@ export async function applySuggestedChange(
 
     log(`Intentando aplicar cambio al archivo: ${filePath}`, 'INFO');
     
-    // const isSimulation = true; // Para desactivar la escritura real
-    const isSimulation = false; // Para activar la escritura real
+    const isSimulation = false; 
 
     if (isSimulation) {
         log(`SIMULACIÓN: El archivo ${filePath} se habría actualizado.`, 'INFO');
         log("SIMULACIÓN: No se han realizado cambios reales en el sistema de archivos.", 'INFO');
         log(`SIMULACIÓN: Contenido original (primeros 300 chars): ${originalContent.substring(0,300)}...`, 'INFO');
         log(`SIMULACIÓN: Contenido sugerido (primeros 300 chars): ${suggestedContent.substring(0,300)}...`, 'INFO');
-        return { success: true, newContent: suggestedContent }; // Devuelve el contenido sugerido como si se hubiera aplicado
+        return { success: true, newContent: suggestedContent };
     }
 
     try {
@@ -432,13 +425,11 @@ export async function applySuggestedChange(
 
         log(`Ruta completa del archivo para escritura: ${fullPath}`, 'INFO');
         
-        // Validar que la ruta no intente escapar del directorio del proyecto (medida de seguridad básica)
         if (!fullPath.startsWith(projectRoot)) {
             log(`Intento de escritura fuera del directorio del proyecto denegado: ${filePath}`, 'ERROR');
             return { success: false, error: `Acceso denegado: La ruta del archivo está fuera de los límites permitidos.` };
         }
         
-        // Opcional: Crear directorios si no existen (con precaución)
         const dirName = path.dirname(fullPath);
         try {
             await fs.mkdir(dirName, { recursive: true });
@@ -514,3 +505,114 @@ export async function handleGetErrorFixSuggestion(
     return { success: false, error: `Falló la obtención de sugerencia para corrección: ${specificErrorMessage}` };
   }
 }
+
+interface GitUploadConfig {
+    repoUrl: string;
+    username: string;
+    email: string;
+    pat: string;
+}
+
+interface GitUploadResult {
+    success: boolean;
+    message: string;
+    logs?: string[];
+}
+
+export async function handleUploadToGit(
+    gitConfig: GitUploadConfig,
+    commitMessage: string = "AutoUpdate: Sincronización de código fuente",
+    parentExecutionLogs?: string[]
+): Promise<GitUploadResult> {
+    const internalLogs: string[] = [];
+    const log = (message: string, level: 'INFO' | 'DETAIL' | 'WARN' | 'ERROR' = 'INFO') => {
+        const timestampedMessage = `[GitUpload ${level} ${new Date().toISOString()}] ${message}`;
+        // No usar console.log/warn/error aquí directamente para no duplicar si parentExecutionLogs es el mismo
+        internalLogs.push(timestampedMessage);
+        if (parentExecutionLogs) parentExecutionLogs.push(timestampedMessage);
+    };
+    
+    log(`Iniciando subida a Git para el repositorio: ${gitConfig.repoUrl}`, 'INFO');
+
+    if (!gitConfig.repoUrl || !gitConfig.username || !gitConfig.email || !gitConfig.pat) {
+        const errMsg = "Configuración de Git incompleta. Se requieren URL, nombre de usuario, email y PAT.";
+        log(errMsg, 'ERROR');
+        return { success: false, message: errMsg, logs: internalLogs };
+    }
+
+    // Nota: La ejecución real de comandos Git aquí es compleja y depende del entorno del servidor.
+    // Esto es una simulación. En un entorno real, se usaría child_process.exec o una librería de Git.
+
+    try {
+        log("Paso 1: Obtener el paquete de código fuente más reciente...", 'INFO');
+        const sourceBundle = await getApplicationSourceBundle(false, internalLogs);
+        if (!sourceBundle.success || !sourceBundle.files || sourceBundle.files.length === 0) {
+            const errorMsg = sourceBundle.error || "No se pudo obtener el código fuente para subir a Git.";
+            log(errorMsg, 'ERROR');
+            return { success: false, message: errorMsg, logs: internalLogs };
+        }
+        log(`Paquete de código fuente obtenido con ${sourceBundle.files.length} archivos.`, 'INFO');
+        
+        // SIMULACIÓN DE OPERACIONES GIT
+        log("Paso 2: (Simulación) Creando un directorio temporal para el repositorio...", 'DETAIL');
+        const tempRepoPath = `/tmp/codealchemist_gitsync_${Date.now()}`;
+        log(`(Simulación) Directorio temporal: ${tempRepoPath}`, 'DETAIL');
+
+        log("Paso 3: (Simulación) Inicializando repositorio Git...", 'DETAIL');
+        // Aquí iría: git init
+        log(`(Simulación) git init en ${tempRepoPath}`, 'INFO');
+
+        log("Paso 4: (Simulación) Configurando usuario y email de Git...", 'DETAIL');
+        // Aquí iría: git config user.name "${gitConfig.username}" y git config user.email "${gitConfig.email}"
+        log(`(Simulación) git config user.name "${gitConfig.username}"`, 'INFO');
+        log(`(Simulación) git config user.email "${gitConfig.email}"`, 'INFO');
+
+        log(`Paso 5: (Simulación) Copiando ${sourceBundle.files.length} archivos al repositorio temporal...`, 'DETAIL');
+        // Simular la escritura de archivos al directorio temporal.
+        // Por ejemplo: await fs.mkdir(tempRepoPath, { recursive: true });
+        // for (const file of sourceBundle.files) {
+        //    const filePath = path.join(tempRepoPath, file.fileName);
+        //    await fs.mkdir(path.dirname(filePath), { recursive: true });
+        //    await fs.writeFile(filePath, file.content, 'utf-8');
+        // }
+        log("(Simulación) Archivos copiados.", 'INFO');
+
+        log("Paso 6: (Simulación) Añadiendo todos los archivos al staging de Git...", 'DETAIL');
+        // Aquí iría: git add .
+        log("(Simulación) git add .", 'INFO');
+
+        log(`Paso 7: (Simulación) Realizando commit con mensaje: "${commitMessage}"`, 'DETAIL');
+        // Aquí iría: git commit -m "${commitMessage}"
+        log(`(Simulación) git commit -m "${commitMessage}"`, 'INFO');
+
+        log("Paso 8: (Simulación) Añadiendo repositorio remoto...", 'DETAIL');
+        // Modificar URL para incluir PAT para autenticación HTTPS
+        // Formato: https://<username>:<pat>@github.com/username/repo.git
+        const authenticatedRepoUrl = gitConfig.repoUrl.replace("https://", `https://${gitConfig.username}:${gitConfig.pat}@`);
+        // Aquí iría: git remote add origin ${authenticatedRepoUrl}
+        log(`(Simulación) git remote add origin ${gitConfig.repoUrl.replace(gitConfig.pat, "*****")}`, 'INFO'); // No loguear el PAT
+
+        log("Paso 9: (Simulación) Realizando push a la rama 'main' (o 'master')...", 'DETAIL');
+        // Aquí iría: git push -u origin main (o master, puede necesitar detección o configuración)
+        log("(Simulación) git push -u origin main", 'INFO');
+
+        log("Paso 10: (Simulación) Limpiando directorio temporal...", 'DETAIL');
+        // Aquí iría: await fs.rm(tempRepoPath, { recursive: true, force: true });
+        log("(Simulación) Directorio temporal eliminado.", 'INFO');
+
+        const successMsg = "Subida a Git simulada exitosamente. Revisa los logs para ver los comandos simulados.";
+        log(successMsg, 'INFO');
+        return { success: true, message: successMsg, logs: internalLogs };
+
+    } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : "Error desconocido durante la subida a Git.";
+        log(`Error crítico durante la subida a Git: ${errorMsg}`, 'ERROR');
+        if (error instanceof Error && error.stack) {
+            log(`Stack del error de Git: ${error.stack}`, 'ERROR');
+        }
+        return { success: false, message: `Falló la subida a Git: ${errorMsg}`, logs: internalLogs };
+    }
+}
+
+
+    
