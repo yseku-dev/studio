@@ -1,9 +1,21 @@
 
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import Link from "next/link";
-import { ScanLine, GitCompareArrows, Settings as SettingsIcon, FolderSearch, Sparkles, Lightbulb,Rocket, BarChart3 } from "lucide-react";
+import { ScanLine, GitCompareArrows, Settings as SettingsIcon, FolderSearch, Sparkles, Lightbulb,Rocket, BarChart3, CodeXml, FolderPlus } from "lucide-react";
 
 const featureCards = [
+  {
+    href: "/generate-code",
+    icon: CodeXml,
+    title: "Generar Código",
+    description: "Genera fragmentos de código a partir de descripciones en lenguaje natural."
+  },
+  {
+    href: "/generate-project",
+    icon: FolderPlus,
+    title: "Generar Proyecto",
+    description: "Crea una estructura base para un nuevo proyecto según tus especificaciones."
+  },
   {
     href: "/analyze",
     icon: ScanLine,
@@ -67,7 +79,7 @@ export default function DashboardPage() {
              <BarChart3 className="h-7 w-7 text-accent"/>
              Características Principales
           </CardTitle>
-           <CardDescription>Accede rápidamente a las herramientas clave de YskCodeAlchemist.</CardDescription>
+           <CardDescription className="text-foreground">Accede rápidamente a las herramientas clave de YskCodeAlchemist.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -76,7 +88,7 @@ export default function DashboardPage() {
                 <Card className="hover:shadow-xl hover:border-accent transition-all duration-300 ease-in-out cursor-pointer h-full flex flex-col bg-card hover:bg-accent/5">
                   <CardHeader className="items-center text-center pt-6 pb-3">
                     <feature.icon className="h-12 w-12 text-accent mb-3" />
-                    <CardTitle className="text-xl">{feature.title}</CardTitle>
+                    <CardTitle className="text-xl text-foreground">{feature.title}</CardTitle>
                   </CardHeader>
                   <CardContent className="text-center text-sm text-muted-foreground flex-grow pb-6">
                     <p>{feature.description}</p>
@@ -97,9 +109,10 @@ export default function DashboardPage() {
         </CardHeader>
         <CardContent className="space-y-3 text-foreground">
           <p><strong>1. Configura tus Ajustes:</strong> Ve a la sección de <Link href="/settings" className="font-semibold text-primary hover:underline">Configuración</Link> para ingresar tu clave API de Groq y seleccionar el modelo de IA que prefieras. ¡No olvides probar la conexión!</p>
-          <p><strong>2. Analiza tu Código:</strong> Dirígete a <Link href="/analyze" className="font-semibold text-primary hover:underline">Analizar Código</Link>. Pega tu código o sube un archivo para recibir análisis detallados y sugerencias de refactorización.</p>
-          <p><strong>3. Explora el AutoUpdate:</strong> En la sección de <Link href="/autoupdate" className="font-semibold text-primary hover:underline">AutoUpdate</Link>, permite que YskCodeAlchemist analice su propio código fuente. Puedes guiar el análisis con tus preferencias.</p>
-          <p><strong>4. Gestiona tus Versiones:</strong> Utiliza <Link href="/versions" className="font-semibold text-primary hover:underline">Versiones Guardadas</Link> para almacenar, comparar y revertir diferentes estados de tu código a lo largo del tiempo.</p>
+          <p><strong>2. Genera Código o Proyectos:</strong> Usa <Link href="/generate-code" className="font-semibold text-primary hover:underline">Generar Código</Link> para fragmentos o <Link href="/generate-project" className="font-semibold text-primary hover:underline">Generar Proyecto</Link> para estructuras completas.</p>
+          <p><strong>3. Analiza tu Código:</strong> Dirígete a <Link href="/analyze" className="font-semibold text-primary hover:underline">Analizar Código</Link>. Pega tu código o sube un archivo para recibir análisis detallados y sugerencias de refactorización.</p>
+          <p><strong>4. Explora el AutoUpdate:</strong> En la sección de <Link href="/autoupdate" className="font-semibold text-primary hover:underline">AutoUpdate</Link>, permite que YskCodeAlchemist analice su propio código fuente. Puedes guiar el análisis con tus preferencias.</p>
+          <p><strong>5. Gestiona tus Versiones:</strong> Utiliza <Link href="/versions" className="font-semibold text-primary hover:underline">Versiones Guardadas</Link> para almacenar, comparar y revertir diferentes estados de tu código a lo largo del tiempo.</p>
         </CardContent>
       </Card>
     </div>

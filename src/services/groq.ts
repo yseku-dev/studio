@@ -1,3 +1,4 @@
+
 /**
  * Representa la respuesta de la API del modelo de lenguaje de Groq.
  */
@@ -359,6 +360,202 @@ export async function testGroqConnection(options: GroqOptions): Promise<{success
     console.error("Error probando la conexión con Groq API:", error);
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     return { success: false, message: `Falló la prueba de conexión: ${errorMessage}` };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+
+/**
+ * Respuesta de la generación de código desde Groq.
+ */
+interface GeneratedCodeGroqResponse {
+  generatedCode: string;
+  explanation?: string;
+}
+
+/**
+ * Genera código a partir de un prompt utilizando la API de Groq.
+ * @param prompt El prompt que describe el código a generar.
+ * @param options Opciones de configuración para la API de Groq.
+ * @returns Una promesa que se resuelve en un objeto GeneratedCodeGroqResponse.
+ */
+export async function generateCodeFromPrompt(
+  prompt: string,
+  options: GroqOptions
+): Promise<GeneratedCodeGroqResponse> {
+  console.log(`Realizando llamada a API de Groq (modelo: ${options.modelName}) para generación de código...`);
+
+  const systemMessage = `Eres un asistente de programación experto. Genera un fragmento de código basado en la descripción del usuario.
+Proporciona:
+1. El código generado (campo "generatedCode").
+2. Una breve explicación del código, si es relevante (campo "explanation", opcional).
+Responde ÚNICAMENTE en formato JSON con las claves "generatedCode" y, opcionalmente, "explanation".
+Asegúrate de que el código sea funcional y siga las mejores prácticas.
+Si el prompt pide un lenguaje específico, úsalo. Si no, Python es una buena opción por defecto.`;
+
+  const requestBody = {
+    model: options.modelName,
+    messages: [
+      { role: "system", content: systemMessage },
+      { role: "user", content: prompt }
+    ],
+    temperature: 0.4,
+    max_tokens: 3000, // Permitir código más extenso
+    response_format: { type: "json_object" },
+  };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS * 1.5); // 90s timeout
+
+  try {
+    const fetchRequestOptions: RequestInit = {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${options.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    };
+
+    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 3, 2000, `generateCodeFromPrompt(${options.modelName})`);
+    const data = await response.json();
+
+    if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
+      try {
+        const parsedResult = JSON.parse(data.choices[0].message.content);
+        if (!parsedResult.generatedCode) {
+          console.error("Respuesta JSON de Groq incompleta (generateCode):", parsedResult);
+          throw new Error("La respuesta JSON de Groq no contiene el campo 'generatedCode'.");
+        }
+        return parsedResult as GeneratedCodeGroqResponse;
+      } catch (parseError) {
+        console.error("Error al parsear la respuesta JSON de Groq (generateCode):", parseError, "\nContenido recibido:", data.choices[0].message.content);
+        throw new Error(`La respuesta de Groq (generateCode) no es un JSON válido o falta el campo 'generatedCode'. Error: ${(parseError as Error).message}`);
+      }
+    } else {
+      console.error("Respuesta inesperada de la API de Groq (generateCode):", data);
+      throw new Error("Respuesta inesperada de la API de Groq (generateCode).");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error("Error de timeout final llamando a la API de Groq (generateCode)");
+      throw new Error("La solicitud de generación de código a la API de Groq excedió el tiempo límite.");
+    }
+    console.error("Error procesando la solicitud a Groq (generateCode):", error);
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+
+/**
+ * Estructura de un archivo de proyecto.
+ */
+interface ProjectFile {
+  path: string; // Ejemplo: "src/components/Button.tsx" o "README.md"
+  content: string;
+}
+
+/**
+ * Respuesta de la generación de estructura de proyecto desde Groq.
+ */
+interface GeneratedProjectGroqResponse {
+  projectStructure: {
+    projectName?: string; // Nombre sugerido para el proyecto (directorio raíz)
+    files: ProjectFile[]; // Lista de archivos con su ruta y contenido
+  };
+  notes?: string; // Notas adicionales de la IA sobre el proyecto o cómo proceder
+}
+
+/**
+ * Genera una estructura de proyecto (archivos y carpetas) a partir de un prompt.
+ * @param prompt El prompt que describe el proyecto.
+ * @param options Opciones de configuración para la API de Groq.
+ * @returns Una promesa que se resuelve en un objeto GeneratedProjectGroqResponse.
+ */
+export async function generateProjectStructureFromPrompt(
+  prompt: string,
+  options: GroqOptions
+): Promise<GeneratedProjectGroqResponse> {
+  console.log(`Realizando llamada a API de Groq (modelo: ${options.modelName}) para generación de estructura de proyecto...`);
+
+  const systemMessage = `Eres un arquitecto de software y asistente de programación experto.
+Basado en la descripción del usuario, genera una estructura de archivos y carpetas para un nuevo proyecto de software.
+Proporciona:
+1.  Un objeto "projectStructure" que contenga:
+    -   "projectName": (string, opcional) Un nombre corto y descriptivo para el directorio raíz del proyecto (ej: "mi-api-express").
+    -   "files": (array de objetos) Cada objeto representa un archivo y debe tener:
+        -   "path": (string) La ruta completa del archivo desde la raíz del proyecto (ej: "src/index.ts", "public/style.css", "package.json"). Usa barras inclinadas '/' como separadores de directorio.
+        -   "content": (string) El contenido inicial para ese archivo. Puede ser código de ejemplo, configuración básica, o un placeholder si el contenido es muy extenso o complejo para este paso inicial. Para archivos como README.md, incluye contenido útil.
+2.  "notes": (string, opcional) Notas adicionales, como los próximos pasos sugeridos, tecnologías clave usadas, o cómo ejecutar el proyecto si es simple.
+
+Responde ÚNICAMENTE en formato JSON con las claves "projectStructure" y, opcionalmente, "notes".
+Asegúrate de que "projectStructure.files" sea un array.
+Genera una estructura de directorios lógica y común para el tipo de proyecto descrito.
+Incluye archivos de configuración comunes si son relevantes (ej: package.json, tsconfig.json, .gitignore).
+El contenido de los archivos debe ser coherente con sus extensiones y propósitos.`;
+
+  const requestBody = {
+    model: options.modelName,
+    messages: [
+      { role: "system", content: systemMessage },
+      { role: "user", content: prompt }
+    ],
+    temperature: 0.3,
+    max_tokens: 4000, // Límite alto para permitir estructuras complejas y contenido de archivos.
+    response_format: { type: "json_object" },
+  };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS * 3); // 180s timeout
+
+  try {
+    const fetchRequestOptions: RequestInit = {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${options.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody),
+      signal: controller.signal,
+    };
+
+    const response = await fetchWithRetry(GROQ_API_ENDPOINT, fetchRequestOptions, 3, 3000, `generateProjectStructure(${options.modelName})`);
+    const data = await response.json();
+
+    if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
+      try {
+        const parsedResult = JSON.parse(data.choices[0].message.content);
+        if (!parsedResult.projectStructure || !Array.isArray(parsedResult.projectStructure.files)) {
+          console.error("Respuesta JSON de Groq incompleta o malformada (generateProjectStructure):", parsedResult);
+          throw new Error("La respuesta JSON de Groq no contiene 'projectStructure' o 'projectStructure.files' no es un array.");
+        }
+        // Validar cada archivo en el array
+        for (const file of parsedResult.projectStructure.files) {
+            if (typeof file.path !== 'string' || typeof file.content !== 'string') {
+                console.error("Objeto de archivo inválido en la respuesta de Groq (generateProjectStructure):", file);
+                throw new Error("La respuesta JSON de Groq contiene un objeto de archivo inválido (falta 'path' o 'content' como string).");
+            }
+        }
+        return parsedResult as GeneratedProjectGroqResponse;
+      } catch (parseError) {
+        console.error("Error al parsear la respuesta JSON de Groq (generateProjectStructure):", parseError, "\nContenido recibido:", data.choices[0].message.content);
+        throw new Error(`La respuesta de Groq (generateProjectStructure) no es un JSON válido o tiene una estructura incorrecta. Error: ${(parseError as Error).message}`);
+      }
+    } else {
+      console.error("Respuesta inesperada de la API de Groq (generateProjectStructure):", data);
+      throw new Error("Respuesta inesperada de la API de Groq (generateProjectStructure).");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error("Error de timeout final llamando a la API de Groq (generateProjectStructure)");
+      throw new Error("La solicitud de generación de proyecto a la API de Groq excedió el tiempo límite.");
+    }
+    console.error("Error procesando la solicitud a Groq (generateProjectStructure):", error);
+    throw error;
   } finally {
     clearTimeout(timeoutId);
   }

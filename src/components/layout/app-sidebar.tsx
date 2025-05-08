@@ -10,16 +10,17 @@ import {
   SidebarMenu,
   SidebarMenuItem,
   SidebarMenuButton,
-  SidebarTrigger, // Import SidebarTrigger
-  useSidebar, // Import useSidebar to control toggle
+  useSidebar, 
 } from '@/components/ui/sidebar';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { LayoutDashboard, ScanLine, GitCompareArrows, Settings, PackageSearch, FolderSearch, Sparkles, PanelLeft } from 'lucide-react';
+import { LayoutDashboard, ScanLine, GitCompareArrows, Settings, PackageSearch, FolderSearch, Sparkles, PanelLeft, CodeXml, FolderPlus } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
   { href: '/dashboard', label: 'Panel de Control', icon: LayoutDashboard },
+  { href: '/generate-code', label: 'Generar Código', icon: CodeXml },
+  { href: '/generate-project', label: 'Generar Proyecto', icon: FolderPlus },
   { href: '/analyze', label: 'Analizar Código', icon: ScanLine },
   { href: '/project-analysis', label: 'Analizar Proyecto', icon: FolderSearch },
   { href: '/autoupdate', label: 'AutoUpdate', icon: Sparkles },
@@ -29,7 +30,7 @@ const navItems = [
 
 export function AppSidebar() {
   const pathname = usePathname();
-  const { state, toggleSidebar, isMobile } = useSidebar(); // Get toggleSidebar and state
+  const { state, toggleSidebar, isMobile } = useSidebar(); 
 
   return (
     <Sidebar collapsible="icon" variant="sidebar" side="left" className="border-r">
@@ -44,12 +45,11 @@ export function AppSidebar() {
             YskCodeAlchemist
           </h1>
         </div>
-        {/* Mostrar el SidebarTrigger solo en escritorio y cuando no está en modo icono por defecto */}
          <Button 
             variant="ghost" 
             size="icon" 
             onClick={toggleSidebar} 
-            className="rounded-lg md:hidden group-data-[collapsible=icon]:hidden" // Oculto en modo icono en desktop, visible en mobile si se quiere
+            className="rounded-lg md:hidden group-data-[collapsible=icon]:hidden" 
             aria-label="Toggle sidebar"
           >
            <PanelLeft className="h-5 w-5" />
@@ -79,7 +79,6 @@ export function AppSidebar() {
           </SidebarMenu>
         </SidebarContent>
       </ScrollArea>
-       {/* Botón para colapsar/expandir en la parte inferior de la barra lateral, visible en desktop */}
       {!isMobile && (
         <div className="p-2 border-t border-sidebar-border group-data-[collapsible=icon]:flex group-data-[collapsible=icon]:justify-center">
             <Button 
@@ -97,3 +96,4 @@ export function AppSidebar() {
     </Sidebar>
   );
 }
+
