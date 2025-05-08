@@ -5,11 +5,11 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent, SheetTrigger, SheetClose, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetTrigger, SheetClose } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { 
   Menu, 
-  PackageSearch, 
+  FlaskConical, // Changed from PackageSearch
   LayoutDashboard, 
   ScanLine, 
   GitCompareArrows, 
@@ -49,7 +49,7 @@ export function AppSidebar() {
 
   useEffect(() => {
     if (isMobile) {
-      setIsCollapsed(false); // Sidebar is not "collapsible" in the same way on mobile, it's a sheet
+      setIsCollapsed(false); 
     } else {
       const storedCollapseState = localStorage.getItem('sidebarCollapsed');
       if (storedCollapseState) {
@@ -72,11 +72,11 @@ export function AppSidebar() {
       isCollapsed && !isMobile ? "w-20" : "w-72"
     )}>
       <div className={cn(
-          "flex items-center border-b p-4 h-14", // Matched topbar height
+          "flex items-center border-b p-4 h-14", 
           isCollapsed && !isMobile ? "justify-center" : "justify-between"
         )}>
         <Link href="/dashboard" className={cn("flex items-center gap-2", isCollapsed && !isMobile && "justify-center w-full")}>
-          <PackageSearch className="h-7 w-7 text-primary" />
+          <FlaskConical className="h-7 w-7 text-primary" /> 
           {!isCollapsed || isMobile ? (
             <span className="text-xl font-semibold text-primary">CodeAlchemist</span>
           ) : null}
@@ -178,7 +178,7 @@ export function AppSidebar() {
             </Button>
           </SheetTrigger>
         </div>
-        <SheetContent side="left" className="w-72 p-0 bg-card border-r-0">
+        <SheetContent side="left" className="w-72 p-0 bg-card border-r-0" aria-describedby={undefined} aria-label="Barra lateral principal">
            {/* SheetHeader is automatically added by SheetContent if not specified, 
                but we use a custom SidebarContent which includes its own header styling */}
           <SidebarContent />
