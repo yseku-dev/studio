@@ -31,3 +31,4 @@ export interface WorkgroupConfig {
   task: string; // La tarea general para el grupo de trabajo
   // Futuros campos: admin_agent_id, mode (e.g., 'round_robin', 'auto'), max_rounds
 }
+
