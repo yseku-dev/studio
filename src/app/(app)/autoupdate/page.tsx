@@ -99,7 +99,7 @@ export default function AutoUpdatePage() {
 
     toast({
       title: "Auto-Análisis Iniciado",
-      description: "Cargando y preparando el código fuente de YskCodeAlchemist..."
+      description: "Cargando y preparando el código fuente de CodeAlchemist..."
     });
 
     await fetchProjectFiles(initialLogs); 
@@ -143,7 +143,7 @@ export default function AutoUpdatePage() {
       setStatus("success");
       toast({
         title: "Auto-Análisis Completado",
-        description: `Se han generado sugerencias para YskCodeAlchemist. ${result.chunksProcessed || 0} de ${result.totalChunks || 0} fragmentos procesados.`
+        description: `Se han generado sugerencias para CodeAlchemist. ${result.chunksProcessed || 0} de ${result.totalChunks || 0} fragmentos procesados.`
       });
       setDetailedLogs(prevLogs => [...prevLogs, `[CLIENT ${new Date().toISOString()}] Análisis completado y resultados procesados en UI.`]);
     } else {
@@ -288,7 +288,7 @@ export default function AutoUpdatePage() {
     currentLogs.push(`[CLIENT ${new Date().toISOString()}] Iniciando preparación para descarga de código fuente.`);
     toast({
       title: "Preparando Descarga",
-      description: "Recopilando todos los archivos fuente de YskCodeAlchemist..."
+      description: "Recopilando todos los archivos fuente de CodeAlchemist..."
     });
 
     let filesToZip = projectFiles;
@@ -330,16 +330,16 @@ export default function AutoUpdatePage() {
         const url = URL.createObjectURL(zipBlob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'yskcodealchemist-source.zip'; // Nombre más corto
+        a.download = 'codealchemist-source.zip';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         toast({
           title: "Descarga Iniciada",
-          description: "El paquete de código fuente (yskcodealchemist-source.zip) se está descargando."
+          description: "El paquete de código fuente (codealchemist-source.zip) se está descargando."
         });
-        currentLogs.push(`[CLIENT ${new Date().toISOString()}] Descarga ZIP iniciada (yskcodealchemist-source.zip).`);
+        currentLogs.push(`[CLIENT ${new Date().toISOString()}] Descarga ZIP iniciada (codealchemist-source.zip).`);
       } catch (e) {
          const error = e instanceof Error ? e.message : "Error desconocido";
          toast({
@@ -379,10 +379,10 @@ export default function AutoUpdatePage() {
         <CardHeader>
           <CardTitle className="text-3xl font-bold text-primary flex items-center gap-2">
             <Sparkles className="h-8 w-8" />
-            AutoUpdate: Análisis de YskCodeAlchemist
+            AutoUpdate: Análisis de CodeAlchemist
           </CardTitle>
           <CardDescription className="text-lg">
-            Esta sección permite a la IA analizar el propio código fuente completo de la aplicación YskCodeAlchemist para proponer mejoras y optimizaciones.
+            Esta sección permite a la IA analizar el propio código fuente completo de la aplicación CodeAlchemist para proponer mejoras y optimizaciones.
              {!apiKey || !modelName ? (
                 <span className="text-destructive block mt-1"> (Clave API o Modelo no configurado en Ajustes)</span>
             ) : <span className="text-foreground block mt-1">(Usando modelo Groq: {modelName})</span>}
@@ -390,7 +390,7 @@ export default function AutoUpdatePage() {
         </CardHeader>
         <CardContent className="space-y-6">
           <p className="text-muted-foreground">
-            Al hacer clic en &quot;Iniciar Auto-Análisis&quot;, YskCodeAlchemist recopilará su código fuente, lo dividirá en fragmentos si es necesario, y lo enviará
+            Al hacer clic en &quot;Iniciar Auto-Análisis&quot;, CodeAlchemist recopilará su código fuente, lo dividirá en fragmentos si es necesario, y lo enviará
             al modelo de IA configurado para obtener un resumen de posibles mejoras. También puedes descargar el código fuente completo.
             Las llamadas a la API tienen un tiempo de espera para evitar bloqueos indefinidos.
           </p>
@@ -623,7 +623,7 @@ export default function AutoUpdatePage() {
             >
               <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
               <p className="text-lg text-foreground">
-                {status === "loading_source" ? "Cargando código fuente..." : "Preparando análisis del código fuente de YskCodeAlchemist..."}
+                {status === "loading_source" ? "Cargando código fuente..." : "Preparando análisis del código fuente de CodeAlchemist..."}
               </p>
               <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos, especialmente si el código es extenso.</p>
             </div>
@@ -669,7 +669,7 @@ export default function AutoUpdatePage() {
         </CardContent>
         <CardFooter>
           <p className="text-xs text-muted-foreground">
-            <strong>Nota Importante:</strong> El análisis se realiza sobre el código fuente completo de YskCodeAlchemist, potencialmente dividido en fragmentos para manejar límites de tokens y timeouts.
+            <strong>Nota Importante:</strong> El análisis se realiza sobre el código fuente completo de CodeAlchemist, potencialmente dividido en fragmentos para manejar límites de tokens y timeouts.
             La descarga de código fuente proporciona un archivo ZIP de todos los archivos detectados.
             Las sugerencias de IA y su aplicación siempre deben ser revisadas cuidadosamente por un desarrollador. La capacidad de "auto-reparación" se limita a aplicar estas sugerencias.
           </p>
@@ -712,4 +712,3 @@ export default function AutoUpdatePage() {
     </div>
   );
 }
-

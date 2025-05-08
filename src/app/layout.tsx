@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'YskCodeAlchemist',
+  title: 'CodeAlchemist',
   description: 'Análisis y Refactorización de Código Potenciado por IA por Firebase Studio',
 };
 

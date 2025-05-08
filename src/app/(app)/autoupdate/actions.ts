@@ -497,7 +497,7 @@ export async function handleGetErrorFixSuggestion(
 
   const input: SuggestErrorFixInput = {
     error_message: errorMessage,
-    context: "Error ocurrido durante la función AutoUpdate (análisis del propio código de YskCodeAlchemist). Por favor, proporciona un análisis de causa raíz y sugerencias de solución específicas. Si el error es por límites de API, explica cómo mitigar el problema (ej. reducir payloads, ajustar timeouts, fragmentar datos, etc.).",
+    context: "Error ocurrido durante la función AutoUpdate (análisis del propio código de CodeAlchemist). Por favor, proporciona un análisis de causa raíz y sugerencias de solución específicas. Si el error es por límites de API, explica cómo mitigar el problema (ej. reducir payloads, ajustar timeouts, fragmentar datos, etc.).",
     groqOptions: groqOptions,
   };
 
@@ -514,4 +514,3 @@ export async function handleGetErrorFixSuggestion(
     return { success: false, error: `Falló la obtención de sugerencia para corrección: ${specificErrorMessage}` };
   }
 }
-

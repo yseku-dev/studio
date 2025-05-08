@@ -1,6 +1,6 @@
-# YskCodeAlchemist
+# CodeAlchemist
 
-YskCodeAlchemist es una plataforma de desarrollo asistido por inteligencia artificial (IA) diseñada para optimizar y agilizar el ciclo de vida del desarrollo de software. Ofrece herramientas para el análisis de código, sugerencias de refactorización, gestión de versiones y análisis de proyectos completos, todo ello potenciado por modelos de IA de vanguardia a través de la API de Groq.
+CodeAlchemist es una plataforma de desarrollo asistido por inteligencia artificial (IA) diseñada para optimizar y agilizar el ciclo de vida del desarrollo de software. Ofrece herramientas para el análisis de código, sugerencias de refactorización, gestión de versiones y análisis de proyectos completos, todo ello potenciado por modelos de IA de vanguardia a través de la API de Groq.
 
 ## Características Principales
 
@@ -8,10 +8,10 @@ YskCodeAlchemist es una plataforma de desarrollo asistido por inteligencia artif
 *   **Refactorización Asistida**: Obtén propuestas de código refactorizado junto con explicaciones claras de los cambios.
 *   **Gestión de Versiones (Snapshots)**: Guarda diferentes versiones de tu código (original y sugerido) para una fácil revisión, comparación y seguimiento.
 *   **Análisis de Proyecto Completo**: Sube un proyecto en formato ZIP o proporciona una URL de Git para un análisis holístico (funcionalidad en desarrollo, actualmente simulada para la parte de Git).
-*   **AutoUpdate (Análisis del Propio Código)**: Permite que YskCodeAlchemist analice su propio código fuente, ofreciendo sugerencias para su mejora. Se puede guiar a la IA con preferencias de análisis y descargar el código fuente completo de la aplicación en un archivo ZIP. Las comunicaciones con la IA están optimizadas para manejar grandes cantidades de código mediante fragmentación y timeouts.
+*   **AutoUpdate (Análisis del Propio Código)**: Permite que CodeAlchemist analice su propio código fuente, ofreciendo sugerencias para su mejora. Se puede guiar a la IA con preferencias de análisis y descargar el código fuente completo de la aplicación en un archivo ZIP. Las comunicaciones con la IA están optimizadas para manejar grandes cantidades de código mediante fragmentación y timeouts.
 *   **Interfaz de Usuario Intuitiva**: Construida con Next.js y ShadCN UI para una experiencia de usuario moderna, responsiva y agradable. La barra lateral es colapsable para maximizar el espacio de trabajo.
 *   **Configuración Personalizada**: Configura tu clave API de Groq y selecciona el modelo de IA que mejor se adapte a tus necesidades, con prueba de conexión.
-*   **Manejo de Errores**: Los errores de la aplicación, especialmente durante las interacciones con la IA, se pueden copiar fácilmente desde la interfaz para facilitar la depuración. YskCodeAlchemist intenta gestionar los errores de la API de LLM, como los límites de tokens o timeouts.
+*   **Manejo de Errores**: Los errores de la aplicación, especialmente durante las interacciones con la IA, se pueden copiar fácilmente desde la interfaz para facilitar la depuración. CodeAlchemist intenta gestionar los errores de la API de LLM, como los límites de tokens o timeouts.
 
 ## Tecnologías Utilizadas
 
@@ -21,7 +21,7 @@ YskCodeAlchemist es una plataforma de desarrollo asistido por inteligencia artif
 
 ## Instalación
 
-Sigue estos pasos para configurar y ejecutar YskCodeAlchemist en tu entorno local:
+Sigue estos pasos para configurar y ejecutar CodeAlchemist en tu entorno local:
 
 ### Prerrequisitos
 
@@ -32,10 +32,10 @@ Sigue estos pasos para configurar y ejecutar YskCodeAlchemist en tu entorno loca
 
 1.  **Clonar el Repositorio**:
     ```bash
-    git clone https://github.com/tu-usuario/yskcodealchemist.git
-    cd yskcodealchemist
+    git clone https://github.com/tu-usuario/codealchemist.git
+    cd codealchemist
     ```
-    *(Reemplaza `https://github.com/tu-usuario/yskcodealchemist.git` con la URL real del repositorio si es diferente)*
+    *(Reemplaza `https://github.com/tu-usuario/codealchemist.git` con la URL real del repositorio si es diferente)*
 
 2.  **Instalar Dependencias**:
     Usando npm:
@@ -99,9 +99,9 @@ Una vez que la aplicación esté en funcionamiento, sigue esta guía para aprove
     *   Haz clic en **"Analizar Proyecto"**.
     *   *Nota: Actualmente, esta funcionalidad está en desarrollo. El análisis del ZIP proporcionará resultados basados en ejemplos, mientras que el análisis de Git es simulado.*
 
-5.  **AutoUpdate (Análisis del Propio Código de YskCodeAlchemist)**:
+5.  **AutoUpdate (Análisis del Propio Código de CodeAlchemist)**:
     *   Dirígete a la sección **AutoUpdate**.
-    *   Esta función permite a YskCodeAlchemist analizar su propio código fuente.
+    *   Esta función permite a CodeAlchemist analizar su propio código fuente.
     *   **Preferencias de Análisis (Opcional)**: Puedes introducir texto en el área designada para guiar a la IA sobre qué tipo de actualizaciones o áreas específicas te gustaría que analizara (por ejemplo, "mejorar rendimiento de componentes de UI", "revisar manejo de errores en servicios").
     *   Haz clic en **"Iniciar Auto-Análisis"**. La aplicación recopilará su código fuente (excluyendo `node_modules`, `.next`, etc.), lo dividirá en fragmentos manejables si es necesario (para respetar límites de tokens y timeouts de la API de Groq), y lo enviará a la IA. Se mostrará el progreso del procesamiento de fragmentos.
     *   Los resultados incluirán:
@@ -110,7 +110,7 @@ Una vez que la aplicación esté en funcionamiento, sigue esta guía para aprove
         *   **Sugerencias Detalladas**: Una lista de sugerencias específicas, cada una con un área, la descripción de la sugerencia, y a veces una prioridad y el contenido completo del archivo sugerido.
         *   **Evaluación General**.
     *   **Aplicar Sugerencias (Simulado)**: Para cada sugerencia que incluya un cambio de código completo, puedes hacer clic en **"Aplicar Sugerencia (Sim.)"**. Esto mostrará el contenido original y el contenido que la IA propone. Al confirmar, la acción de aplicar el cambio se registra en la consola del navegador y del servidor (la modificación real del archivo en el sistema está desactivada por seguridad en esta versión, pero la lógica simula cómo se aplicaría y actualiza el estado interno para futuras descargas). Esto representa la capacidad de "auto-reparación" guiada.
-    *   **Descargar Código Fuente Completo**: Haz clic en este botón para descargar un archivo ZIP que contiene todo el código fuente actual de la aplicación YskCodeAlchemist (incluyendo cambios simulados si se aplicaron).
+    *   **Descargar Código Fuente Completo**: Haz clic en este botón para descargar un archivo ZIP que contiene todo el código fuente actual de la aplicación CodeAlchemist (incluyendo cambios simulados si se aplicaron).
     *   **Manejo de Errores**: Si ocurre un error durante el análisis (ej. "Payload Too Large" de la API de Groq), se mostrará un mensaje. Podrás copiar el detalle del error para facilitar la depuración.
 
 6.  **Versiones Guardadas**:
@@ -134,7 +134,7 @@ Una vez que la aplicación esté en funcionamiento, sigue esta guía para aprove
 *   **Aplicación de Cambios en AutoUpdate (Simulación)**: La función "Aplicar Sugerencia" en la sección AutoUpdate está diseñada para mostrar cómo la IA modificaría los archivos. Por razones de seguridad, la escritura directa de archivos en el sistema de la aplicación está actualmente desactivada; en su lugar, los cambios se registran en la consola y actualizan el estado interno de los archivos para la descarga.
 *   **Costes de API**: El uso de la API de Groq puede incurrir en costes dependiendo de tu plan y el volumen de uso. Monitoriza tu consumo en el panel de control de GroqCloud.
 *   **Privacidad**: El código que envías para análisis a través de la API de Groq se procesa en sus servidores. Revisa la política de privacidad de Groq si tienes preocupaciones sobre la confidencialidad de tu código.
-*   **"Auto-Reparación"**: La capacidad de la aplicación para "arreglar sus propios errores" se refiere a la funcionalidad de AutoUpdate donde la IA analiza el código de YskCodeAlchemist y propone cambios. Estos cambios pueden ser "aplicados" de forma simulada por el usuario, actualizando el estado del código fuente que luego puede ser descargado. No es una auto-reparación autónoma en tiempo real.
+*   **"Auto-Reparación"**: La capacidad de la aplicación para "arreglar sus propios errores" se refiere a la funcionalidad de AutoUpdate donde la IA analiza el código de CodeAlchemist y propone cambios. Estos cambios pueden ser "aplicados" de forma simulada por el usuario, actualizando el estado del código fuente que luego puede ser descargado. No es una auto-reparación autónoma en tiempo real.
 
 ## Contribuciones
 
@@ -146,4 +146,4 @@ Las contribuciones son bienvenidas. Por favor, abre un issue para discutir cambi
 
 ---
 
-¡Gracias por usar YskCodeAlchemist! Esperamos que te ayude a mejorar tu código y tu flujo de trabajo de desarrollo.
+¡Gracias por usar CodeAlchemist! Esperamos que te ayude a mejorar tu código y tu flujo de trabajo de desarrollo.

@@ -32,7 +32,7 @@ const featureCards = [
     href: "/autoupdate",
     icon: Sparkles,
     title: "AutoUpdate",
-    description: "Permite que YskCodeAlchemist analice y sugiera mejoras para su propio código fuente."
+    description: "Permite que CodeAlchemist analice y sugiera mejoras para su propio código fuente."
   },
   {
     href: "/versions",
@@ -57,7 +57,7 @@ export default function DashboardPage() {
           <div className="flex items-center gap-3">
             <Rocket className="h-10 w-10 text-primary" />
             <div>
-              <CardTitle className="text-3xl font-bold text-primary">Bienvenido a YskCodeAlchemist</CardTitle>
+              <CardTitle className="text-3xl font-bold text-primary">Bienvenido a CodeAlchemist</CardTitle>
               <CardDescription className="text-lg text-muted-foreground mt-1">
                 Tu asistente potenciado por IA para generación de código, análisis de código, refactorización y gestión de versiones.
               </CardDescription>
@@ -66,9 +66,9 @@ export default function DashboardPage() {
         </CardHeader>
         <CardContent>
           <p className="text-base text-foreground/80">
-            Explora las funcionalidades de YskCodeAlchemist para optimizar tu flujo de trabajo de desarrollo.
+            Explora las funcionalidades de CodeAlchemist para optimizar tu flujo de trabajo de desarrollo.
             Desde la generación de código nuevo, análisis detallados de fragmentos hasta la auto-mejora de la propia aplicación,
-            YskCodeAlchemist está diseñado para potenciar tu código.
+            CodeAlchemist está diseñado para potenciar tu código.
           </p>
         </CardContent>
       </Card>
@@ -79,7 +79,7 @@ export default function DashboardPage() {
              <BarChart3 className="h-7 w-7 text-accent"/>
              Características Principales
           </CardTitle>
-           <CardDescription className="text-foreground">Accede rápidamente a las herramientas clave de YskCodeAlchemist.</CardDescription>
+           <CardDescription className="text-foreground">Accede rápidamente a las herramientas clave de CodeAlchemist.</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -111,13 +111,10 @@ export default function DashboardPage() {
           <p><strong>1. Configura tus Ajustes:</strong> Ve a la sección de <Link href="/settings" className="font-semibold text-primary hover:underline">Configuración</Link> para ingresar tu clave API de Groq y seleccionar el modelo de IA que prefieras. ¡No olvides probar la conexión!</p>
           <p><strong>2. Genera Código o Proyectos:</strong> Usa <Link href="/generate-code" className="font-semibold text-primary hover:underline">Generar Código</Link> para fragmentos o <Link href="/generate-project" className="font-semibold text-primary hover:underline">Generar Proyecto</Link> para estructuras completas.</p>
           <p><strong>3. Analiza tu Código:</strong> Dirígete a <Link href="/analyze" className="font-semibold text-primary hover:underline">Analizar Código</Link>. Pega tu código o sube un archivo para recibir análisis detallados y sugerencias de refactorización.</p>
-          <p><strong>4. Explora el AutoUpdate:</strong> En la sección de <Link href="/autoupdate" className="font-semibold text-primary hover:underline">AutoUpdate</Link>, permite que YskCodeAlchemist analice su propio código fuente. Puedes guiar el análisis con tus preferencias.</p>
+          <p><strong>4. Explora el AutoUpdate:</strong> En la sección de <Link href="/autoupdate" className="font-semibold text-primary hover:underline">AutoUpdate</Link>, permite que CodeAlchemist analice su propio código fuente. Puedes guiar el análisis con tus preferencias.</p>
           <p><strong>5. Gestiona tus Versiones:</strong> Utiliza <Link href="/versions" className="font-semibold text-primary hover:underline">Versiones Guardadas</Link> para almacenar, comparar y revertir diferentes estados de tu código a lo largo del tiempo.</p>
         </CardContent>
       </Card>
     </div>
   );
 }
-
-
-

@@ -33,11 +33,11 @@ export function AppTopbar() {
         <Button variant="ghost" size="icon" className="rounded-lg" asChild>
           <Link href="/dashboard">
             <PackageSearch className="h-7 w-7 text-primary" />
-            <span className="sr-only">YskCodeAlchemist Home</span>
+            <span className="sr-only">CodeAlchemist Home</span>
           </Link>
         </Button>
         <Link href="/dashboard" className="text-xl font-semibold text-primary hidden sm:block">
-          YskCodeAlchemist
+          CodeAlchemist
         </Link>
       </div>
 
@@ -53,7 +53,7 @@ export function AppTopbar() {
             <SheetHeader className="p-4 border-b flex flex-row items-center justify-start text-left space-y-0">
                 <PackageSearch className="h-7 w-7 text-primary" />
               <SheetTitle className="text-xl font-semibold text-primary ml-2">
-                YskCodeAlchemist
+                CodeAlchemist
               </SheetTitle>
             </SheetHeader>
             <ScrollArea className="h-[calc(100vh-4rem)]"> {/* Adjust height considering header */}
