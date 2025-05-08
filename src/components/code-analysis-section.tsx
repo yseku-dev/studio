@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useState, useEffect, ChangeEvent, useCallback } from 'react';
@@ -131,6 +130,7 @@ export function CodeAnalysisSection({
         setFileName(null);
       }
     }
+     // Reset file input value to allow re-uploading the same file
     event.target.value = '';
   };
 
@@ -145,11 +145,11 @@ export function CodeAnalysisSection({
 
 
   const onSubmit: SubmitHandler<FormData> = async (data) => {
-    const options = resolveLlmOptionsForSource(data.configSource, agents);
+    const options = resolvedLlmOptions; // Use the state which reflects the selected source
      if (!options) {
         toast({
             title: "Configuración LLM Incompleta",
-            description: `La configuración LLM seleccionada (${data.configSource === 'global' ? 'Global' : agents.find(a => a.id === data.configSource)?.name || 'Agente Desconocido'}) está incompleta o no se pudo resolver. Revisa los Ajustes o la configuración del Agente.`,
+            description: `La configuración LLM seleccionada (${getSourceName(selectedConfigSource)}) está incompleta o no se pudo resolver. Revisa los Ajustes o la configuración del Agente.`,
             variant: "destructive",
             duration: 7000,
         });
@@ -180,7 +180,7 @@ export function CodeAnalysisSection({
       setAnalysisError(result.error || 'Ocurrió un error desconocido durante el análisis.');
       toast({
         title: 'Análisis Fallido',
-        description: `No se pudieron generar sugerencias con ${options.providerId}. Revisa el mensaje de error.`,
+        description: result.error || `No se pudieron generar sugerencias con ${options.providerId}. Revisa el mensaje de error.`,
         variant: 'destructive',
       });
     }
@@ -344,7 +344,7 @@ export function CodeAnalysisSection({
         <Card className="shadow-lg">
           <CardHeader>
             <CardTitle className="text-2xl">Resultados del Análisis</CardTitle>
-             <CardDescription>Analizado usando la configuración de '{getSourceName(watchedConfigSource)}'.</CardDescription>
+             <CardDescription>Analizado usando la configuración de '{getSourceName(selectedConfigSource)}'.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
             <div>

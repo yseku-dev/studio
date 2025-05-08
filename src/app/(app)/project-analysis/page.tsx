@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
@@ -77,6 +76,11 @@ export default function ProjectAnalysisPage() {
     }
   };
 
+   const getSourceName = (sourceId: string): string => {
+    if (sourceId === 'global') return 'Global';
+    return agents.find(a => a.id === sourceId)?.name || 'Desconocido';
+  }
+
   const handleAnalyzeProject = async () => {
      // Validate LLM Configuration first
      if (!resolvedLlmOptions) {
@@ -129,10 +133,7 @@ export default function ProjectAnalysisPage() {
     });
   };
 
-   const getSourceName = (sourceId: string): string => {
-    if (sourceId === 'global') return 'Global';
-    return agents.find(a => a.id === sourceId)?.name || 'Desconocido';
-  }
+
 
   return (
     <div className="flex flex-col gap-6">

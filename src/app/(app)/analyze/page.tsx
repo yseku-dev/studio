@@ -1,4 +1,3 @@
-
 'use client';
 import { useState, useCallback } from 'react'; // Removed useEffect
 import { CodeAnalysisSection } from '@/components/code-analysis-section';
