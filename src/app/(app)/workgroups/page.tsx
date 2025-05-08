@@ -135,75 +135,83 @@ export default function WorkgroupsPage() {
     return availableAgents.find(a => a.id === agentId)?.name || 'Agente Desconocido';
   }
 
-  return (
-    <div className="space-y-6">
-      <Card className="shadow-lg">
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="text-2xl flex items-center gap-2">
-              <Workflow className="h-6 w-6 text-primary" />
-              Gestión de Grupos de Trabajo IA
-            </CardTitle>
-            <CardDescription>
-              Crea, configura y ejecuta grupos de trabajo con tus agentes de IA.
-            </CardDescription>
-          </div>
-          <DialogTrigger asChild>
-            <Button onClick={() => handleOpenForm()} disabled={availableAgents.length === 0}>
-              <PlusCircle className="mr-2 h-4 w-4" /> Crear Grupo
-            </Button>
-          </DialogTrigger>
-        </CardHeader>
-        <CardContent>
-          {availableAgents.length === 0 && (
-            <p className="text-destructive text-center py-4">
-              Primero debes crear agentes en la página de <a href="/agents" className="underline hover:text-destructive/80">Gestión de Agentes</a> para poder crear grupos de trabajo.
-            </p>
-          )}
-          {workgroups.length === 0 && availableAgents.length > 0 && (
-            <p className="text-muted-foreground text-center py-8">No hay grupos de trabajo creados. ¡Empieza creando uno!</p>
-          )}
-          {workgroups.length > 0 && (
-            <ScrollArea className="h-[calc(100vh-20rem)]">
-              <div className="grid gap-4 md:grid-cols-2">
-                {workgroups.map(wg => (
-                  <Card key={wg.id} className="flex flex-col">
-                    <CardHeader>
-                      <CardTitle className="text-lg">{wg.name}</CardTitle>
-                      <CardDescription className="text-xs line-clamp-2">{wg.description}</CardDescription>
-                    </CardHeader>
-                    <CardContent className="flex-grow space-y-3">
-                      <div>
-                        <h4 className="text-sm font-semibold mb-1 text-foreground">Tarea Principal:</h4>
-                        <p className="text-xs text-muted-foreground line-clamp-3">{wg.task}</p>
-                      </div>
-                      <div>
-                        <h4 className="text-sm font-semibold mb-1 text-foreground">Agentes ({wg.agentIds.length}):</h4>
-                        <div className="flex flex-wrap gap-1">
-                          {wg.agentIds.map(id => <Badge key={id} variant="secondary">{getAgentNameById(id)}</Badge>)}
-                        </div>
-                      </div>
-                    </CardContent>
-                    <CardFooter className="flex justify-end gap-2 border-t pt-4">
-                       <Button variant="default" size="sm" onClick={() => handleRunWorkgroup(wg)}>
-                        <Play className="mr-1 h-3 w-3" /> Ejecutar
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={() => handleOpenForm(wg)}>
-                        <Edit2 className="mr-1 h-3 w-3" /> Editar
-                      </Button>
-                      <Button variant="destructive" size="sm" onClick={() => handleDeleteWorkgroup(wg.id)}>
-                        <Trash2 className="mr-1 h-3 w-3" /> Eliminar
-                      </Button>
-                    </CardFooter>
-                  </Card>
-                ))}
-              </div>
-            </ScrollArea>
-          )}
-        </CardContent>
-      </Card>
+  const handleDialogVisibilityChange = (open: boolean) => {
+    setIsFormOpen(open);
+    if (!open) {
+      setEditingWorkgroup(null);
+      reset({ name: '', description: '', task: '', agentIds: [] });
+    }
+  };
 
-      <Dialog open={isFormOpen} onOpenChange={setIsFormOpen}>
+  return (
+    <Dialog open={isFormOpen} onOpenChange={handleDialogVisibilityChange}>
+      <div className="space-y-6">
+        <Card className="shadow-lg">
+          <CardHeader className="flex flex-row items-center justify-between">
+            <div>
+              <CardTitle className="text-2xl flex items-center gap-2">
+                <Workflow className="h-6 w-6 text-primary" />
+                Gestión de Grupos de Trabajo IA
+              </CardTitle>
+              <CardDescription>
+                Crea, configura y ejecuta grupos de trabajo con tus agentes de IA.
+              </CardDescription>
+            </div>
+            <DialogTrigger asChild>
+              <Button onClick={() => handleOpenForm()} disabled={availableAgents.length === 0}>
+                <PlusCircle className="mr-2 h-4 w-4" /> Crear Grupo
+              </Button>
+            </DialogTrigger>
+          </CardHeader>
+          <CardContent>
+            {availableAgents.length === 0 && (
+              <p className="text-destructive text-center py-4">
+                Primero debes crear agentes en la página de <a href="/agents" className="underline hover:text-destructive/80">Gestión de Agentes</a> para poder crear grupos de trabajo.
+              </p>
+            )}
+            {workgroups.length === 0 && availableAgents.length > 0 && (
+              <p className="text-muted-foreground text-center py-8">No hay grupos de trabajo creados. ¡Empieza creando uno!</p>
+            )}
+            {workgroups.length > 0 && (
+              <ScrollArea className="h-[calc(100vh-20rem)]">
+                <div className="grid gap-4 md:grid-cols-2">
+                  {workgroups.map(wg => (
+                    <Card key={wg.id} className="flex flex-col">
+                      <CardHeader>
+                        <CardTitle className="text-lg">{wg.name}</CardTitle>
+                        <CardDescription className="text-xs line-clamp-2">{wg.description}</CardDescription>
+                      </CardHeader>
+                      <CardContent className="flex-grow space-y-3">
+                        <div>
+                          <h4 className="text-sm font-semibold mb-1 text-foreground">Tarea Principal:</h4>
+                          <p className="text-xs text-muted-foreground line-clamp-3">{wg.task}</p>
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-semibold mb-1 text-foreground">Agentes ({wg.agentIds.length}):</h4>
+                          <div className="flex flex-wrap gap-1">
+                            {wg.agentIds.map(id => <Badge key={id} variant="secondary">{getAgentNameById(id)}</Badge>)}
+                          </div>
+                        </div>
+                      </CardContent>
+                      <CardFooter className="flex justify-end gap-2 border-t pt-4">
+                         <Button variant="default" size="sm" onClick={() => handleRunWorkgroup(wg)}>
+                          <Play className="mr-1 h-3 w-3" /> Ejecutar
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => handleOpenForm(wg)}>
+                          <Edit2 className="mr-1 h-3 w-3" /> Editar
+                        </Button>
+                        <Button variant="destructive" size="sm" onClick={() => handleDeleteWorkgroup(wg.id)}>
+                          <Trash2 className="mr-1 h-3 w-3" /> Eliminar
+                        </Button>
+                      </CardFooter>
+                    </Card>
+                  ))}
+                </div>
+              </ScrollArea>
+            )}
+          </CardContent>
+        </Card>
+
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editingWorkgroup ? 'Editar Grupo de Trabajo' : 'Crear Nuevo Grupo de Trabajo'}</DialogTitle>
@@ -275,8 +283,8 @@ export default function WorkgroupsPage() {
             </DialogFooter>
           </form>
         </DialogContent>
-      </Dialog>
-    </div>
+      </div>
+    </Dialog>
   );
 }
 
