@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent, SheetTrigger, SheetClose } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetTrigger, SheetClose, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Menu, PackageSearch, LayoutDashboard, ScanLine, GitCompareArrows, Settings, FolderSearch, Sparkles, CodeXml, FolderPlus } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -50,10 +50,12 @@ export function AppTopbar() {
             </Button>
           </SheetTrigger>
           <SheetContent side="left" className="w-72 p-0 bg-card">
-            <div className="flex items-center gap-2 p-4 border-b">
+            <SheetHeader className="p-4 border-b flex flex-row items-center justify-start text-left space-y-0">
+              <SheetTitle className="text-xl font-semibold text-primary flex items-center gap-2">
                 <PackageSearch className="h-7 w-7 text-primary" />
-                <h2 className="text-xl font-semibold text-primary">YskCodeAlchemist</h2>
-            </div>
+                YskCodeAlchemist
+              </SheetTitle>
+            </SheetHeader>
             <ScrollArea className="h-[calc(100vh-4rem)]"> {/* Adjust height considering header */}
               <nav className="flex flex-col gap-1 p-4">
                 {navItems.map((item) => (
@@ -103,3 +105,4 @@ export function AppTopbar() {
     </header>
   );
 }
+
