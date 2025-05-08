@@ -36,20 +36,27 @@ export async function handleGenerateCode(
     return { success: true, data: result };
   } catch (error) {
     const operationName = "la generación del código";
-    console.error(`Error en ${operationName}:`, error);
-    let detailMessage = "Ocurrió un error desconocido.";
-
+    console.error(`Error en ${operationName}:`, error); // Log the raw error
+    
+    let detailMessage: string;
     if (error instanceof Error) {
         detailMessage = error.message;
-        if (error.message.toLowerCase().includes("timeout") || error.message.toLowerCase().includes("excedió el tiempo límite")) {
+        if (detailMessage.toLowerCase().includes("timeout") || detailMessage.toLowerCase().includes("excedió el tiempo límite")) {
           detailMessage = `La generación de código excedió el tiempo límite de ${GROQ_API_TIMEOUT_MS_GENERATE_CODE / 1000} segundos. Intenta con un prompt más simple o revisa la conexión.`;
         }
-    } else if (typeof error === 'string') {
-        detailMessage = error;
-    } else if (error && typeof error === 'object' && 'message' in error && typeof (error as any).message === 'string') {
-        detailMessage = (error as any).message;
+    } else {
+        try {
+            detailMessage = String(error);
+        } catch (e) {
+            detailMessage = "Ocurrió un error desconocido.";
+        }
     }
-
+    if (!detailMessage && detailMessage !== '') {
+        detailMessage = "Ocurrió un error desconocido.";
+    } else if (detailMessage === '') {
+        detailMessage = "Error sin mensaje detallado.";
+    }
+    
     return { success: false, error: `Falló ${operationName}: ${detailMessage}` };
   }
 }

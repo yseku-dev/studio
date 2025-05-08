@@ -23,10 +23,28 @@ export async function handleTestGroqConnection(
 
   try {
     const result = await testGroqConnection(options);
-    return result;
+    // testGroqConnection already returns a serializable structure
+    return result; 
   } catch (error) {
-    console.error("Error en handleTestGroqConnection:", error);
-    const errorMessage = error instanceof Error ? error.message : "Ocurrió un error desconocido durante la prueba de conexión.";
-    return { success: false, message: `Falló la prueba de conexión: ${errorMessage}` };
+    // This catch block might be redundant if testGroqConnection itself handles all its errors and returns a TestConnectionResult.
+    // However, it's here as a safeguard for unexpected errors thrown by testGroqConnection that aren't caught internally.
+    console.error("Error en handleTestGroqConnection (capa de acción):", error); // Log the raw error
+
+    let errorMessage: string;
+    if (error instanceof Error) {
+        errorMessage = error.message;
+    } else {
+        try {
+            errorMessage = String(error);
+        } catch (e) {
+            errorMessage = "Ocurrió un error desconocido durante la prueba de conexión.";
+        }
+    }
+    if (!errorMessage && errorMessage !== '') {
+        errorMessage = "Ocurrió un error desconocido durante la prueba de conexión.";
+    } else if (errorMessage === '') {
+        errorMessage = "Error sin mensaje detallado.";
+    }
+    return { success: false, message: `Falló la prueba de conexión (capa de acción): ${errorMessage}` };
   }
 }

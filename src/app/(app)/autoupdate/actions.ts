@@ -1,4 +1,3 @@
-
 'use server';
 
 import { analyzeCodeAlchemistSource, AnalyzeCodeAlchemistSourceInput, AnalyzeCodeAlchemistSourceOutput } from '@/ai/flows/analyze-codealchemist-source-flow';
@@ -209,6 +208,17 @@ export async function handleAutoAnalyzeAppSource(
       let errorMessage = "Ocurrió un error desconocido durante el análisis de un fragmento.";
       if (error instanceof Error) {
         errorMessage = error.message; 
+      } else {
+        try {
+            errorMessage = String(error);
+        } catch (e) {
+            // Fallback handled below
+        }
+      }
+      if (!errorMessage && errorMessage !=='') {
+        errorMessage = "Ocurrió un error desconocido durante el análisis de un fragmento.";
+      } else if (errorMessage === '') {
+        errorMessage = "Error sin mensaje detallado durante análisis de fragmento."
       }
       logError(`Error analizando el fragmento ${currentChunkNum}/${totalChunks}.`, error);
       return { 
@@ -382,7 +392,21 @@ export async function getApplicationSourceBundle(
         logsBuilt: internalLogs 
     };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "Ocurrió un error desconocido empaquetando código.";
+    let errorMessage: string;
+    if (error instanceof Error) {
+      errorMessage = error.message;
+    } else {
+      try {
+        errorMessage = String(error);
+      } catch(e) {
+        errorMessage = "Ocurrió un error desconocido empaquetando código.";
+      }
+    }
+    if (!errorMessage && errorMessage !== '') {
+        errorMessage = "Ocurrió un error desconocido empaquetando código.";
+    } else if (errorMessage === '') {
+        errorMessage = "Error sin mensaje detallado empaquetando código.";
+    }
     log(`Error crítico empaquetando el código fuente de la aplicación: ${errorMessage}`, 'ERROR');
     if (error instanceof Error && error.stack) {
         log(`Stack del error crítico: ${error.stack}`, 'ERROR');
@@ -411,27 +435,25 @@ export async function applySuggestedChange(
 
     log(`Intentando aplicar cambio al archivo: ${filePath}`, 'INFO');
     
-    // No simulation - actual file system operations
     try {
         const projectRoot = process.cwd();
         const fullPath = path.join(projectRoot, filePath);
 
         log(`Ruta completa del archivo para escritura: ${fullPath}`, 'INFO');
         
-        // Security check: ensure the path is within the project directory
         if (!fullPath.startsWith(projectRoot)) {
             log(`Intento de escritura fuera del directorio del proyecto denegado: ${filePath}`, 'ERROR');
             return { success: false, error: `Acceso denegado: La ruta del archivo está fuera de los límites permitidos.` };
         }
         
-        // Ensure directory exists
         const dirName = path.dirname(fullPath);
         try {
             await fs.mkdir(dirName, { recursive: true });
             log(`Directorio ${dirName} asegurado/creado.`, 'INFO');
         } catch (mkdirError) {
-            log(`Error al crear directorio ${dirName}: ${(mkdirError as Error).message}`, 'ERROR');
-            return { success: false, error: `No se pudo crear el directorio base para ${filePath}: ${(mkdirError as Error).message}` };
+            const errorMsg = mkdirError instanceof Error ? mkdirError.message : String(mkdirError);
+            log(`Error al crear directorio ${dirName}: ${errorMsg}`, 'ERROR');
+            return { success: false, error: `No se pudo crear el directorio base para ${filePath}: ${errorMsg}` };
         }
         
         log(`Escribiendo ${suggestedContent.length} caracteres en ${filePath}.`, 'INFO');
@@ -440,11 +462,23 @@ export async function applySuggestedChange(
         return { success: true, newContent: suggestedContent };
 
     } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "Error desconocido al aplicar el cambio.";
-        log(`Error al aplicar el cambio al archivo ${filePath}: ${errorMessage}`, 'ERROR');
-        if (error instanceof Error && error.stack) {
-            log(`Stack del error de escritura: ${error.stack}`, 'ERROR');
+        let errorMessage: string;
+        if (error instanceof Error) {
+            errorMessage = error.message;
+            if (error.stack) log(`Stack del error de escritura: ${error.stack}`, 'ERROR');
+        } else {
+            try {
+                errorMessage = String(error);
+            } catch (e) {
+                errorMessage = "Error desconocido al aplicar el cambio.";
+            }
         }
+        if (!errorMessage && errorMessage !== '') {
+            errorMessage = "Error desconocido al aplicar el cambio.";
+        } else if (errorMessage === '') {
+            errorMessage = "Error sin mensaje detallado al aplicar el cambio.";
+        }
+        log(`Error al aplicar el cambio al archivo ${filePath}: ${errorMessage}`, 'ERROR');
         return { success: false, error: `Error al escribir en ${filePath}: ${errorMessage}` };
     }
 }
@@ -461,7 +495,7 @@ export async function handleGetErrorFixSuggestion(
   apiKey: string,
   modelName: string,
   executionLogs?: string[],
-  customContext?: string // Parámetro opcional para contexto personalizado
+  customContext?: string 
 ): Promise<AutoFixSuggestionResult> {
    const log = (message: string, level: 'INFO' | 'ERROR' = 'INFO') => {
         const timestampedMessage = `[AutoFix ${level} ${new Date().toISOString()}] ${message}`;
@@ -482,7 +516,6 @@ export async function handleGetErrorFixSuggestion(
     timeoutMs: GROQ_API_TIMEOUT_MS, 
   };
 
-  // Usar customContext si se proporciona, de lo contrario usar el contexto por defecto.
   const contextForIA = customContext || "Error ocurrido durante la función AutoUpdate (análisis del propio código de CodeAlchemist). Por favor, proporciona un análisis de causa raíz y sugerencias de solución específicas. Si el error es por límites de API, explica cómo mitigar el problema (ej. reducir payloads, ajustar timeouts, fragmentar datos, etc.).";
   log(`Contexto para la IA (AutoFix): "${contextForIA.substring(0,100)}..."`, 'INFO');
 
@@ -497,11 +530,23 @@ export async function handleGetErrorFixSuggestion(
     log("Sugerencia de auto-corrección recibida exitosamente.", 'INFO');
     return { success: true, data: result };
   } catch (error) {
-    const specificErrorMessage = error instanceof Error ? error.message : "Error desconocido obteniendo sugerencia.";
-    log(`Error obteniendo sugerencia para la corrección: ${specificErrorMessage}`, 'ERROR');
-    if (error instanceof Error && error.stack) {
-        log(`Stack del error en sugerencia: ${error.stack}`, 'ERROR');
+    let specificErrorMessage: string;
+    if (error instanceof Error) {
+        specificErrorMessage = error.message;
+        if (error.stack) log(`Stack del error en sugerencia: ${error.stack}`, 'ERROR');
+    } else {
+        try {
+            specificErrorMessage = String(error);
+        } catch (e) {
+            specificErrorMessage = "Error desconocido obteniendo sugerencia.";
+        }
     }
+    if (!specificErrorMessage && specificErrorMessage !== '') {
+        specificErrorMessage = "Error desconocido obteniendo sugerencia.";
+    } else if (specificErrorMessage === '') {
+        specificErrorMessage = "Error sin mensaje detallado obteniendo sugerencia."
+    }
+    log(`Error obteniendo sugerencia para la corrección: ${specificErrorMessage}`, 'ERROR');
     return { success: false, error: `Falló la obtención de sugerencia para corrección: ${specificErrorMessage}` };
   }
 }
@@ -521,13 +566,13 @@ interface GitUploadResult {
 
 export async function handleUploadToGit(
     gitConfig: GitUploadConfig,
-    commitMessage: string, // Accept commit message as parameter
+    commitMessage: string, 
     parentExecutionLogs?: string[]
 ): Promise<GitUploadResult> {
     const internalLogs: string[] = [];
     const log = (message: string, level: 'INFO' | 'DETAIL' | 'WARN' | 'ERROR' = 'INFO') => {
         const timestampedMessage = `[GitUpload ${level} ${new Date().toISOString()}] ${message}`;
-        console.log(timestampedMessage); // Log all git operations for debugging
+        console.log(timestampedMessage); 
         internalLogs.push(timestampedMessage);
         if (parentExecutionLogs) parentExecutionLogs.push(timestampedMessage);
     };
@@ -625,7 +670,7 @@ export async function handleUploadToGit(
         log(`Repositorio remoto 'origin' configurado para ${gitConfig.repoUrl.replace(gitConfig.pat, '********')}`, 'INFO');
         
         log(`Paso 9: Realizando push a la rama '${defaultBranch}'...`, 'INFO');
-        await git.push(['-u', 'origin', defaultBranch, '--force']); // Add --force to overwrite if necessary, use with caution.
+        await git.push(['-u', 'origin', defaultBranch, '--force']); 
         log(`Push a la rama '${defaultBranch}' completado.`, 'INFO');
 
         const successMsg = `Subida a Git completada exitosamente al repositorio ${gitConfig.repoUrl.replace(gitConfig.pat, '********')}.`;
@@ -633,11 +678,23 @@ export async function handleUploadToGit(
         return { success: true, message: successMsg, logs: internalLogs };
 
     } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : "Error desconocido durante la subida a Git.";
-        log(`Error crítico durante la subida a Git: ${errorMsg}`, 'ERROR');
-        if (error instanceof Error && (error as any).stack) { 
-            log(`Stack del error de Git: ${(error as any).stack}`, 'ERROR');
+        let errorMsg: string;
+        if (error instanceof Error) {
+            errorMsg = error.message;
+             if ((error as any).stack) log(`Stack del error de Git: ${(error as any).stack}`, 'ERROR');
+        } else {
+            try {
+                errorMsg = String(error);
+            } catch(e) {
+                errorMsg = "Error desconocido durante la subida a Git.";
+            }
         }
+        if (!errorMsg && errorMsg !== '') {
+            errorMsg = "Error desconocido durante la subida a Git.";
+        } else if (errorMsg === '') {
+            errorMsg = "Error sin mensaje detallado durante la subida a Git."
+        }
+        log(`Error crítico durante la subida a Git: ${errorMsg}`, 'ERROR');
         return { success: false, message: `Falló la subida a Git: ${errorMsg}`, logs: internalLogs };
     } finally {
         if (tempRepoPath) {
@@ -646,14 +703,9 @@ export async function handleUploadToGit(
                 await fs.rm(tempRepoPath, { recursive: true, force: true });
                 log("Directorio temporal eliminado.", 'INFO');
             } catch (cleanupError) {
-                log(`Error al limpiar el directorio temporal ${tempRepoPath}: ${(cleanupError as Error).message}`, 'ERROR');
+                const cleanupErrorMsg = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+                log(`Error al limpiar el directorio temporal ${tempRepoPath}: ${cleanupErrorMsg}`, 'ERROR');
             }
         }
     }
 }
-
-
-    
-
-
-
