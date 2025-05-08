@@ -363,7 +363,7 @@ export default function AgentsPage() {
                         <CardDescription className="text-xs text-muted-foreground h-8 line-clamp-2">{agent.description}</CardDescription>
                       </CardHeader>
                       <CardContent className="flex-grow space-y-3 pt-2 pb-4">
-                         <div className="text-xs text-foreground"> {/* Changed from p to div */}
+                         <div className="text-xs text-foreground">
                            <strong>Mensaje de Sistema:</strong>
                            <ScrollArea className="h-16 mt-1 p-1.5 border rounded bg-muted/50 text-xs">
                              <pre className="whitespace-pre-wrap">{agent.systemMessage}</pre>
@@ -400,103 +400,105 @@ export default function AgentsPage() {
               {editingAgent ? 'Modifica los detalles de tu agente.' : 'Define un nuevo agente para tus grupos de trabajo.'}
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
-            <ScrollArea className="max-h-[70vh] p-1 -mx-1 pr-4"> {/* Adjusted max-height */}
-              <div className="space-y-4 px-1">
-                <div>
-                  <Label htmlFor="name">Nombre del Agente</Label>
-                  <Input id="name" {...register('name')} placeholder="Ej: Planificador, Programador" />
-                  {errors.name && <p className="text-sm text-destructive mt-1">{errors.name.message}</p>}
-                </div>
-                <div>
-                  <Label htmlFor="description">Descripción Corta</Label>
-                  <Input id="description" {...register('description')} placeholder="Ej: Responsable de planificar tareas" />
-                  {errors.description && <p className="text-sm text-destructive mt-1">{errors.description.message}</p>}
-                </div>
-                <div>
-                  <Label htmlFor="systemMessage">Mensaje de Sistema (Prompt)</Label>
-                  <Textarea id="systemMessage" {...register('systemMessage')} rows={5} placeholder="Ej: Eres un asistente experto en..." />
-                  {errors.systemMessage && <p className="text-sm text-destructive mt-1">{errors.systemMessage.message}</p>}
-                </div>
-
-                <div className="space-y-2 rounded-md border p-4 bg-muted/30">
-                    <Label className="text-base font-medium text-foreground">Configuración LLM del Agente</Label>
-                     <Select value={watchedLlmConfigType} onValueChange={(value) => setValue('llmConfigType', value as 'default' | 'custom')}>
-                        <SelectTrigger>
-                            <SelectValue placeholder="Seleccionar tipo de configuración LLM" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="default">Usar Configuración Global de la Aplicación</SelectItem>
-                            <SelectItem value="custom">Configuración Personalizada para este Agente</SelectItem>
-                        </SelectContent>
-                    </Select>
-
-                    {watchedLlmConfigType === 'custom' && (
-                        <div className="space-y-3 pt-3 border-t border-border mt-3">
-                             <p className="text-xs text-muted-foreground">Define qué proveedor y modelo usará específicamente este agente.</p>
-                            <div>
-                                <Label htmlFor="customProviderId">Proveedor LLM (Personalizado)</Label>
-                                <Select value={watch('customProviderId')} onValueChange={(value) => setValue('customProviderId', value as LLMProviderId)}>
-                                    <SelectTrigger id="customProviderId">
-                                        <SelectValue placeholder="Seleccionar proveedor" />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        {LLM_PROVIDERS.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
-                                    </SelectContent>
-                                </Select>
-                                {errors.customProviderId && <p className="text-sm text-destructive mt-1">{errors.customProviderId.message}</p>}
-                            </div>
-                            {watch('customProviderId') && (
-                                <>
-                                    <div>
-                                        <Label htmlFor="customModelName">Modelo (Personalizado)</Label>
-                                        <Select value={watch('customModelName') || ''} onValueChange={(value) => setValue('customModelName', value)}>
-                                            <SelectTrigger id="customModelName">
-                                                <SelectValue placeholder="Seleccionar modelo" />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {availableCustomModels.length > 0 ? availableCustomModels.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)
-                                                : <div className="p-2 text-sm text-muted-foreground text-center">No hay modelos para este proveedor</div>
-                                                }
-                                            </SelectContent>
-                                        </Select>
-                                        {errors.customModelName && <p className="text-sm text-destructive mt-1">{errors.customModelName.message}</p>}
-                                    </div>
-
-                                    {(LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.requiresApiKey) &&
-                                        <div>
-                                            <Label htmlFor="customApiKey">Clave API (Personalizada, opcional)</Label>
-                                            <Input id="customApiKey" type="password" {...register('customApiKey')} placeholder="Sobrescribir clave API global (si aplica)" />
-                                            <p className="text-xs text-muted-foreground mt-1">Deja vacío para usar la clave API global (si está configurada).</p>
-                                        </div>
-                                    }
-                                    {(LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.id === 'lmstudio' || LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.id === 'ollama') &&
-                                      <div>
-                                          <Label htmlFor="customApiUrl">URL de API (Personalizada, opcional)</Label>
-                                          <Input id="customApiUrl" type="url" {...register('customApiUrl')} placeholder="Ej: http://localhost:1234/v1" />
-                                          {errors.customApiUrl && <p className="text-sm text-destructive mt-1">{errors.customApiUrl.message}</p>}
-                                          <p className="text-xs text-muted-foreground mt-1">Deja vacío para usar la URL global (si está configurada).</p>
-                                      </div>
-                                    }
-                                </>
-                            )}
-                        </div>
-                    )}
-                </div>
+          {/* Added ScrollArea around the form */}
+          <ScrollArea className="max-h-[70vh] p-1 -mx-1 pr-4">
+            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4 px-1">
+              <div>
+                <Label htmlFor="name">Nombre del Agente</Label>
+                <Input id="name" {...register('name')} placeholder="Ej: Planificador, Programador" />
+                {errors.name && <p className="text-sm text-destructive mt-1">{errors.name.message}</p>}
               </div>
-            </ScrollArea>
-            <DialogFooter>
+              <div>
+                <Label htmlFor="description">Descripción Corta</Label>
+                <Input id="description" {...register('description')} placeholder="Ej: Responsable de planificar tareas" />
+                {errors.description && <p className="text-sm text-destructive mt-1">{errors.description.message}</p>}
+              </div>
+              <div>
+                <Label htmlFor="systemMessage">Mensaje de Sistema (Prompt)</Label>
+                <Textarea id="systemMessage" {...register('systemMessage')} rows={5} placeholder="Ej: Eres un asistente experto en..." />
+                {errors.systemMessage && <p className="text-sm text-destructive mt-1">{errors.systemMessage.message}</p>}
+              </div>
+
+              <div className="space-y-2 rounded-md border p-4 bg-muted/30">
+                  <Label className="text-base font-medium text-foreground">Configuración LLM del Agente</Label>
+                   <Select value={watchedLlmConfigType} onValueChange={(value) => setValue('llmConfigType', value as 'default' | 'custom')}>
+                      <SelectTrigger>
+                          <SelectValue placeholder="Seleccionar tipo de configuración LLM" />
+                      </SelectTrigger>
+                      <SelectContent>
+                          <SelectItem value="default">Usar Configuración Global de la Aplicación</SelectItem>
+                          <SelectItem value="custom">Configuración Personalizada para este Agente</SelectItem>
+                      </SelectContent>
+                  </Select>
+
+                  {watchedLlmConfigType === 'custom' && (
+                      <div className="space-y-3 pt-3 border-t border-border mt-3">
+                           <p className="text-xs text-muted-foreground">Define qué proveedor y modelo usará específicamente este agente.</p>
+                          <div>
+                              <Label htmlFor="customProviderId">Proveedor LLM (Personalizado)</Label>
+                              <Select value={watch('customProviderId')} onValueChange={(value) => setValue('customProviderId', value as LLMProviderId)}>
+                                  <SelectTrigger id="customProviderId">
+                                      <SelectValue placeholder="Seleccionar proveedor" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                      {LLM_PROVIDERS.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                                  </SelectContent>
+                              </Select>
+                              {errors.customProviderId && <p className="text-sm text-destructive mt-1">{errors.customProviderId.message}</p>}
+                          </div>
+                          {watch('customProviderId') && (
+                              <>
+                                  <div>
+                                      <Label htmlFor="customModelName">Modelo (Personalizado)</Label>
+                                      <Select value={watch('customModelName') || ''} onValueChange={(value) => setValue('customModelName', value)}>
+                                          <SelectTrigger id="customModelName">
+                                              <SelectValue placeholder="Seleccionar modelo" />
+                                          </SelectTrigger>
+                                          <SelectContent>
+                                              {availableCustomModels.length > 0 ? availableCustomModels.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)
+                                              : <div className="p-2 text-sm text-muted-foreground text-center">No hay modelos para este proveedor</div>
+                                              }
+                                          </SelectContent>
+                                      </Select>
+                                      {errors.customModelName && <p className="text-sm text-destructive mt-1">{errors.customModelName.message}</p>}
+                                  </div>
+
+                                  {(LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.requiresApiKey) &&
+                                      <div>
+                                          <Label htmlFor="customApiKey">Clave API (Personalizada, opcional)</Label>
+                                          <Input id="customApiKey" type="password" {...register('customApiKey')} placeholder="Sobrescribir clave API global (si aplica)" />
+                                          <p className="text-xs text-muted-foreground mt-1">Deja vacío para usar la clave API global (si está configurada).</p>
+                                      </div>
+                                  }
+                                  {(LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.id === 'lmstudio' || LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.id === 'ollama') &&
+                                    <div>
+                                        <Label htmlFor="customApiUrl">URL de API (Personalizada, opcional)</Label>
+                                        <Input id="customApiUrl" type="url" {...register('customApiUrl')} placeholder="Ej: http://localhost:1234/v1" />
+                                        {errors.customApiUrl && <p className="text-sm text-destructive mt-1">{errors.customApiUrl.message}</p>}
+                                        <p className="text-xs text-muted-foreground mt-1">Deja vacío para usar la URL global (si está configurada).</p>
+                                    </div>
+                                  }
+                              </>
+                          )}
+                      </div>
+                  )}
+              </div>
+              {/* Moved submit button outside scroll area to DialogFooter */}
+            </form>
+          </ScrollArea>
+          <DialogFooter>
               <DialogClose asChild>
                 <Button type="button" variant="outline">Cancelar</Button>
               </DialogClose>
-              <Button type="submit">
+              {/* Submit button is now handled by form outside ScrollArea but inside Dialog */}
+              <Button type="submit" form="agent-form-id"> {/* Added form attribute */}
                 <Wand2 className="mr-2 h-4 w-4" />
                 {editingAgent ? 'Guardar Cambios' : 'Crear Agente'}
               </Button>
-            </DialogFooter>
-          </form>
+          </DialogFooter>
         </DialogContent>
       </div>
     </Dialog>
   );
 }
+    
