@@ -1,10 +1,11 @@
+// src/components/layout/app-sidebar.tsx
 'use client';
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { Sheet, SheetTrigger, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { 
   Menu, 
@@ -21,7 +22,8 @@ import {
   ChevronsRight,
   MessageCircle,
   Users2, 
-  Workflow
+  Workflow,
+  GitPullRequestDraft // Icon for Refactor Project
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -36,6 +38,7 @@ const navItems = [
   { href: '/dashboard', label: 'Panel de Control', icon: LayoutDashboard },
   { href: '/generate-code', label: 'Generar Código', icon: CodeXml },
   { href: '/generate-project', label: 'Generar Proyecto', icon: FolderPlus },
+  { href: '/refactor-project', label: 'Refactorizar Proyecto', icon: GitPullRequestDraft },
   { href: '/analyze', label: 'Analizar Código', icon: ScanLine },
   { href: '/project-analysis', label: 'Analizar Proyecto', icon: FolderSearch },
   { href: '/autoupdate', label: 'AutoUpdate', icon: Sparkles },
@@ -71,7 +74,6 @@ export function AppSidebar() {
     }
   };
 
-  // Common visual elements for both mobile and desktop sidebar
   const SidebarVisualElements = (
     <>
       <div className={cn(
@@ -88,7 +90,7 @@ export function AppSidebar() {
             <span className="text-xl font-semibold text-primary">CodeAlchemist</span>
           ) : null}
         </Link>
-        {!isMobile && !isCollapsed && ( // Only show this specific collapse button if sidebar is expanded on desktop
+        {!isMobile && !isCollapsed && ( 
           <Button
             variant="ghost"
             size="icon"
@@ -185,15 +187,15 @@ export function AppSidebar() {
           </SheetTrigger>
         </div>
         <SheetContent side="left" className="w-72 p-0 bg-card border-r-0 flex flex-col">
-          {/* Accessible title for the sheet (dialog) */}
-          <SheetTitle className="sr-only">Barra lateral principal</SheetTitle>
+          <SheetHeader className="sr-only">
+            <SheetTitle>Barra lateral principal</SheetTitle>
+          </SheetHeader>
           {SidebarVisualElements}
         </SheetContent>
       </Sheet>
     );
   }
 
-  // Desktop sidebar
   return (
     <div className={cn(
       "flex flex-col h-full bg-card border-r transition-all duration-300 ease-in-out",

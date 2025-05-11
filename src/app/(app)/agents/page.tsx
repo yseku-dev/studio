@@ -28,12 +28,12 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { PlusCircle, Users2, Edit2, Trash2, Wand2, UploadCloud, DownloadCloud, MessageSquare, Code, Terminal, FolderGit2, FileCode } from 'lucide-react';
 import type { AgentConfig, AgentLLMConfig, AgentSpecificLLMConfig, WorkgroupConfig } from '@/types/agent';
-import { LLM_PROVIDERS, MODELS_BY_PROVIDER, DEFAULT_LLM_PROVIDER, type LLMProviderId, getLocalStorageApiKeyName as getGlobalApiKeyName, getLocalStorageModelName as getGlobalModelName, LOCALSTORAGE_PROVIDER_ID_KEY as GLOBAL_PROVIDER_ID_KEY } from '@/config/llm-config';
+import { LLM_PROVIDERS, MODELS_BY_PROVIDER, DEFAULT_LLM_PROVIDER, type LLMProviderId, getLocalStorageApiKeyName, getLocalStorageModelName, LOCALSTORAGE_PROVIDER_ID_KEY as GLOBAL_PROVIDER_ID_KEY } from '@/config/llm-config';
 import { AgentTestChatModal } from '@/components/agent-test-chat-modal'; // Import the new component
 import type { LLMOptions } from '@/services/groq'; // Import LLMOptions type
 import { Separator } from '@/components/ui/separator'; // Import Separator
 import { Badge } from '@/components/ui/badge'; // Import Badge
-import { LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGENT_NAME } from '@/config/agent-config';
+import { LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGENT_NAME, REFACTOR_AGENT_NAME } from '@/config/agent-config';
 
 
 const agentSchema = z.object({
@@ -77,6 +77,14 @@ const defaultAgents: Omit<AgentConfig, 'id'>[] = [
     systemMessage: "Eres el Orquestador del Grupo de Trabajo. Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti. Tu objetivo es asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realizas la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso.",
     llmConfig: 'default'
   },
+  {
+    name: REFACTOR_AGENT_NAME,
+    description: "Analiza código y propone refactorizaciones para mejorar calidad, rendimiento o legibilidad.",
+    systemMessage: `Eres un agente experto en refactorización de código. Analiza el proyecto o fragmento de código proporcionado. Considera las metas y prioridades de refactorización especificadas. Genera una lista de sugerencias de refactorización. Para cada sugerencia, indica el archivo/área, una descripción clara de la mejora, una prioridad (Alta, Media, o Baja) y, si es aplicable, un fragmento del código modificado. Tu respuesta DEBE ser un objeto JSON con la clave "refactoringSuggestions", que es un array de objetos, cada uno con "area", "description", "priority", y opcionalmente "suggestedSnippet".`,
+    llmConfig: 'default',
+    selfCodeAccess: true, // Puede necesitar acceso para leer el código del proyecto
+    readWriteCapability: false, // Por defecto no escribe, solo sugiere.
+  }
 ];
 
 
@@ -91,7 +99,7 @@ export default function AgentsPage() {
   const { toast } = useToast();
   const importFileRef = useRef<HTMLInputElement>(null);
 
-  const { control, register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<AgentFormData>({ // Add control
+  const { control, register, handleSubmit, reset, setValue, watch, formState: { errors, dirtyFields } } = useForm<AgentFormData>({ // Add control & dirtyFields
     resolver: zodResolver(agentSchema),
     defaultValues: {
       llmConfigType: 'default',
@@ -284,63 +292,34 @@ export default function AgentsPage() {
     let options: LLMOptions | null = null;
     let providerConfig = null;
 
-    if (agent.llmConfig === 'default') {
-      const globalProviderId = localStorage.getItem(GLOBAL_PROVIDER_ID_KEY) as LLMProviderId | null || DEFAULT_LLM_PROVIDER;
-      providerConfig = LLM_PROVIDERS.find(p => p.id === globalProviderId);
-      const globalModelName = localStorage.getItem(getGlobalModelName(globalProviderId));
-      const globalApiKey = localStorage.getItem(getGlobalApiKeyName(globalProviderId));
-      const globalApiUrl = localStorage.getItem(`codealchemist_apiurl_${globalProviderId}`);
+    const localStorageSnapshot: LocalStorageSnapshot = {
+      [GLOBAL_PROVIDER_ID_KEY]: localStorage.getItem(GLOBAL_PROVIDER_ID_KEY) as LLMProviderId | null,
+      apiKeys: {},
+      modelNames: {},
+      apiUrls: {},
+    };
+    LLM_PROVIDERS.forEach(provider => {
+        localStorageSnapshot.apiKeys[provider.id] = localStorage.getItem(getLocalStorageApiKeyName(provider.id));
+        localStorageSnapshot.modelNames[provider.id] = localStorage.getItem(getLocalStorageModelName(provider.id));
+        localStorageSnapshot.apiUrls[provider.id] = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
+    });
+    
+    options = resolveLlmOptionsForSource(`agent:${agent.id}`, agents, [], localStorageSnapshot);
 
-      if (!providerConfig) {
-         toast({ title: "Error de Configuración Global", description: `Proveedor LLM global '${globalProviderId}' no encontrado.`, variant: "destructive" });
-         return;
-      }
-      if (!globalModelName) {
-        toast({ title: "Error de Configuración Global", description: "Modelo LLM global no configurado en Ajustes.", variant: "destructive" });
-        return;
-      }
-      if (providerConfig.requiresApiKey && !globalApiKey) {
-        toast({ title: "Error de Configuración Global", description: `Clave API global para ${providerConfig.name} no configurada en Ajustes.`, variant: "destructive" });
-        return;
-      }
-      options = {
-        providerId: globalProviderId,
-        modelName: globalModelName,
-        apiKey: globalApiKey || "", // Pass empty string if null
-        apiUrl: globalApiUrl || providerConfig.apiUrl,
-      };
-    } else {
-      providerConfig = LLM_PROVIDERS.find(p => p.id === agent.llmConfig.providerId);
-      if (!providerConfig) {
-         toast({ title: "Error de Configuración de Agente", description: `Proveedor LLM '${agent.llmConfig.providerId}' no encontrado.`, variant: "destructive" });
-         return;
-      }
-      const apiKeyToUse = agent.llmConfig.apiKey || localStorage.getItem(getGlobalApiKeyName(agent.llmConfig.providerId)); // Use agent's key or fallback to global for that provider
-      if (providerConfig.requiresApiKey && !apiKeyToUse) {
-         toast({ title: "Error de Configuración de Agente", description: `Se requiere clave API para ${providerConfig.name}, pero no está configurada ni en el agente ni globalmente.`, variant: "destructive" });
-         return;
-      }
-      const apiUrlToUse = agent.llmConfig.apiUrl || localStorage.getItem(`codealchemist_apiurl_${agent.llmConfig.providerId}`) || providerConfig.apiUrl; // Use agent's URL, fallback to global for provider, fallback to provider default
-
-       options = {
-        providerId: agent.llmConfig.providerId,
-        modelName: agent.llmConfig.modelName,
-        apiKey: apiKeyToUse || "",
-        apiUrl: apiUrlToUse,
-      };
-    }
 
     if (options) {
         setResolvedLlmOptions(options);
         setTestingAgent(agent);
         setIsTestModalOpen(true);
+    } else {
+         toast({ title: "Error de Configuración de Agente", description: `No se pudo resolver la configuración LLM para el agente '${agent.name}'. Revisa la configuración del agente y la configuración global.`, variant: "destructive" });
     }
   };
 
   const getLLMConfigDisplay = (llmConfig: AgentLLMConfig): string => {
     if (llmConfig === 'default') {
       const globalProviderId = localStorage.getItem(GLOBAL_PROVIDER_ID_KEY) as LLMProviderId | null || DEFAULT_LLM_PROVIDER;
-      const globalModelName = localStorage.getItem(getGlobalModelName(globalProviderId)) || 'No configurado';
+      const globalModelName = localStorage.getItem(getLocalStorageModelName(globalProviderId)) || 'No configurado';
       const providerName = LLM_PROVIDERS.find(p => p.id === globalProviderId)?.name || globalProviderId;
       return `Global (${providerName} - ${globalModelName})`;
     }
@@ -736,7 +715,7 @@ export default function AgentsPage() {
                                               <p className="text-xs text-muted-foreground mt-1">Deja vacío para usar la clave API global (si está configurada).</p>
                                           </div>
                                       }
-                                      {(LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.id === 'lmstudio' || LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.id === 'ollama') &&
+                                      {(LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.id === 'lmstudio' || LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.id === 'ollama' || LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.isGroqCompatible || LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.isAnthropicCompatible || LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.isGoogleGenerativeAICompatible) &&
                                         <div>
                                             <Label htmlFor="customApiUrl">URL de API (Personalizada, opcional)</Label>
                                             <Input id="customApiUrl" type="url" {...register('customApiUrl')} placeholder={LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.apiUrl || 'Ej: http://localhost:1234/v1'} />
