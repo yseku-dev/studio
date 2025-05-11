@@ -1,7 +1,8 @@
+
 'use server';
 
 import { analyzeProjectSourceChunk, type ProjectAnalysisResponse, type LLMOptions } from '@/services/groq';
-import { suggestErrorFix, SuggestErrorFixInput, SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow'; // Assuming this remains specific for now
+import { suggestErrorFix, SuggestErrorFixInput, SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
 import fs from 'fs/promises';
 import path from 'path';
 import { glob } from 'glob';
@@ -12,7 +13,7 @@ import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
 
 interface AutoUpdateAnalysisResult {
   success: boolean;
-  data?: ProjectAnalysisResponse; // Use generic response type
+  data?: ProjectAnalysisResponse;
   error?: string;
   chunksProcessed?: number;
   totalChunks?: number;
@@ -23,11 +24,13 @@ const MAX_CHARS_PER_CHUNK = 3500;
 const LLM_API_TIMEOUT_MS_AUTOUPDATE = 60000 * 1; // 1 minute per chunk analysis
 const INTER_CHUNK_PROCESSING_DELAY_MS = 5000; // 5 seconds between chunks
 
+// Modified to accept AppSourceFile[] directly
 export async function handleAutoAnalyzeAppSource(
-  providerId: LLMProviderId, // Expect providerId
+  sourceFiles: AppSourceFile[], // Added parameter
+  providerId: LLMProviderId,
   apiKey: string,
   modelName: string,
-  apiUrl?: string, // Optional API URL for local LLMs
+  apiUrl?: string,
   analysisPreferences?: string
 ): Promise<AutoUpdateAnalysisResult> {
   const executionLogs: string[] = [];
@@ -39,7 +42,7 @@ export async function handleAutoAnalyzeAppSource(
   };
   const logDetail = (message: string) => {
     const timestampedMessage = `[DETAIL ${new Date().toISOString()}] ${message}`;
-    // console.log(timestampedMessage); // Optionally log details to console too
+    // console.log(timestampedMessage); 
     executionLogs.push(timestampedMessage);
   };
   const logWarn = (message: string) => {
@@ -71,7 +74,7 @@ export async function handleAutoAnalyzeAppSource(
   };
 
   const currentProvider = LLM_PROVIDERS.find(p => p.id === providerId);
-  log(`Iniciando auto-análisis de la aplicación con proveedor: ${currentProvider?.name || providerId}.`);
+  log(`Iniciando análisis del código fuente de la aplicación con proveedor: ${currentProvider?.name || providerId}.`);
 
   if (!currentProvider) {
     const errorMsg = `Proveedor LLM '${providerId}' no encontrado.`;
@@ -90,12 +93,10 @@ export async function handleAutoAnalyzeAppSource(
   }
   log(`Usando modelo: ${modelName}. Preferencias de análisis: ${analysisPreferences || 'Ninguna'}.`);
 
-  log("Obteniendo paquete de código fuente de la aplicación...");
-  const sourceBundleResult = await getApplicationSourceBundle(false, executionLogs);
-
-  if (!sourceBundleResult.success || !sourceBundleResult.files || sourceBundleResult.files.length === 0) {
-    const errorMsg = sourceBundleResult.error || "No se pudo obtener el código fuente para analizar.";
-    logError(`Fallo al obtener el código fuente: ${errorMsg}`);
+  // Files are now passed as a parameter
+  if (!sourceFiles || sourceFiles.length === 0) {
+    const errorMsg = "No se proporcionó código fuente (lista de archivos vacía) para analizar.";
+    logError(errorMsg);
     return {
       success: false,
       error: errorMsg,
@@ -104,15 +105,15 @@ export async function handleAutoAnalyzeAppSource(
       detailedExecutionLogs: executionLogs
     };
   }
-  log(`Paquete de código fuente obtenido con ${sourceBundleResult.files.length} archivos.`);
+  log(`Se recibieron ${sourceFiles.length} archivos para procesar.`);
 
-  const files = sourceBundleResult.files;
+  const files = sourceFiles; // Use the passed parameter
   const chunks: string[] = [];
   let currentChunk = "";
   let currentChunkChars = 0;
   let totalSourceChars = files.reduce((sum, f) => sum + f.content.length, 0);
 
-  log(`Iniciando división del código fuente en fragmentos. Total de caracteres en fuente: ${totalSourceChars}. MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}.`);
+  log(`Iniciando división del código fuente en fragmentos. Total de caracteres en ${files.length} archivos: ${totalSourceChars}. MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}.`);
 
   for (const file of files) {
     logDetail(`Procesando archivo para fragmentación: ${file.fileName} (${file.content.length} caracteres).`);
@@ -126,7 +127,7 @@ export async function handleAutoAnalyzeAppSource(
       logDetail(`Archivo ${baseFileName} es demasiado grande (${fileEffectiveContent.length} caracteres) para un solo fragmento, se dividirá.`);
       if (currentChunk.length > 0) {
         chunks.push(currentChunk);
-        logDetail(`Fragmento parcial anterior (${currentChunk.length} caracteres) añadido antes de dividir archivo grande.`);
+        logDetail(`Fragmento parcial anterior (${currentChunk.length} caracteres) añadido antes de dividir archivo grande: '${currentChunk.substring(0,100)}...'`);
         currentChunk = "";
         currentChunkChars = 0;
       }
@@ -140,22 +141,23 @@ export async function handleAutoAnalyzeAppSource(
 
         if (charsToTake <= 0) {
             logError(`El marcador para ${baseFileName}${partInfo} es demasiado largo (${partMarker.length}) para el tamaño del fragmento (MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}). Omitiendo esta parte del archivo.`);
-            break;
+            break; // Break from while loop for this file's parts
         }
         const part = fileEffectiveContent.substring(offset, offset + charsToTake);
         chunks.push(partMarker + part);
-        logDetail(`Archivo ${baseFileName}${partInfo} creado como fragmento, tamaño de contenido ${part.length} caracteres.`);
+        logDetail(`Archivo ${baseFileName}${partInfo} creado como fragmento. Tamaño de contenido: ${part.length} caracteres. Contenido (inicio): '${part.substring(0,100)}...'`);
         offset += part.length;
         partIndex++;
       }
-      continue;
+      continue; // Continue to next file
     }
 
+    // File fits (potentially with others) in a chunk
     const fileContentMarker = fileMarkerTemplate.replace("{part_info}", "");
     if (currentChunkChars + fileEffectiveContent.length + fileContentMarker.length > MAX_CHARS_PER_CHUNK) {
       if (currentChunk.length > 0) {
         chunks.push(currentChunk);
-        logDetail(`Fragmento actual (${currentChunk.length} caracteres) añadido. Iniciando nuevo fragmento con ${baseFileName}.`);
+        logDetail(`Fragmento actual (${currentChunk.length} caracteres) añadido. Contenido (inicio): '${currentChunk.substring(0,100)}...'. Iniciando nuevo fragmento con ${baseFileName}.`);
       }
       currentChunk = fileContentMarker + fileEffectiveContent;
       currentChunkChars = fileEffectiveContent.length + fileContentMarker.length;
@@ -163,18 +165,18 @@ export async function handleAutoAnalyzeAppSource(
       currentChunk += fileContentMarker + fileEffectiveContent;
       currentChunkChars += fileEffectiveContent.length + fileContentMarker.length;
     }
-    logDetail(`Archivo ${baseFileName} (${fileEffectiveContent.length} caracteres) añadido al fragmento actual. Tamaño actual del fragmento: ${currentChunkChars}.`);
+    logDetail(`Archivo ${baseFileName} (${fileEffectiveContent.length} caracteres) añadido al fragmento actual. Tamaño actual del fragmento: ${currentChunkChars}. Fragmento (inicio): '${currentChunk.substring(0,100)}...'`);
   }
 
   if (currentChunk.length > 0) {
     chunks.push(currentChunk);
-    logDetail(`Fragmento restante (${currentChunk.length} caracteres) añadido.`);
+    logDetail(`Fragmento restante (${currentChunk.length} caracteres) añadido. Contenido (inicio): '${currentChunk.substring(0,100)}...'`);
   }
 
   const totalChunks = chunks.length;
   log(`División del código fuente completada. Total de fragmentos generados: ${totalChunks}.`);
   if (chunks.length > 0) {
-    chunks.forEach((c, i) => logDetail(`Fragmento ${i+1}/${totalChunks} - Tamaño: ${c.length} caracteres.`));
+    chunks.forEach((c, i) => logDetail(`Fragmento ${i+1}/${totalChunks} - Tamaño: ${c.length} caracteres. Contenido (inicio): '${c.substring(0,100)}...'`));
   }
 
 
@@ -205,6 +207,7 @@ export async function handleAutoAnalyzeAppSource(
     log(`Iniciando análisis del fragmento ${currentChunkNum} de ${totalChunks}... (Tamaño: ${chunk.length} caracteres). Timeout: ${LLM_API_TIMEOUT_MS_AUTOUPDATE / 1000}s.`);
 
     try {
+      // This is the primary LLM call per chunk
       const result = await analyzeProjectSourceChunk(chunk, llmAPIOptions, analysisPreferences);
       allResults.push(result);
       processedChunks++;
@@ -259,7 +262,7 @@ export async function handleAutoAnalyzeAppSource(
 
   // Basic aggregation: concatenate assessments, collect unique areas, combine suggestions
   const aggregatedResult: ProjectAnalysisResponse = {
-    analysisTitle: allResults.length > 0 && allResults[0].analysisTitle ? `${allResults[0].analysisTitle} (Agregado)` : `Análisis Agregado de ${totalChunks} Fragmentos`,
+    analysisTitle: allResults.length > 0 && allResults[0].analysisTitle ? `${allResults[0].analysisTitle} (Agregado de ${totalChunks} fragmentos)` : `Análisis Agregado de ${totalChunks} Fragmentos`,
     identifiedAreas: Array.from(new Set(allResults.flatMap(r => r.identifiedAreas || []))),
     suggestions: allResults.flatMap(r => (r.suggestions || []).map(s => ({...s, area: s.area || "General (Fragmento)" }))),
     overallAssessment: allResults.map(r => r.overallAssessment || "").filter(a => a.trim() !== "").join('\n\n---\n\n') || "No se generó una evaluación general agregada.",
@@ -287,21 +290,23 @@ interface AppSourceBundleResult {
   logsBuilt?: string[];
 }
 
-// Adjusted ignore patterns based on user feedback for local execution
 const ignorePatterns = [
   'node_modules/**',
   '.next/**',
   '*.zip',
+  '*.json', // Exclude JSON files like package-lock.json from direct analysis content
   '.DS_Store',
   '*.log',
   'build/**',
   'dist/**',
-  //'.env', // Keep .env example maybe, but not actual secrets
+  '.env', 
   '.env.local',
   '.env.development',
   '.env.production',
   '.env.test',
   '.git/**',
+  'public/generated/**', // Assuming generated assets might be here
+  '*.lock', // e.g. package-lock.json, yarn.lock
 ];
 
 
@@ -314,7 +319,7 @@ export async function getApplicationSourceBundle(
     const timestampedMessage = `[SourceBundle ${level} ${new Date().toISOString()}] ${message}`;
     switch(level) {
         case 'INFO': console.log(timestampedMessage); break;
-        case 'DETAIL': console.log(timestampedMessage); break; // Keep details for debugging
+        case 'DETAIL': console.log(timestampedMessage); break; 
         case 'WARN': console.warn(timestampedMessage); break;
         case 'ERROR': console.error(timestampedMessage); break;
     }
@@ -332,9 +337,11 @@ export async function getApplicationSourceBundle(
       nodir: true,
       dot: true,
       ignore: ignorePatterns,
-      follow: false, // Don't follow symlinks
+      follow: false, 
     });
     log(`Glob encontró ${allFiles.length} rutas de archivo después del filtrado inicial.`, 'INFO');
+    allFiles.forEach(f => log(`Archivo encontrado por glob: ${f}`, 'DETAIL'));
+
 
     if (allFiles.length === 0) {
         log("No se encontraron archivos después de aplicar patrones de ignorados. Verifique los patrones o el contenido del proyecto.", 'WARN');
@@ -348,34 +355,31 @@ export async function getApplicationSourceBundle(
       let fullPath: string;
       try {
         fullPath = path.join(projectRoot, relativeFilePath);
-        log(`Procesando archivo: ${relativeFilePath}`, 'DETAIL');
+        log(`Procesando archivo para empaquetar: ${relativeFilePath}`, 'DETAIL');
         const stats = await fs.stat(fullPath);
         log(`Estadísticas para ${relativeFilePath}: tamaño ${stats.size} bytes.`, 'DETAIL');
 
-        // Skip excessively large files, especially for concatenation
-        if (concatenate && stats.size > 500 * 1024) { // 500 KB limit for concatenation
+        if (concatenate && stats.size > 500 * 1024) { 
             log(`Archivo omitido de la concatenación por tamaño excesivo: ${relativeFilePath} (${(stats.size / 1024).toFixed(2)} KB)`, 'WARN');
             const message = `// Archivo ${relativeFilePath} omitido de la concatenación por ser demasiado grande (${(stats.size / 1024).toFixed(2)} KB).\n`;
             concatenatedContent += `\n\n// --- Archivo: ${relativeFilePath} ---\n\n${message}`;
-            // Add placeholder to filesData if not concatenating, but skip content
              if (!concatenate) filesData.push({ fileName: relativeFilePath, content: "// Archivo omitido por tamaño excesivo." });
             continue;
         }
 
         let content: string;
         try {
+          log(`Intentando leer contenido de ${fullPath}...`, 'DETAIL');
           content = await fs.readFile(fullPath, 'utf-8');
-          log(`Contenido de ${relativeFilePath} leído exitosamente.`, 'DETAIL');
+          log(`Contenido de ${relativeFilePath} leído exitosamente. Longitud: ${content.length}`, 'DETAIL');
         } catch (readError) {
           const error = readError as NodeJS.ErrnoException;
-          // Log common benign errors differently from actual read failures
           if (error.code === 'EACCES' || error.code === 'ENOENT' || error.code === 'EISDIR') {
               log(`Acceso/Permiso denegado o archivo no encontrado/es directorio para ${relativeFilePath}: ${error.message}. Omitiendo.`, 'DETAIL');
-              continue; // Skip this file entry entirely
+              continue; 
           } else {
               log(`No se pudo leer el archivo ${relativeFilePath} como texto (podría ser binario o error desconocido): ${error.message}. Código: ${error.code}`, 'WARN');
               content = `// Error: No se pudo leer el archivo ${relativeFilePath} como texto. Causa: ${error.message}.`;
-              // Include in bundle/zip with error message
               filesData.push({ fileName: relativeFilePath, content: content });
                if (concatenate) {
                  concatenatedContent += `\n\n// --- Archivo: ${relativeFilePath} ---\n\n${content}`;
@@ -387,7 +391,7 @@ export async function getApplicationSourceBundle(
         filesData.push({ fileName: relativeFilePath, content });
         if (concatenate) {
           concatenatedContent += `\n\n// --- Archivo: ${relativeFilePath} ---\n\n${content}`;
-          log(`Contenido de ${relativeFilePath} añadido a la concatenación.`, 'DETAIL');
+          log(`Contenido de ${relativeFilePath} añadido a la concatenación. Nueva longitud total concatenada (aprox): ${concatenatedContent.length}`, 'DETAIL');
         }
       } catch (fileProcessingError) {
         const error = fileProcessingError as NodeJS.ErrnoException;
@@ -396,7 +400,6 @@ export async function getApplicationSourceBundle(
         } else {
             log(`Error de acceso/directorio omitido para ${relativeFilePath}: ${error.message}. Código: ${error.code}`, 'DETAIL');
         }
-        // Don't add files with processing errors to the list
       }
     }
 
@@ -441,7 +444,7 @@ export async function getApplicationSourceBundle(
 
 export async function applySuggestedChange(
     filePath: string,
-    originalContent: string, // Maybe not needed if we read fresh
+    originalContent: string, 
     suggestedContent: string,
     executionLogs?: string[]
 ): Promise<{success: boolean, error?: string, newContent?: string}> {
@@ -449,7 +452,7 @@ export async function applySuggestedChange(
         const timestampedMessage = `[ApplyChange ${level} ${new Date().toISOString()}] ${message}`;
         if (level === 'INFO') console.log(timestampedMessage);
         else if (level === 'ERROR') console.error(timestampedMessage);
-        else console.log(timestampedMessage); // Log details too
+        else console.log(timestampedMessage); 
         if (executionLogs) executionLogs.push(timestampedMessage);
     };
 
@@ -458,37 +461,18 @@ export async function applySuggestedChange(
     let fullPath: string;
     try {
         const projectRoot = process.cwd();
-        fullPath = path.resolve(projectRoot, filePath); // Use resolve for absolute path
+        fullPath = path.resolve(projectRoot, filePath); 
         log(`Ruta absoluta del archivo para escritura: ${fullPath}`, 'DETAIL');
 
-        // Security check: Ensure the path is within the project directory
         if (!fullPath.startsWith(projectRoot + path.sep) && fullPath !== projectRoot) {
-             // Check if it starts with project root + separator OR is exactly project root (e.g., for root files like README)
             log(`Intento de escritura fuera del directorio del proyecto denegado: ${filePath} (Resuelto a: ${fullPath})`, 'ERROR');
             return { success: false, error: `Acceso denegado: La ruta del archivo está fuera de los límites permitidos.` };
         }
 
-        // Ensure the directory exists
         const dirName = path.dirname(fullPath);
         log(`Asegurando que el directorio existe: ${dirName}`, 'DETAIL');
         await fs.mkdir(dirName, { recursive: true });
         log(`Directorio ${dirName} asegurado/creado.`, 'INFO');
-
-
-        // Optionally: Read current content to compare (to avoid writing if no change or for more complex merging later)
-        // let currentContent = '';
-        // try {
-        //     currentContent = await fs.readFile(fullPath, 'utf-8');
-        // } catch (readError: any) {
-        //     if (readError.code !== 'ENOENT') { // Ignore if file doesn't exist yet
-        //         log(`Advertencia: No se pudo leer el contenido actual de ${filePath} antes de escribir: ${readError.message}`, 'WARN');
-        //     }
-        // }
-        // if (currentContent === suggestedContent) {
-        //     log(`Contenido sugerido es idéntico al actual en ${filePath}. No se requiere escritura.`, 'INFO');
-        //     return { success: true, newContent: suggestedContent }; // Indicate success without writing
-        // }
-
 
         log(`Escribiendo ${suggestedContent.length} caracteres en ${filePath}.`, 'DETAIL');
         await fs.writeFile(fullPath, suggestedContent, 'utf-8');
@@ -558,26 +542,25 @@ export async function handleGetErrorFixSuggestion(
     return { success: false, error: errorMsg };
   }
 
-  const llmOptions: LLMOptions = { // Using LLMOptions for suggestErrorFix
+  const llmOptions: LLMOptions = { 
     providerId: currentProvider.id,
     apiKey,
     modelName,
     apiUrl: apiUrl || currentProvider.apiUrl,
-    timeoutMs: LLM_API_TIMEOUT_MS_AUTOUPDATE, // Use autoupdate timeout for fixing
+    timeoutMs: LLM_API_TIMEOUT_MS_AUTOUPDATE, 
   };
 
   const contextForIA = customContext || "Error ocurrido durante la función AutoUpdate (análisis del propio código de CodeAlchemist). Por favor, proporciona un análisis de causa raíz y sugerencias de solución específicas. Si el error es por límites de API, explica cómo mitigar el problema (ej. reducir payloads, ajustar timeouts, fragmentar datos, etc.).";
   log(`Contexto para la IA (AutoFix): "${contextForIA.substring(0,100)}..."`, 'INFO');
 
-  // Pass LLMOptions to suggestErrorFix
   const input: SuggestErrorFixInput = {
     error_message: errorMessage,
     context: contextForIA,
-    llmOptions: llmOptions, // Pass the full LLMOptions object
+    llmOptions: llmOptions, 
   };
 
   try {
-    const result = await suggestErrorFix(input); // Ensure suggestErrorFix handles LLMOptions correctly
+    const result = await suggestErrorFix(input); 
     log("Sugerencia de auto-corrección recibida exitosamente.", 'INFO');
     return { success: true, data: result };
   } catch (error) {
@@ -624,7 +607,7 @@ export async function handleUploadToGit(
     const internalLogs: string[] = [];
     const log = (message: string, level: 'INFO' | 'DETAIL' | 'WARN' | 'ERROR' = 'INFO') => {
         const timestampedMessage = `[GitUpload ${level} ${new Date().toISOString()}] ${message}`;
-        if (level !== 'DETAIL') { // Avoid too much noise in console for details
+        if (level !== 'DETAIL') { 
              console.log(timestampedMessage);
         }
         internalLogs.push(timestampedMessage);
@@ -641,10 +624,10 @@ export async function handleUploadToGit(
     }
 
     let tempRepoPath: string | undefined;
-    const defaultBranch = 'main'; // Or 'master', adjust if needed
+    const defaultBranch = 'main'; 
 
     try {
-        log("Paso 1: Obtener el paquete de código fuente más reciente...", 'INFO');
+        log("Paso 1: Obteniendo el paquete de código fuente más reciente...", 'INFO');
         const sourceBundle = await getApplicationSourceBundle(false, internalLogs);
         if (!sourceBundle.success || !sourceBundle.files || sourceBundle.files.length === 0) {
             const errorMsg = sourceBundle.error || "No se pudo obtener el código fuente para subir a Git.";
@@ -673,7 +656,6 @@ export async function handleUploadToGit(
             await git.checkoutLocalBranch(defaultBranch);
             log(`Rama local '${defaultBranch}' creada o ya existente.`, 'INFO');
         } catch (branchError: any) {
-             // If branch already exists, checkout might fail. Try switching.
             if (branchError.message && branchError.message.includes('already exists')) {
                 log(`La rama local '${defaultBranch}' ya existe. Intentando cambiar a ella.`, 'DETAIL');
                 try {
@@ -681,10 +663,9 @@ export async function handleUploadToGit(
                     log(`Cambiado a la rama local existente '${defaultBranch}'.`, 'INFO');
                 } catch (checkoutError: any) {
                     log(`Error al cambiar a la rama '${defaultBranch}': ${checkoutError.message}`, 'ERROR');
-                    throw checkoutError; // Rethrow if checkout also fails
+                    throw checkoutError; 
                 }
             } else if (branchError.message && branchError.message.includes('is not a commit')) {
-                // Handle case where repo is initialized but has no commits yet
                 log(`El repositorio está vacío. La rama '${defaultBranch}' se creará en el primer commit.`, 'INFO');
             }
              else {
@@ -709,7 +690,6 @@ export async function handleUploadToGit(
                log(`Archivo copiado: ${file.fileName}`, 'DETAIL');
            } catch(writeError: any) {
                log(`Error al escribir el archivo ${file.fileName} en el repositorio temporal: ${writeError.message}`, 'WARN');
-               // Decide if this should be fatal or just a warning
            }
         }
         log("Archivos copiados al repositorio temporal.", 'INFO');
@@ -741,7 +721,6 @@ export async function handleUploadToGit(
         log(`Repositorio remoto 'origin' configurado para ${redactedRepoUrl}`, 'INFO');
 
         log(`Paso 9: Realizando push a la rama remota '${defaultBranch}'...`, 'INFO');
-        // Use --force cautiously, consider --force-with-lease if applicable, or handle divergence more gracefully
         await git.push(['-u', 'origin', defaultBranch, '--force']);
         log(`Push a la rama '${defaultBranch}' completado.`, 'INFO');
 
@@ -755,7 +734,6 @@ export async function handleUploadToGit(
 
         if (error.message) {
              errorMsg = error.message;
-             // Add specific checks for common Git errors
              if (error.message.includes("Authentication failed")) {
                  errorMsg = "Falló la autenticación Git. Verifica tu nombre de usuario y PAT.";
              } else if (error.message.includes("repository not found")) {
@@ -765,7 +743,6 @@ export async function handleUploadToGit(
              } else if (error.message.includes("could not read Username")) {
                   errorMsg = "Falló la autenticación Git (no se pudo leer el nombre de usuario). Verifica tu PAT y permisos.";
              }
-             // Add more specific error handling as needed
         }
 
         log(`Error crítico durante la subida a Git: ${errorMsg}`, 'ERROR');
@@ -782,8 +759,8 @@ export async function handleUploadToGit(
                 log("Directorio temporal eliminado.", 'INFO');
             } catch (cleanupError: any) {
                 log(`Error al limpiar el directorio temporal ${tempRepoPath}: ${cleanupError.message}`, 'ERROR');
-                // Log cleanup error but don't override the primary error message if one occurred
             }
         }
     }
 }
+
