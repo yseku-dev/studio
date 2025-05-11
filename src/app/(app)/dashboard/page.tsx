@@ -1,7 +1,7 @@
 
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import Link from "next/link";
-import { ScanLine, GitCompareArrows, Settings as SettingsIcon, FolderSearch, Sparkles, Lightbulb,Rocket, BarChart3, CodeXml, FolderPlus, MessageCircle } from "lucide-react";
+import { ScanLine, GitCompareArrows, Settings as SettingsIcon, FolderSearch, Sparkles, Lightbulb,Rocket, BarChart3, CodeXml, FolderPlus, MessageCircle, FlaskConical } from "lucide-react";
 
 const featureCards = [
   {
@@ -58,6 +58,12 @@ const featureCards = [
 export default function DashboardPage() {
   return (
     <div className="flex flex-col gap-8">
+      <div className="flex flex-col items-center justify-center pt-8 md:pt-12 text-center">
+        <FlaskConical className="h-24 w-24 md:h-32 md:w-32 text-primary mb-4" data-ai-hint="alchemy flask icon" />
+        {/* You can add a tagline here if desired, e.g.: */}
+        {/* <p className="text-lg text-muted-foreground">Transformando ideas en código.</p> */}
+      </div>
+
       <Card className="shadow-lg border-primary/20">
         <CardHeader className="pb-4">
           <div className="flex items-center gap-3">

@@ -126,7 +126,7 @@ export default function AutoUpdatePage() {
   const workgroupExecutionControllerRef = useRef<AbortController | null>(null);
   const isMountedRef = useRef(false);
   const [currentWorkgroupTurn, setCurrentWorkgroupTurn] = useState(0); // For workgroup status
-  const [workgroupConversationHistory, setWorkgroupConversationHistory] = useState<ChatMessage[]>([]); // Added state
+  const [workgroupConversationHistory, setWorkgroupConversationHistory] = useState<ChatMessage[]>([]);
 
 
   const { toast } = useToast();
@@ -285,7 +285,7 @@ export default function AutoUpdatePage() {
             llmApiKey: orchestratorLlmOptions.apiKey, llmApiUrl: orchestratorLlmOptions.apiUrl
         },
         participantAgentConfigs, currentTurn: turn, maxTurns: MAX_WORKGROUP_TURNS,
-        localStorageSnapshot: localStorageSnapshotForServer, // Pass snapshot
+        localStorageSnapshot: localStorageSnapshotForServer,
     };
 
     addWorkgroupLog({ type: 'debug', message: `Enviando payload a handleWorkgroupTurn para el turno ${turn}. Tarea (inicio): ${task.substring(0,500)}...`, llmRequest: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
@@ -326,7 +326,6 @@ export default function AutoUpdatePage() {
             const respondingAgent = agents.find(a => a.id === result.agentResponse?.agentId);
             addWorkgroupLog({ type: 'agent', agentName: respondingAgent?.name || result.agentResponse.agentId, message: `Respuesta (inicio): ${result.agentResponse.content.substring(0, 500)}...`, llmResponse: {raw: result.agentResponse.rawOutput} });
            
-            // For AutoUpdate, the final response is expected to be ProjectAnalysisResponse
             if (result.isComplete || result.orchestratorDecision?.nextAgentId === "COMPLETADO") {
                 try {
                     const finalAnalysis = JSON.parse(result.agentResponse.content) as ProjectAnalysisResponse;
@@ -366,10 +365,10 @@ export default function AutoUpdatePage() {
         setCurrentAnalysisError(errorMsg);
         setStatus("error");
     }
-  }, [addWorkgroupLog, agents, workgroups, processAnalysisResult, status]); 
+  }, [addWorkgroupLog, agents, workgroups, processAnalysisResult, status, setWorkgroupConversationHistory]); 
 
   const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
-    const options = resolvedLlmOptions; // For direct LLM calls
+    const options = resolvedLlmOptions;
     let workgroupForAnalysis: WorkgroupConfig | undefined;
 
     if (selectedConfigSource.startsWith("workgroup:")) {
@@ -379,7 +378,7 @@ export default function AutoUpdatePage() {
             toast({ title: "Error de Configuración", description: "Grupo de trabajo seleccionado no encontrado.", variant: "destructive" });
             return;
         }
-    } else if (!options) { // Direct LLM call but options not resolved
+    } else if (!options) {
         toast({
             title: "Configuración LLM Incompleta",
             description: `Configuración LLM para '${getSourceName(selectedConfigSource)}' incompleta.`,
@@ -388,12 +387,12 @@ export default function AutoUpdatePage() {
         return;
     }
 
-    if (!isRetry) { // Full reset for new analysis
+    if (!isRetry) {
         setDetailedLogs([]);
         setWorkgroupAnalysisLogs([]);
         setWorkgroupConversationHistory([]);
         setCurrentWorkgroupTurn(0);
-    } else { // For retry, keep existing logs and append
+    } else {
         addDetailedLog("Reintentando análisis...", true);
     }
 
@@ -411,7 +410,7 @@ export default function AutoUpdatePage() {
       description: `Paso 1: Cargando y preparando el código fuente...`
     });
 
-    const bundleResult = await getApplicationSourceBundle(workgroupForAnalysis ? true : false); // Concatenate for workgroup task
+    const bundleResult = await getApplicationSourceBundle(workgroupForAnalysis ? true : false);
     addServerLogs(bundleResult.logsBuilt);
 
     if (!bundleResult.success || (!bundleResult.files && !bundleResult.concatenatedSource)) {
@@ -439,12 +438,12 @@ export default function AutoUpdatePage() {
         
         await runWorkgroupAnalysisTurn(1, [], workgroupExecutionControllerRef.current.signal, workgroupForAnalysis, taskForWorkgroup);
 
-    } else if (options && bundleResult.files) { // Direct LLM call
+    } else if (options && bundleResult.files) {
         addDetailedLog(`Paso 2: Enviando ${bundleResult.files.length} archivos al servidor para análisis y fragmentación...`, true);
-        setStatus("analyzing"); // This status indicates server-side chunking & LLM calls are next
+        setStatus("analyzing");
 
         const analysisActionResult = await handleAutoAnalyzeAppSource(
-            bundleResult.files, // Pass the obtained files
+            bundleResult.files,
             options.providerId,
             options.apiKey,
             options.modelName,
@@ -460,7 +459,6 @@ export default function AutoUpdatePage() {
             handleAnalysisError(analysisActionResult.error);
         }
     } else {
-        // Should not be reached if logic above is correct
         const errMsg = "Error de lógica interna: No se pudo determinar el flujo de análisis.";
         addDetailedLog(errMsg, true);
         handleAnalysisError(errMsg);
@@ -470,7 +468,7 @@ export default function AutoUpdatePage() {
   const handleAnalysisError = (errorMsg: string | undefined) => {
     setStatus("error");
     setCurrentAnalysisError(errorMsg || "Ocurrió un error desconocido durante el auto-análisis.");
-    setCurrentGitError(null); // Clear Git error if it was a general analysis error
+    setCurrentGitError(null);
     toast({ title: "Error en Auto-Análisis", description: errorMsg || "Ocurrió un error desconocido.", variant: "destructive", duration: 10000 });
     addDetailedLog(`Error en auto-análisis: ${errorMsg || "Desconocido"}`, true);
   };
@@ -478,7 +476,7 @@ export default function AutoUpdatePage() {
 
   const handleAttemptAutoFix = async (errorToFix?: string | null, errorContext?: string) => {
     const targetError = errorToFix || currentAnalysisError || currentGitError;
-    const options = resolvedLlmOptions; // Use the globally resolved options for auto-fix
+    const options = resolvedLlmOptions;
     if (!options) {
       toast({ title: "Configuración Faltante", description: "La configuración LLM seleccionada está incompleta para Auto-Fix.", variant: "destructive" });
       return;
@@ -488,14 +486,13 @@ export default function AutoUpdatePage() {
       return;
     }
     
-    const currentLogs = [...detailedLogs]; // Create a mutable copy for this operation
+    const currentLogs = [...detailedLogs];
     currentLogs.push(`[CLIENT ${new Date().toISOString()}] Intentando auto-corrección para el error: ${targetError.substring(0, 100)}... con ${options.providerId}`);
     
     const prevStatus = status;
     let fixingStatus: AutoUpdateStatus = currentGitError ? "fixing_git_error" : "fixing_error";
     setStatus(fixingStatus);
     setAutoFixSuggestion(null);
-    // setDetailedLogs(currentLogs); // Update logs immediately with the attempt message
     toast({ title: "Intentando Auto-Corrección", description: `Consultando a ${options.providerId} para una posible solución...` });
 
     const fixResult = await handleGetErrorFixSuggestion(
@@ -513,7 +510,6 @@ export default function AutoUpdatePage() {
       toast({ title: "Error en Auto-Corrección", description: fixResult.error || `No se pudo obtener sugerencia.`, variant: "destructive" });
       addDetailedLog(`Error al obtener sugerencia de corrección: ${fixResult.error || "Desconocido"}`, true);
     }
-     // Revert status carefully
     setStatus(prevStatus === "fixing_error" || prevStatus === "fixing_git_error" 
         ? (currentAnalysisError || currentGitError ? "error" : (analysisResult ? "success" : "idle")) 
         : prevStatus);
@@ -563,7 +559,7 @@ export default function AutoUpdatePage() {
       toast({ title: "Error al Aplicar", description: result.error || `No se pudo aplicar el cambio a ${baseFilePath}.`, variant: "destructive" });
       currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al aplicar sugerencia a ${baseFilePath}: ${result.error}`);
     }
-    addServerLogs(result.error ? [result.error] : []); // Add error to logs if present
+    addServerLogs(result.error ? [result.error] : []);
     setDetailedLogs(currentLogsCopy);
   };
 
@@ -590,15 +586,14 @@ export default function AutoUpdatePage() {
     addDetailedLog(`Iniciando preparación para descarga de código fuente en formato ${format.toUpperCase()}.`, true);
     toast({ title: "Preparando Descarga", description: `Recopilando archivos fuente para formato ${format.toUpperCase()}...` });
 
-    // Always get the latest bundle for download to reflect applied changes
     addDetailedLog(`Obteniendo el paquete de código fuente más reciente para la descarga...`, true);
-    const bundleResult = await getApplicationSourceBundle(false); // getApplicationSourceBundle is a server action
+    const bundleResult = await getApplicationSourceBundle(false);
     addServerLogs(bundleResult.logsBuilt);
 
-    let filesToProcess = projectFiles; // Default to current state
+    let filesToProcess = projectFiles;
     if (bundleResult.success && bundleResult.files) {
       filesToProcess = bundleResult.files;
-      setProjectFiles(filesToProcess); // Update state with the latest files
+      setProjectFiles(filesToProcess);
       addDetailedLog(`Paquete de código fuente más reciente obtenido con ${filesToProcess.length} archivos.`, true);
     } else {
       toast({ title: "Error al Obtener Código", description: bundleResult.error || "No se pudo obtener el código fuente actualizado.", variant: "destructive" });
@@ -624,7 +619,7 @@ export default function AutoUpdatePage() {
           });
           blob = await zip.generateAsync({ type: "blob" });
           downloadFileName = 'codealchemist-source.zip';
-        } else { // json
+        } else { 
           const jsonData = JSON.stringify(filesToProcess, null, 2);
           blob = new Blob([jsonData], { type: 'application/json;charset=utf-8' });
           downloadFileName = 'codealchemist-source.json';
@@ -661,7 +656,7 @@ export default function AutoUpdatePage() {
       return;
     }
     setCurrentGitError(null);
-    setCurrentAnalysisError(null); // Clear general analysis error if we are trying Git
+    setCurrentAnalysisError(null);
     setStatus("uploading_git");
     
     const attemptNumber = isRetry ? gitUploadRetryCount + 1 : 1;
@@ -676,8 +671,8 @@ export default function AutoUpdatePage() {
 
     if (result.success) {
       toast({ title: "Subida a Git Exitosa", description: result.message, duration: 7000 });
-      setGitUploadRetryCount(0); // Reset retry count on success
-      setStatus(analysisResult ? "success" : "idle"); // Revert to previous relevant status
+      setGitUploadRetryCount(0);
+      setStatus(analysisResult ? "success" : "idle");
     } else {
       setCurrentGitError(result.message);
       toast({
@@ -690,7 +685,7 @@ export default function AutoUpdatePage() {
           </Button>
         ) : undefined
       });
-      setStatus("error"); // Set to general error to show Auto-Fix for Git error
+      setStatus("error");
     }
   };
   const handleInitialGitUpload = () => { setGitUploadRetryCount(0); performGitUpload(false); };
@@ -781,7 +776,7 @@ export default function AutoUpdatePage() {
               <Label className="text-sm text-foreground">
                 {status === "loading_source" ? "Paso 1: Cargando código fuente..." :
                  status === "chunking_source" ? "Paso 1.5: Dividiendo código en fragmentos..." :
-                 status === "analyzing" && analysisProgress.total > 0 ? `Paso 2: Procesando fragmentos LLM... (${analysisProgress.processed}/${analysisProgress.total})` : "Paso 2: Calculando fragmentos para LLM..." :
+                 status === "analyzing" && analysisProgress.total > 0 ? `Paso 2: Procesando fragmentos LLM... (${analysisProgress.processed}/${analysisProgress.total})` : status === "analyzing" ? "Paso 2: Calculando fragmentos para LLM..." :
                  status === "processing_workgroup_turn" ? `Paso 2: Procesando con grupo de trabajo... (Turno ${currentWorkgroupTurn}/${MAX_WORKGROUP_TURNS})` :
                  status === "success" ? `Operación completada ${selectedConfigSource.startsWith("workgroup:") ? `(Grupo finalizado en turno ${currentWorkgroupTurn})` : `(${analysisProgress.processed}/${analysisProgress.total} fragmentos)`}.` :
                  status === "error" && (currentAnalysisError || currentGitError) ? `Operación interrumpida.` :
@@ -792,8 +787,8 @@ export default function AutoUpdatePage() {
               <Progress value={
                 status === "loading_source" ? 5 :
                 status === "chunking_source" ? 10 :
-                status === "analyzing" && analysisProgress.total === 0 ? 15 : // After chunking, before first LLM call
-                status === "analyzing" && analysisProgress.total > 0 ? 15 + (analysisProgress.processed / analysisProgress.total) * 80 : // LLM calls from 15% to 95%
+                status === "analyzing" && analysisProgress.total === 0 ? 15 : 
+                status === "analyzing" && analysisProgress.total > 0 ? 15 + (analysisProgress.processed / analysisProgress.total) * 80 : 
                 status === "processing_workgroup_turn" && MAX_WORKGROUP_TURNS > 0 ? 15 + (currentWorkgroupTurn / MAX_WORKGROUP_TURNS) * 80 :
                 (status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error" ? 100 : 0)
               } className="w-full h-3" />
@@ -987,3 +982,4 @@ export default function AutoUpdatePage() {
     </>
   );
 }
+
