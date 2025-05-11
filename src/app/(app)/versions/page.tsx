@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useState, useEffect } from 'react';
@@ -26,13 +27,14 @@ import {
   DialogDescription,
   DialogClose,
 } from "@/components/ui/dialog";
-import { Separator } from './ui/separator';
-import { Badge } from './ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { getApplicationSourceBundle, type AppSourceFile } from '@/app/(app)/autoupdate/actions'; // Import action
 import { Loader2 } from 'lucide-react'; // For loading state
+import Link from 'next/link';
 
-export function VersionSnapshots() {
+export default function VersionSnapshotsPage() {
   const [snapshots, setSnapshots] = useState<CodeSnapshot[]>([]);
   const [selectedSnapshot, setSelectedSnapshot] = useState<CodeSnapshot | null>(null);
   const [compareSnapshotA, setCompareSnapshotA] = useState<CodeSnapshot | null>(null);
@@ -239,7 +241,7 @@ export function VersionSnapshots() {
             <div className="text-center py-12">
               <FileText className="mx-auto h-16 w-16 text-muted-foreground mb-4" />
               <p className="text-muted-foreground text-lg">No se encontraron versiones.</p>
-              <p className="text-sm text-muted-foreground">Guarda versiones desde la página <a href="/analyze" className="text-accent hover:underline">Analizar Código</a> o guarda el estado actual de la app.</p>
+              <p className="text-sm text-muted-foreground">Guarda versiones desde la página <Link href="/analyze" className="text-accent hover:underline">Analizar Código</Link> o guarda el estado actual de la app.</p>
             </div>
           ) : (
             <ScrollArea className="h-[calc(100vh-20rem)]"> {/* Adjusted height */}
@@ -380,3 +382,4 @@ export function VersionSnapshots() {
     </>
   );
 }
+
