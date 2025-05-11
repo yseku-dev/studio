@@ -27,22 +27,22 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog"; // AlertDialogTrigger is not needed here directly
-import { WorkgroupExecutionModal } from '@/components/workgroup-execution-modal'; // Import the new modal
-import { LOCALSTORAGE_WORKGROUPS_KEY, LOCALSTORAGE_AGENTS_KEY, ORCHESTRATOR_AGENT_NAME } from '@/config/agent-config'; // Use constants
+  AlertDialogTrigger, // Added AlertDialogTrigger
+} from "@/components/ui/alert-dialog";
+import { WorkgroupExecutionModal } from '@/components/workgroup-execution-modal';
+import { LOCALSTORAGE_WORKGROUPS_KEY, LOCALSTORAGE_AGENTS_KEY, ORCHESTRATOR_AGENT_NAME } from '@/config/agent-config';
 
-// Default workgroup using default agent names (IDs will be resolved dynamically)
 const defaultWorkgroup: Omit<WorkgroupConfig, 'id' | 'agentIds'> & { agentNames: string[] } = {
   name: "EquipoDesarrolloSoftware",
-  description: "Un equipo multidisciplinario capaz de abordar diversas tareas de desarrollo de software, gestionado por un Orquestador.",
-  task: `Este grupo de trabajo simula un equipo de producción de software completo. Dada una descripción de proyecto o una necesidad funcional, el Orquestador coordinará a los agentes especializados (JefeDeProducto, ArquitectoSoftware, DesarrolladorSoftware, IngenieroPruebas, IngenieroDevOps, RepresentanteUsuario) para: 
-1. Definir requisitos y alcance. 
-2. Diseñar la arquitectura técnica. 
-3. Implementar el código. 
-4. Asegurar la calidad mediante pruebas. 
-5. Preparar para el despliegue y gestionar la infraestructura si es necesario. 
-6. Validar desde la perspectiva del usuario. 
-El objetivo es entregar una solución funcional o un análisis detallado basado en la solicitud inicial.`,
+  description: "Un equipo multidisciplinario capaz de abordar diversas tareas de desarrollo de software, gestionado por un Orquestador. Este grupo simula un ciclo de vida de desarrollo completo.",
+  task: `Este grupo de trabajo se comporta como un equipo de producción de software completo. Dada una descripción de proyecto o una necesidad funcional, el Orquestador coordinará a los agentes especializados (JefeDeProducto, ArquitectoSoftware, DesarrolladorSoftware, IngenieroPruebas, IngenieroDevOps, RepresentanteUsuario) para: 
+1. Definir requisitos y alcance del proyecto.
+2. Diseñar la arquitectura técnica de la solución.
+3. Implementar el código fuente necesario.
+4. Asegurar la calidad del software mediante pruebas exhaustivas.
+5. Preparar el entorno para el despliegue y gestionar la infraestructura si es pertinente.
+6. Validar la solución desde la perspectiva del usuario final.
+El objetivo es entregar una solución funcional, un análisis detallado, o cualquier artefacto de software solicitado, basado en la entrada inicial.`,
   agentNames: [
     "JefeDeProducto",
     "ArquitectoSoftware",
@@ -136,7 +136,7 @@ export default function WorkgroupsPage() {
      if (!orchestratorAgent) {
       toast({
         title: 'Error',
-        description: `No se encontró el agente ${ORCHESTRATOR_AGENT_NAME} necesario para crear grupos.`,
+        description: `No se encontró el agente ${ORCHESTRATOR_AGENT_NAME} necesario para crear grupos. Asegúrate de que exista en la lista de agentes.`,
         variant: 'destructive',
       });
       return;
@@ -152,7 +152,7 @@ export default function WorkgroupsPage() {
       });
     } else {
       setEditingWorkgroup(null);
-      reset({ name: '', description: '', task: defaultWorkgroup.task, agentIds: [] }); // Set default task for new groups
+      reset({ name: '', description: '', task: defaultWorkgroup.task, agentIds: [] });
     }
     setIsFormOpen(true);
   };
@@ -237,22 +237,22 @@ export default function WorkgroupsPage() {
                 Gestión de Grupos de Trabajo IA
               </CardTitle>
               <CardDescription>
-                Crea, configura y ejecuta grupos de trabajo con tus agentes de IA. El Orquestador se incluye automáticamente.
+                Crea, configura y ejecuta grupos de trabajo con tus agentes de IA. El "{ORCHESTRATOR_AGENT_NAME}" se incluye automáticamente.
               </CardDescription>
             </div>
              <DialogTrigger asChild>
-               <Button onClick={() => handleOpenForm()} disabled={availableAgents.length <= 1 || !orchestratorAgent}> 
+               <Button onClick={() => handleOpenForm()} disabled={!orchestratorAgent || selectableAgents.length === 0}> 
                 <PlusCircle className="mr-2 h-4 w-4" /> Crear Grupo
               </Button>
             </DialogTrigger>
           </CardHeader>
           <CardContent>
-             {availableAgents.length <= 1 && !orchestratorAgent && ( 
+             {(!orchestratorAgent || selectableAgents.length === 0) && ( 
               <p className="text-destructive text-center py-4">
-                Primero debes crear agentes (además del Orquestador) en la página de <a href="/agents" className="underline hover:text-destructive/80">Gestión de Agentes</a> para poder crear grupos de trabajo.
+                Primero debes crear el agente "{ORCHESTRATOR_AGENT_NAME}" y al menos otro agente adicional en la página de <a href="/agents" className="underline hover:text-destructive/80">Gestión de Agentes</a> para poder crear grupos de trabajo.
               </p>
             )}
-            {workgroups.length === 0 && availableAgents.length > 1 && orchestratorAgent && (
+            {workgroups.length === 0 && orchestratorAgent && selectableAgents.length > 0 && (
               <p className="text-muted-foreground text-center py-8">No hay grupos de trabajo creados. ¡Empieza creando uno!</p>
             )}
             {workgroups.length > 0 && (
@@ -328,7 +328,7 @@ export default function WorkgroupsPage() {
           <DialogHeader>
             <DialogTitle>{editingWorkgroup ? 'Editar Grupo de Trabajo' : 'Crear Nuevo Grupo de Trabajo'}</DialogTitle>
             <DialogDescription>
-              {editingWorkgroup ? 'Modifica los detalles de tu grupo.' : 'Define un nuevo grupo y asígnale agentes y una tarea.'} El agente Orquestador se añadirá automáticamente.
+              {editingWorkgroup ? 'Modifica los detalles de tu grupo.' : 'Define un nuevo grupo y asígnale agentes y una tarea.'} El agente "{ORCHESTRATOR_AGENT_NAME}" se añadirá automáticamente.
             </DialogDescription>
           </DialogHeader>
           <form id="workgroup-form-id" onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
@@ -422,3 +422,4 @@ export default function WorkgroupsPage() {
     </>
   );
 }
+
