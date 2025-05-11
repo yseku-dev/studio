@@ -1,6 +1,6 @@
 // src/config/llm-config.ts
 
-export const DEFAULT_LLM_PROVIDER = "ollama"; 
+export const DEFAULT_LLM_PROVIDER = "groq"; 
 
 export interface LLMProvider {
   id: LLMProviderId;
@@ -14,11 +14,12 @@ export interface LLMProvider {
   isGoogleGenerativeAICompatible?: boolean; // New flag for Gemini
 }
 
+// Updated list with Google Gemini as the second provider
 export const LLM_PROVIDERS: readonly LLMProvider[] = [
   { id: "groq", name: "Groq", apiUrl: "https://api.groq.com/openai/v1", apiKeyName: "GROQ_API_KEY", requiresApiKey: true, isGroqCompatible: true },
+  { id: "google-gemini", name: "Google Gemini", apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", apiKeyName: "GOOGLE_API_KEY", requiresApiKey: true, isGoogleGenerativeAICompatible: true },
   { id: "openai", name: "OpenAI", apiUrl: "https://api.openai.com/v1", apiKeyName: "OPENAI_API_KEY", requiresApiKey: true, isGroqCompatible: true },
   { id: "anthropic", name: "Anthropic", apiUrl: "https://api.anthropic.com/v1", apiKeyName: "ANTHROPIC_API_KEY", requiresApiKey: true, isAnthropicCompatible: true },
-  { id: "google-gemini", name: "Google Gemini", apiUrl: "https://generativelanguage.googleapis.com/v1beta/models", apiKeyName: "GOOGLE_API_KEY", requiresApiKey: true, isGoogleGenerativeAICompatible: true },
   { id: "lmstudio", name: "LM Studio", apiUrl: "http://localhost:1234/v1", apiKeyName: "LMSTUDIO_API_KEY", requiresApiKey: false, isGroqCompatible: true }, 
   { id: "ollama", name: "Ollama", apiUrl: "http://127.0.0.1:11434/v1", apiKeyName: "OLLAMA_API_KEY", requiresApiKey: false, isGroqCompatible: true, isOllamaCompatible: true }, 
 ] as const;
@@ -49,6 +50,12 @@ export const MODELS_BY_PROVIDER: Record<LLMProviderId, Record<string, ModelInfo>
     "qwen-qwq-32b": { tpm: 6000, tokens: 32768, notes: "Good multilingual capabilities" },
     "allam-2-7b": { tpm: 6000, tokens: 8192, notes: "Arabic-focused model" },
   },
+  "google-gemini": {
+    "gemini-1.5-pro-latest": { tokens: 1048576, notes: "Latest Pro model, 1M context (can be up to 2M for some use cases)" }, // Max input 1M, output up to 8192
+    "gemini-1.5-flash-latest": { tokens: 1048576, notes: "Latest Flash model, 1M context, optimized for speed" }, // Max input 1M, output up to 8192
+    "gemini-1.0-pro": { tokens: 32768, notes: "Older Pro model, 32k context" }, // 30720 input, 2048 output
+    // "gemini-pro-vision": { tokens: 16384, notes: "Multimodal for vision tasks, specific use" }, // Requires different handling for images
+  },
   openai: {
     "gpt-4o": { tokens: 128000, notes: "Latest flagship model, multimodal" },
     "gpt-4-turbo": { tokens: 128000, notes: "Includes gpt-4-turbo-2024-04-09, high performance" },
@@ -64,12 +71,6 @@ export const MODELS_BY_PROVIDER: Record<LLMProviderId, Record<string, ModelInfo>
     "claude-2.1": { tokens: 200000, notes: "Previous generation, large context" },
     "claude-2.0": { tokens: 100000, notes: "Older Claude 2" },
     "claude-instant-1.2": { tokens: 100000, notes: "Fast and affordable Claude" },
-  },
-  "google-gemini": {
-    "gemini-1.5-pro-latest": { tokens: 1048576, notes: "Latest Pro model, 1M context (can be up to 2M for some use cases)" }, // Max input 1M, output up to 8192
-    "gemini-1.5-flash-latest": { tokens: 1048576, notes: "Latest Flash model, 1M context, optimized for speed" }, // Max input 1M, output up to 8192
-    "gemini-1.0-pro": { tokens: 32768, notes: "Older Pro model, 32k context" }, // 30720 input, 2048 output
-    // "gemini-pro-vision": { tokens: 16384, notes: "Multimodal for vision tasks, specific use" }, // Requires different handling for images
   },
   lmstudio: {
     "MaziyarPanahi/Codestral-22B-v0.1-GGUF": { tokens: 32768, notes: "Example, user must have this model" },

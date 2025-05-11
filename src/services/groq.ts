@@ -220,6 +220,9 @@ async function makeLLMRequest<TResponse>(
             temperature: temperature,
             maxOutputTokens: max_tokens,
             // Gemini doesn't have a direct JSON mode like OpenAI, rely on prompt.
+            // However, for Gemini 1.5 Pro, we can specify response_mime_type for JSON output
+            // For older models, we must rely on prompt engineering for JSON.
+            responseMimeType: expectedResponseFormat === "json_object" && options.modelName.includes("gemini-1.5") ? "application/json" : undefined,
         }
     };
     if (systemMsg) {
@@ -265,7 +268,6 @@ async function makeLLMRequest<TResponse>(
     } else if (providerConfig.isAnthropicCompatible) {
       contentToParse = data.content?.[0]?.text;
     } else if (providerConfig.isGoogleGenerativeAICompatible) {
-        // Check for candidates and safety ratings which might block content
         if (data.candidates && data.candidates.length > 0) {
             const candidate = data.candidates[0];
             if (candidate.finishReason === "SAFETY") {

@@ -119,6 +119,9 @@ export async function handleTestLLMConnection(
     } else if (provider.isGoogleGenerativeAICompatible) {
         if (responseData.candidates && responseData.candidates.length > 0 && responseData.candidates[0].content && responseData.candidates[0].content.parts && responseData.candidates[0].content.parts.length > 0) {
             content = responseData.candidates[0].content.parts[0].text;
+        } else if (responseData.promptFeedback && responseData.promptFeedback.blockReason) {
+            console.warn(`[${provider.name}] Prompt bloqueado durante prueba de conexión:`, responseData.promptFeedback);
+            return { success: false, message: `Prompt bloqueado por ${provider.name}: ${responseData.promptFeedback.blockReason}. Revisa el prompt o la configuración de seguridad.`};
         } else {
              console.warn(`Respuesta de prueba de Gemini con formato inesperado o sin contenido.`, responseData);
         }

@@ -1,7 +1,7 @@
 
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import Link from "next/link";
-import { ScanLine, GitCompareArrows, Settings as SettingsIcon, FolderSearch, Sparkles, Lightbulb,Rocket, BarChart3, CodeXml, FolderPlus, MessageCircle, FlaskConical } from "lucide-react";
+import { ScanLine, GitCompareArrows, Settings as SettingsIcon, FolderSearch, Sparkles, Lightbulb,Rocket, BarChart3, CodeXml, FolderPlus, MessageCircle, FlaskConical, Users2, Workflow, GitPullRequestDraft } from "lucide-react";
 
 const featureCards = [
   {
@@ -15,6 +15,12 @@ const featureCards = [
     icon: FolderPlus,
     title: "Generar Proyecto",
     description: "Crea una estructura base para un nuevo proyecto según tus especificaciones."
+  },
+  {
+    href: "/refactor-project",
+    icon: GitPullRequestDraft,
+    title: "Refactorizar Proyecto",
+    description: "Sube o vincula tu proyecto para obtener sugerencias de refactorización de IA."
   },
   {
     href: "/analyze",
@@ -47,10 +53,22 @@ const featureCards = [
     description: "Interactúa con un asistente de IA para obtener ayuda, resolver dudas o generar ideas."
   },
   {
+    href: "/agents",
+    icon: Users2,
+    title: "Agentes IA",
+    description: "Crea, gestiona y prueba agentes IA individuales para tareas especializadas."
+  },
+  {
+    href: "/workgroups",
+    icon: Workflow,
+    title: "Grupos de Trabajo IA",
+    description: "Define y ejecuta equipos de agentes IA para colaborar en tareas complejas."
+  },
+  {
     href: "/settings",
     icon: SettingsIcon,
     title: "Configuración",
-    description: "Ajusta tu clave API de Groq, selecciona modelos y personaliza la aplicación."
+    description: "Ajusta tus claves API, selecciona modelos y personaliza la aplicación."
   },
 ];
 
@@ -131,4 +149,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
