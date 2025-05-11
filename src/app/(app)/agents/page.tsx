@@ -27,12 +27,13 @@ import {
 } from "@/components/ui/alert-dialog"; // Import AlertDialog components
 import { useToast } from '@/hooks/use-toast';
 import { PlusCircle, Users2, Edit2, Trash2, Wand2, UploadCloud, DownloadCloud, MessageSquare, Code, Terminal, FolderGit2, FileCode } from 'lucide-react';
-import type { AgentConfig, AgentLLMConfig, AgentSpecificLLMConfig } from '@/types/agent';
+import type { AgentConfig, AgentLLMConfig, AgentSpecificLLMConfig, WorkgroupConfig } from '@/types/agent';
 import { LLM_PROVIDERS, MODELS_BY_PROVIDER, DEFAULT_LLM_PROVIDER, type LLMProviderId, getLocalStorageApiKeyName as getGlobalApiKeyName, getLocalStorageModelName as getGlobalModelName, LOCALSTORAGE_PROVIDER_ID_KEY as GLOBAL_PROVIDER_ID_KEY } from '@/config/llm-config';
 import { AgentTestChatModal } from '@/components/agent-test-chat-modal'; // Import the new component
 import type { LLMOptions } from '@/services/groq'; // Import LLMOptions type
 import { Separator } from '@/components/ui/separator'; // Import Separator
 import { Badge } from '@/components/ui/badge'; // Import Badge
+import { LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGENT_NAME } from '@/config/agent-config';
 
 
 const agentSchema = z.object({
@@ -71,7 +72,7 @@ const defaultAgents: Omit<AgentConfig, 'id'>[] = [
   { name: "IngenieroDevOps", description: "Gestiona infraestructura, despliegues y CI/CD.", systemMessage: "Eres un Ingeniero DevOps eficiente. Tu función es automatizar los procesos de CI/CD y gestionar la infraestructura, asegurando su disponibilidad y rendimiento.", llmConfig: 'default', executionCapability: true, virtualEnvCapability: true, readWriteCapability: true }, // Example capabilities
   { name: "RepresentanteUsuario", description: "Proporciona feedback desde la perspectiva del usuario final.", systemMessage: "Eres el Representante del Usuario. Tu perspectiva es crucial. Proporciona feedback sobre las funcionalidades desarrolladas y valida que el producto cumple con las expectativas.", llmConfig: 'default' },
   {
-    name: "OrquestadorFlujoAgentes",
+    name: ORCHESTRATOR_AGENT_NAME,
     description: "Agente central obligatorio en cada Grupo de Trabajo. Gestiona el flujo de interacciones, recibe todas las respuestas y decide qué agente actúa a continuación para garantizar un proceso coordinado y la toma de decisiones centralizada.",
     systemMessage: "Eres el Orquestador del Grupo de Trabajo. Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti. Tu objetivo es asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realizas la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso.",
     llmConfig: 'default'
@@ -239,11 +240,44 @@ export default function AgentsPage() {
   };
 
   const handleDeleteAgent = (agentId: string) => {
+    const agentToDelete = agents.find(a => a.id === agentId);
+    if (!agentToDelete) return;
+
+    // Prevent deletion of the main Orchestrator agent if it's the one defined by ORCHESTRATOR_AGENT_NAME
+    if (agentToDelete.name === ORCHESTRATOR_AGENT_NAME) {
+      toast({
+        title: 'Eliminación Denegada',
+        description: `El agente Orquestador principal (${ORCHESTRATOR_AGENT_NAME}) no puede ser eliminado.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+    
     const updatedAgents = agents.filter(a => a.id !== agentId);
     setAgents(updatedAgents);
     localStorage.setItem(LOCALSTORAGE_AGENTS_KEY, JSON.stringify(updatedAgents));
-    // TODO: Also remove this agent from any workgroups
-    toast({ title: 'Agente Eliminado', description: 'El agente ha sido eliminado.' });
+
+    // Update workgroups: Remove the deleted agentId from all workgroups
+    const storedWorkgroupsRaw = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
+    if (storedWorkgroupsRaw) {
+      try {
+        let currentWorkgroups: WorkgroupConfig[] = JSON.parse(storedWorkgroupsRaw);
+        const newWorkgroups = currentWorkgroups.map(wg => ({
+          ...wg,
+          agentIds: wg.agentIds.filter(id => id !== agentId)
+        })).filter(wg => {
+          // Optionally, further filter workgroups if they become invalid (e.g., no agents left)
+          // For now, just remove the specific agent.
+          // The orchestrator check is primarily handled by resolveLlmOptionsForSource
+          return true;
+        });
+        localStorage.setItem(LOCALSTORAGE_WORKGROUPS_KEY, JSON.stringify(newWorkgroups));
+      } catch (e) {
+        console.error("Error updating workgroups in localStorage after agent deletion:", e);
+        toast({ title: "Error al Actualizar Grupos", description: "No se pudieron actualizar los grupos de trabajo después de eliminar el agente.", variant: "destructive"});
+      }
+    }
+    toast({ title: 'Agente Eliminado', description: `El agente "${agentToDelete.name}" ha sido eliminado y removido de los grupos de trabajo.` });
   };
 
   const handleTestAgent = (agent: AgentConfig) => {
@@ -521,7 +555,7 @@ export default function AgentsPage() {
                           </DialogTrigger>
                            <AlertDialog>
                              <AlertDialogTrigger asChild>
-                                <Button variant="ghost" size="icon" title="Eliminar Agente" className="text-muted-foreground hover:text-destructive">
+                                <Button variant="ghost" size="icon" title="Eliminar Agente" className="text-muted-foreground hover:text-destructive" disabled={agent.name === ORCHESTRATOR_AGENT_NAME}>
                                   <Trash2 className="h-4 w-4" />
                                 </Button>
                              </AlertDialogTrigger>
@@ -530,11 +564,12 @@ export default function AgentsPage() {
                                   <AlertDialogTitle>¿Eliminar Agente?</AlertDialogTitle>
                                   <AlertDialogDescription>
                                     ¿Estás seguro de que quieres eliminar al agente "{agent.name}"? Esta acción no se puede deshacer.
+                                    {agent.name === ORCHESTRATOR_AGENT_NAME && <p className="mt-2 font-semibold text-destructive">Este es el agente Orquestador principal y no puede ser eliminado.</p>}
                                   </AlertDialogDescription>
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>
                                   <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                  <AlertDialogAction onClick={() => handleDeleteAgent(agent.id)} className="bg-destructive hover:bg-destructive/90">
+                                  <AlertDialogAction onClick={() => handleDeleteAgent(agent.id)} className="bg-destructive hover:bg-destructive/90" disabled={agent.name === ORCHESTRATOR_AGENT_NAME}>
                                     Eliminar
                                   </AlertDialogAction>
                                 </AlertDialogFooter>
@@ -563,8 +598,9 @@ export default function AgentsPage() {
                   {/* --- Basic Info --- */}
                   <div>
                     <Label htmlFor="name">Nombre del Agente</Label>
-                    <Input id="name" {...register('name')} placeholder="Ej: Planificador, Programador" />
+                    <Input id="name" {...register('name')} placeholder="Ej: Planificador, Programador" disabled={editingAgent?.name === ORCHESTRATOR_AGENT_NAME} />
                     {errors.name && <p className="text-sm text-destructive mt-1">{errors.name.message}</p>}
+                     {editingAgent?.name === ORCHESTRATOR_AGENT_NAME && <p className="text-xs text-muted-foreground mt-1">El nombre del agente Orquestrador no puede ser modificado.</p>}
                   </div>
                   <div>
                     <Label htmlFor="description">Descripción Corta</Label>
@@ -721,7 +757,7 @@ export default function AgentsPage() {
                   <Button type="button" variant="outline">Cancelar</Button>
                 </DialogClose>
                 {/* Submit button uses form attribute to link to the form inside ScrollArea */}
-                <Button type="submit" form="agent-form-id">
+                <Button type="submit" form="agent-form-id" disabled={editingAgent?.name === ORCHESTRATOR_AGENT_NAME && (dirtyFields.name || dirtyFields.llmConfigType || dirtyFields.customProviderId || dirtyFields.customModelName || dirtyFields.customApiKey || dirtyFields.customApiUrl)}>
                   <Wand2 className="mr-2 h-4 w-4" />
                   {editingAgent ? 'Guardar Cambios' : 'Crear Agente'}
                 </Button>
