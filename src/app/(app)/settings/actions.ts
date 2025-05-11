@@ -10,7 +10,7 @@ import os from 'os';
 interface LLMTestConnectionResult {
   success: boolean;
   message: string;
-  data?: any; // Could be model response or other relevant data
+  data?: any; 
 }
 
 // Unified function to test LLM connection
@@ -18,7 +18,7 @@ export async function handleTestLLMConnection(
   providerId: LLMProviderId,
   apiKey: string,
   modelName: string,
-  apiUrl?: string // Optional for local LLMs
+  apiUrl?: string 
 ): Promise<LLMTestConnectionResult> {
   const provider = LLM_PROVIDERS.find(p => p.id === providerId);
   if (!provider) {
@@ -34,29 +34,14 @@ export async function handleTestLLMConnection(
 
   const effectiveApiUrl = apiUrl || provider.apiUrl;
   let endpoint = effectiveApiUrl;
-
-  if (provider.isGroqCompatible || provider.id === 'ollama') { // Ollama can use /v1/chat for OpenAI compatibility
-    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/chat/completions`;
-  } else if (provider.isAnthropicCompatible) {
-    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/messages`;
-  }
-  // Add other provider-specific endpoint logic if necessary
-
-  console.log(`Probando conexión con ${provider.name} (modelo: ${modelName}) en endpoint: ${endpoint}...`);
-  
   let requestBody: any;
   const headers: HeadersInit = { 'Content-Type': 'application/json' };
 
-  if (provider.requiresApiKey && provider.apiKeyName) {
-    if(provider.id === 'anthropic') {
-      headers['x-api-key'] = apiKey;
-      headers['anthropic-version'] = '2023-06-01';
-    } else { // OpenAI, Groq
-      headers['Authorization'] = `Bearer ${apiKey}`;
+  if (provider.isGroqCompatible || (provider.id === 'ollama' && !provider.isOllamaCompatible && !provider.isGoogleGenerativeAICompatible) ) { 
+    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/chat/completions`;
+    if (provider.requiresApiKey) {
+        headers['Authorization'] = `Bearer ${apiKey}`;
     }
-  }
-
-  if (provider.isGroqCompatible || provider.id === 'ollama') {
     requestBody = {
       model: modelName,
       messages: [{ role: "user", content: "Hola. ¿Estás funcionando?" }],
@@ -64,22 +49,47 @@ export async function handleTestLLMConnection(
       max_tokens: 50,
     };
   } else if (provider.isAnthropicCompatible) {
+    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/messages`;
+    if (provider.requiresApiKey) {
+        headers['x-api-key'] = apiKey;
+        headers['anthropic-version'] = '2023-06-01';
+    }
     requestBody = {
       model: modelName,
       messages: [{ role: "user", content: "Hola. ¿Estás funcionando?" }],
       max_tokens: 50,
       temperature: 0.1,
     };
+  } else if (provider.isGoogleGenerativeAICompatible) {
+    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/${modelName}:generateContent?key=${apiKey}`;
+    // No Authorization header needed, key is in URL.
+    requestBody = {
+      contents: [{ parts: [{ text: "Hola. ¿Estás funcionando?" }] }],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: 50,
+      }
+    };
+  } else if (provider.isOllamaCompatible && provider.id === 'ollama') {
+    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/api/chat`;
+    // No specific headers needed for Ollama usually
+    requestBody = {
+        model: modelName,
+        messages: [{ role: "user", content: "Hola. ¿Estás funcionando?" }],
+        stream: false,
+        options: {
+            temperature: 0.1,
+            num_predict: 50
+        }
+    };
   } else {
-    // Basic ping or specific test for other providers if needed
-    // For now, assume we need to send a simple request for others too.
-    // This part might need custom logic per provider if they don't fit the above.
      return { success: false, message: `El proveedor ${provider.name} no tiene un método de prueba de conexión implementado actualmente.`};
   }
 
-
+  console.log(`Probando conexión con ${provider.name} (modelo: ${modelName}) en endpoint: ${endpoint}...`);
+  
   const controller = new AbortController();
-  const timeoutForTest = 30000; // 30 seconds for test
+  const timeoutForTest = 30000; 
   const timeoutId = setTimeout(() => controller.abort(), timeoutForTest);
 
   try {
@@ -90,8 +100,8 @@ export async function handleTestLLMConnection(
       signal: controller.signal,
     };
 
-    // No retry for test connection, we want immediate feedback.
     const response = await fetch(endpoint, fetchRequestOptions);
+    clearTimeout(timeoutId); // Clear timeout if fetch completes
     
     if (!response.ok) {
         const errorBody = await response.text();
@@ -102,10 +112,18 @@ export async function handleTestLLMConnection(
     const responseData = await response.json();
     
     let content = "";
-    if (provider.isGroqCompatible || provider.id === 'ollama') {
+    if (provider.isGroqCompatible || (provider.id === 'ollama' && !provider.isOllamaCompatible && !provider.isGoogleGenerativeAICompatible)) {
         content = responseData.choices?.[0]?.message?.content;
     } else if (provider.isAnthropicCompatible) {
         content = responseData.content?.[0]?.text;
+    } else if (provider.isGoogleGenerativeAICompatible) {
+        if (responseData.candidates && responseData.candidates.length > 0 && responseData.candidates[0].content && responseData.candidates[0].content.parts && responseData.candidates[0].content.parts.length > 0) {
+            content = responseData.candidates[0].content.parts[0].text;
+        } else {
+             console.warn(`Respuesta de prueba de Gemini con formato inesperado o sin contenido.`, responseData);
+        }
+    } else if (provider.isOllamaCompatible && provider.id === 'ollama') {
+        content = responseData.message?.content;
     }
     
     if (content) {
@@ -115,6 +133,7 @@ export async function handleTestLLMConnection(
     return { success: false, message: `Respuesta inesperada de ${provider.name} API durante la prueba de conexión.`, data: responseData };
 
   } catch (error) {
+    clearTimeout(timeoutId); // Clear timeout on error as well
     if (error instanceof Error && error.name === 'AbortError') {
       console.error(`Error de timeout probando la conexión con ${provider.name} API`);
       return { success: false, message: `La prueba de conexión a la API de ${provider.name} excedió el tiempo límite.` };
@@ -122,8 +141,6 @@ export async function handleTestLLMConnection(
     console.error(`Error probando la conexión con ${provider.name} API:`, error);
     const errorMessage = error instanceof Error ? error.message : "Error desconocido";
     return { success: false, message: `Falló la prueba de conexión con ${provider.name}: ${errorMessage}` };
-  } finally {
-    clearTimeout(timeoutId);
   }
 }
 

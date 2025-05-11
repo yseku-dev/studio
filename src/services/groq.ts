@@ -63,6 +63,7 @@ export interface GeneratedProjectResponse {
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
+  name?: string; // Optional agent name for logging/prompt context
 }
 
 export interface ChatLLMPayload {
@@ -132,7 +133,6 @@ async function fetchWithRetry(
         throw lastError;
       } else {
          lastError = new Error(`Error HTTP de ${providerName}: ${response.status} ${response.statusText}. Detalle: ${errorBodyText.substring(0, 500)}`);
-         // Throw immediately for non-retryable HTTP errors other than 429/413
          console.error(`Respuesta de error HTTP ${response.status} de ${providerName}:`, errorBodyText);
          throw lastError;
       }
@@ -141,7 +141,6 @@ async function fetchWithRetry(
       lastError = error as Error;
       if (error instanceof Error && error.name === 'AbortError') {
         console.error(`Error de timeout llamando a ${providerName} en intento ${attempt}`);
-        // Throw immediately, timeout shouldn't be retried by this logic
         throw new Error(`La solicitud a ${providerName} excedió el tiempo límite en el intento ${attempt}.`);
       }
 
@@ -155,7 +154,6 @@ async function fetchWithRetry(
       await new Promise(resolve => setTimeout(resolve, waitMs));
     }
   }
-  // Should theoretically not be reached if all paths throw or return, but satisfies TypeScript
   throw new Error(`Falló la solicitud a ${providerName} después de ${maxRetries} intentos. Último error: ${lastError ? lastError.message : "Error desconocido"}`);
 }
 
@@ -175,42 +173,27 @@ async function makeLLMRequest<TResponse>(
 
   const effectiveApiUrl = options.apiUrl || providerConfig.apiUrl;
   let endpoint = effectiveApiUrl;
-
-  // Determine endpoint path based on provider compatibility
-  if (providerConfig.isGroqCompatible || (providerConfig.id === 'ollama' && !providerConfig.isOllamaCompatible) ) { // Ollama can use /v1/chat
-    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/chat/completions`;
-  } else if (providerConfig.isAnthropicCompatible) {
-    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/messages`;
-  } else if (providerConfig.isOllamaCompatible && providerConfig.id === 'ollama') { // Native Ollama endpoint
-     endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/api/chat`; // or /api/generate if needed
-  } else {
-    throw new Error(`El proveedor ${providerConfig.name} no tiene una configuración de endpoint compatible definida.`);
-  }
-
-  console.log(`[${providerConfig.name} - ${serviceNameSuffix}] Llamando a ${endpoint} con modelo ${options.modelName}`);
-
   const headers: HeadersInit = { 'Content-Type': 'application/json' };
-  if (providerConfig.requiresApiKey && options.apiKey && providerConfig.apiKeyName) {
-     if (providerConfig.isAnthropicCompatible) {
-      headers['x-api-key'] = options.apiKey;
-      headers['anthropic-version'] = '2023-06-01';
-    } else { // Groq, OpenAI, compatible Ollama/LMStudio
-      headers['Authorization'] = `Bearer ${options.apiKey}`;
-    }
-  }
-
   let requestBody: any;
-  if (providerConfig.isGroqCompatible || (providerConfig.id === 'ollama' && !providerConfig.isOllamaCompatible) ) {
+
+  if (providerConfig.isGroqCompatible || (providerConfig.id === 'ollama' && !providerConfig.isOllamaCompatible && !providerConfig.isGoogleGenerativeAICompatible) ) {
+    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/chat/completions`;
+     if (providerConfig.requiresApiKey && options.apiKey) {
+        headers['Authorization'] = `Bearer ${options.apiKey}`;
+    }
     requestBody = {
       model: options.modelName,
       messages: messages,
       temperature: temperature,
       max_tokens: max_tokens,
       response_format: expectedResponseFormat === "json_object" ? { type: "json_object" } : undefined,
-      // stream: false, // Ensure streaming is off for standard requests
     };
   } else if (providerConfig.isAnthropicCompatible) {
-    // Anthropic needs system message separately if present
+    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/messages`;
+    if (providerConfig.requiresApiKey && options.apiKey) {
+        headers['x-api-key'] = options.apiKey;
+        headers['anthropic-version'] = '2023-06-01';
+    }
     const systemMessage = messages.find(m => m.role === 'system');
     const userAssistantMessages = messages.filter(m => m.role !== 'system');
     requestBody = {
@@ -219,23 +202,47 @@ async function makeLLMRequest<TResponse>(
       system: systemMessage?.content,
       temperature: temperature,
       max_tokens: max_tokens,
-      // stream: false,
     };
+  } else if (providerConfig.isGoogleGenerativeAICompatible) {
+    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/${options.modelName}:generateContent?key=${options.apiKey}`;
+    // No Authorization header for Gemini if key is in URL
+    const systemMsg = messages.find(m => m.role === 'system');
+    const chatContents = messages
+        .filter(m => m.role !== 'system')
+        .map(m => ({ 
+            role: m.role === 'assistant' ? 'model' : m.role, // Gemini uses 'model' for assistant
+            parts: [{ text: m.content }] 
+        }));
+    
+    requestBody = {
+        contents: chatContents,
+        generationConfig: {
+            temperature: temperature,
+            maxOutputTokens: max_tokens,
+            // Gemini doesn't have a direct JSON mode like OpenAI, rely on prompt.
+        }
+    };
+    if (systemMsg) {
+        requestBody.systemInstruction = { parts: [{ text: systemMsg.content }] };
+    }
+
   } else if (providerConfig.isOllamaCompatible && providerConfig.id === 'ollama') {
+     endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/api/chat`; 
     requestBody = {
       model: options.modelName,
       messages: messages,
-      stream: false, // For non-streaming response
+      stream: false, 
       format: expectedResponseFormat === "json_object" ? "json" : undefined,
-      options: { // Ollama specific model parameters can go here
+      options: { 
         temperature: temperature,
-        num_predict: max_tokens, // Corresponds to max_tokens
+        num_predict: max_tokens, 
       }
     };
   } else {
-      throw new Error(`Configuración de cuerpo de solicitud no definida para el proveedor ${providerConfig.name}`);
+    throw new Error(`Configuración de solicitud no definida para el proveedor ${providerConfig.name}`);
   }
 
+  console.log(`[${providerConfig.name} - ${serviceNameSuffix}] Llamando a ${endpoint} con modelo ${options.modelName}`);
 
   const controller = new AbortController();
   const timeoutDuration = options.timeoutMs || DEFAULT_TIMEOUT_MS;
@@ -253,27 +260,38 @@ async function makeLLMRequest<TResponse>(
     const data = await response.json();
 
     let contentToParse: string | undefined;
-    if (providerConfig.isGroqCompatible || (providerConfig.id === 'ollama' && !providerConfig.isOllamaCompatible) ) {
+    if (providerConfig.isGroqCompatible || (providerConfig.id === 'ollama' && !providerConfig.isOllamaCompatible && !providerConfig.isGoogleGenerativeAICompatible) ) {
       contentToParse = data.choices?.[0]?.message?.content;
     } else if (providerConfig.isAnthropicCompatible) {
       contentToParse = data.content?.[0]?.text;
+    } else if (providerConfig.isGoogleGenerativeAICompatible) {
+        // Check for candidates and safety ratings which might block content
+        if (data.candidates && data.candidates.length > 0) {
+            const candidate = data.candidates[0];
+            if (candidate.finishReason === "SAFETY") {
+                console.warn(`[${providerConfig.name} - ${serviceNameSuffix}] Contenido bloqueado por razones de seguridad:`, candidate.safetyRatings);
+                throw new Error(`Contenido bloqueado por ${providerConfig.name} debido a filtros de seguridad. Por favor, revisa o ajusta tu prompt.`);
+            }
+            contentToParse = candidate.content?.parts?.[0]?.text;
+        } else if (data.promptFeedback && data.promptFeedback.blockReason) {
+            console.warn(`[${providerConfig.name} - ${serviceNameSuffix}] Prompt bloqueado:`, data.promptFeedback);
+            throw new Error(`Prompt bloqueado por ${providerConfig.name} debido a: ${data.promptFeedback.blockReason}. Detalles: ${data.promptFeedback.safetyRatings?.map((r:any)=>`${r.category} - ${r.probability}`).join(', ')}`);
+        }
     } else if (providerConfig.isOllamaCompatible && providerConfig.id === 'ollama') {
-        contentToParse = data.message?.content; // Native Ollama response structure for non-streaming chat
+        contentToParse = data.message?.content; 
     }
 
 
     if (contentToParse) {
       if (expectedResponseFormat === "json_object") {
         try {
-          // Clean potential markdown code block fences if present
           const cleanedContent = contentToParse.replace(/^```json\s*/, '').replace(/\s*```$/, '');
           return JSON.parse(cleanedContent) as TResponse;
         } catch (parseError) {
           console.error(`Error al parsear la respuesta JSON de ${providerConfig.name} (${serviceNameSuffix}):`, parseError, "\nContenido recibido:", contentToParse);
-          throw new Error(`La respuesta de ${providerConfig.name} (${serviceNameSuffix}) no es un JSON válido o está malformado. Error: ${(parseError as Error).message}`);
+          throw new Error(`La respuesta de ${providerConfig.name} (${serviceNameSuffix}) no es un JSON válido o está malformada. Error: ${(parseError as Error).message}`);
         }
       } else {
-        // For text responses, we assume TResponse is { content: string } or similar
         return { content: contentToParse } as unknown as TResponse;
       }
     } else {
@@ -281,13 +299,10 @@ async function makeLLMRequest<TResponse>(
       throw new Error(`Respuesta inesperada de la API de ${providerConfig.name} (${serviceNameSuffix}). No se encontró contenido interpretable.`);
     }
   } catch (error) {
-     // Ensure errors propagated from fetchWithRetry or thrown here are Error instances with messages
      if (error instanceof Error) {
        console.error(`Error procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}): ${error.message}`);
-       // Re-throw the existing error if it's already an Error instance
        throw error;
      } else {
-       // Wrap unknown errors
        console.error(`Error desconocido procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}):`, error);
        throw new Error(`Error desconocido durante la solicitud a ${providerConfig.name} (${serviceNameSuffix}).`);
      }
@@ -317,12 +332,12 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "codeSugges
     options,
     messages,
     "json_object",
-    0.3, // temperature
-    2048, // max_tokens
+    0.3, 
+    2048, 
     "analyzeCode"
   );
 
-  if (!result.codeSuggestion || typeof result.explanation === 'undefined') { // Check for explanation existence, even if empty string
+  if (!result.codeSuggestion || typeof result.explanation === 'undefined') { 
     console.error("Respuesta JSON de LLM incompleta o malformada (analyzeCode):", result);
     throw new Error("La respuesta JSON del LLM (analyzeCode) no contiene los campos 'codeSuggestion' o 'explanation' esperados.");
   }
@@ -363,12 +378,11 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
       options,
       messages,
       "json_object",
-      0.2, // temperature
-      4000, // max_tokens
+      0.2, 
+      4000, 
       "analyzeProjectSourceChunk"
   );
 
-  // Robust validation of the response structure
    if (
       typeof result.analysisTitle !== 'string' ||
       !Array.isArray(result.identifiedAreas) ||
@@ -378,7 +392,6 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
       console.error("Respuesta JSON de LLM incompleta o con tipos incorrectos (analyzeProjectSourceChunk):", result);
       throw new Error("La respuesta JSON del LLM (analyzeProjectSourceChunk) no tiene la estructura o tipos esperados.");
     }
-    // Optional: Validate suggestion items structure
     for (const sug of result.suggestions) {
         if (typeof sug.area !== 'string' || typeof sug.suggestion !== 'string') {
              console.error("Item de sugerencia inválido en analyzeProjectSourceChunk:", sug, "\nRespuesta completa:", result);
@@ -414,12 +427,12 @@ No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
     options,
     messages,
     "json_object",
-    0.4, // temperature
-    3000, // max_tokens
+    0.4, 
+    3000, 
     "generateCodeFromPrompt"
   );
 
-  if (typeof result.generatedCode !== 'string') { // Check type as well
+  if (typeof result.generatedCode !== 'string') { 
     console.error("Respuesta JSON de LLM incompleta o malformada (generateCodeFromPrompt):", result);
     throw new Error("La respuesta JSON del LLM (generateCodeFromPrompt) no contiene el campo 'generatedCode' como string.");
   }
@@ -460,12 +473,11 @@ No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
     options,
     messages,
     "json_object",
-    0.3, // temperature
-    4000, // max_tokens
+    0.3, 
+    4000, 
     "generateProjectStructure"
   );
 
-  // Robust validation
   if (
       !result.projectStructure ||
       typeof result.projectStructure !== 'object' ||
@@ -494,7 +506,6 @@ export async function chatWithLLM(payload: ChatLLMPayload): Promise<ChatLLMRespo
     throw new Error(`Proveedor LLM no configurado: ${options.providerId}`);
   }
 
-  // Define a default timeout specific to chat if not provided in options
   const chatOptions = {
     ...options,
     timeoutMs: options.timeoutMs || CHAT_COMPLETION_TIMEOUT_MS,
@@ -503,22 +514,21 @@ export async function chatWithLLM(payload: ChatLLMPayload): Promise<ChatLLMRespo
   const result = await makeLLMRequest<ChatLLMResponse>(
     chatOptions,
     messages,
-    "text", // Chat typically expects text response
-    0.7, // temperature, can be higher for chat
-    2048, // max_tokens
+    "text", 
+    0.7, 
+    2048, 
     "chatWithLLM"
   );
 
-  if (typeof result.content !== 'string') { // Check type as well
+  if (typeof result.content !== 'string') { 
     console.error(`Respuesta de LLM incompleta o inválida (chatWithLLM) para ${providerConfig.name}:`, result);
     throw new Error(`Respuesta de LLM (chatWithLLM) para ${providerConfig.name} no contiene contenido textual.`);
   }
   return result;
 }
 
-// Renaming old Groq-specific types for clarity if they are still used elsewhere temporarily
-export type GroqOptions = LLMOptions; // Deprecated: use LLMOptions
-export type GroqResponse = CodeSuggestionResponse; // Deprecated: use CodeSuggestionResponse
-export type ProjectAnalysisGroqResponse = ProjectAnalysisResponse; // Deprecated: use ProjectAnalysisResponse
-export type ChatGroqPayload = ChatLLMPayload; // Deprecated: use ChatLLMPayload
-export type ChatGroqResponse = ChatLLMResponse; // Deprecated: use ChatLLMResponse
+export type GroqOptions = LLMOptions; 
+export type GroqResponse = CodeSuggestionResponse; 
+export type ProjectAnalysisGroqResponse = ProjectAnalysisResponse; 
+export type ChatGroqPayload = ChatLLMPayload; 
+export type ChatGroqResponse = ChatLLMResponse;
