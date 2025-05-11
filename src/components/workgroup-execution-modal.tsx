@@ -81,18 +81,23 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
 
     if (!orchestrator) {
         logMessage({ type: 'error', message: 'Error crítico: Agente Orquestrador no encontrado.' });
-        throw new Error('Orquestrador no encontrado');
+        setExecutionError('Error crítico: Agente Orquestrador no encontrado.');
+        setIsExecuting(false);
+        return;
     }
 
     // Resolve orchestrator options using the utility
-    const orchestratorLlmOptions = resolveLlmOptionsForSource(orchestrator.id, agents);
+    const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, agents, workgroups);
     if (!orchestratorLlmOptions) {
-        throw new Error(`Configuración LLM inválida para el Orquestrador (${orchestrator.name})`);
+        logMessage({ type: 'error', message: `Configuración LLM inválida para el Orquestrador (${orchestrator.name})` });
+        setExecutionError(`Configuración LLM inválida para el Orquestrador (${orchestrator.name})`);
+        setIsExecuting(false);
+        return;
     }
 
     // Resolve participant agent options using the utility
     const participantAgentConfigs = participantAgents.reduce((acc, agent) => {
-        const llmOptions = resolveLlmOptionsForSource(agent.id, agents); // Resolve using utility
+        const llmOptions = resolveLlmOptionsForSource(`agent:${agent.id}`, agents, workgroups); // Resolve using utility
         if (llmOptions) {
             acc[agent.id] = {
                 id: agent.id,
@@ -109,8 +114,11 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
         return acc;
     }, {} as WorkgroupTurnPayload['participantAgentConfigs']);
 
-    if (Object.keys(participantAgentConfigs).length === 0) {
-        throw new Error("No hay agentes participantes con configuración LLM válida.");
+    if (Object.keys(participantAgentConfigs).length === 0 && participantAgents.length > 0) {
+         logMessage({ type: 'error', message: "No hay agentes participantes con configuración LLM válida." });
+         setExecutionError("No hay agentes participantes con configuración LLM válida.");
+         setIsExecuting(false);
+        return;
     }
 
     const payload: WorkgroupTurnPayload = {
@@ -141,17 +149,24 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
             result.serverLogs.forEach(log => {
                 const match = log.match(/^\[(.*?)\] \[(.*?)\] (.*)$/);
                 if (match) {
-                    const [, timestamp, type, message] = match;
+                    const [, timestamp, type, messageData] = match;
+                    let message = messageData;
+                    let data;
+                    if(messageData.includes(' | Data: ')) {
+                        [message, data] = messageData.split(' | Data: ');
+                    }
                     logMessage({
                         timestamp: timestamp,
                         type: type.toLowerCase() as LogEntry['type'] || 'debug',
-                        message: message,
+                        message,
+                        llmResponse: data ? {raw: data} : undefined, // Pass data as llmResponse for server logs
                     });
                 } else {
                     logMessage({ type: 'debug', message: `[SERVER] ${log}` });
                 }
             });
         }
+
 
         if (result.error) {
             logMessage({ type: 'error', message: `Error en el servidor durante el turno ${turn}: ${result.error}` });
@@ -204,7 +219,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
         setIsExecuting(false); // Stop execution on client error or cancellation
     }
 
-}, [orchestrator, resolveLlmOptionsForSource, participantAgents, workgroup.name, workgroup.task, logMessage, getAgentById, agents]); // Added 'agents' dependency for resolveLlmOptionsForSource
+  }, [orchestrator, participantAgents, workgroup.name, workgroup.task, logMessage, getAgentById, agents, workgroups]); // Added 'agents' and 'workgroups' for resolveLlmOptionsForSource
 
 
   const startExecution = useCallback(() => {
@@ -256,7 +271,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
     }
     // Add startExecution to deps, ensure it's stable with useCallback
    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, startExecution]);
+  }, [isOpen]);
 
 
   // Scroll to bottom when logs update
@@ -289,8 +304,8 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
       <DialogContent className="sm:max-w-4xl lg:max-w-6xl h-[85vh] flex flex-col p-0">
         <DialogHeader className="p-6 pb-4 border-b">
           <DialogTitle className="flex items-center gap-2">
-            {isExecuting ? <Loader2 className="h-5 w-5 text-primary animate-spin" /> : <Play className="h-5 w-5 text-primary" />}
-            Ejecución del Grupo: {workgroup.name} {isExecuting && currentTurn > 0 ? `(Turno ${currentTurn}/${MAX_WORKGROUP_TURNS})` : isExecuting ? '(Iniciando...)' : '(Finalizado)'}
+            {isExecuting && currentTurn > 0 ? <Loader2 className="h-5 w-5 text-primary animate-spin" /> : isExecuting && currentTurn === 0 ? <Loader2 className="h-5 w-5 text-primary animate-spin" /> : <Play className="h-5 w-5 text-primary" /> }
+            Ejecución del Grupo: {workgroup.name} {isExecuting && currentTurn > 0 ? `(Turno ${currentTurn}/${MAX_WORKGROUP_TURNS})` : isExecuting && currentTurn === 0 ? '(Iniciando...)' : '(Finalizado)'}
           </DialogTitle>
           <DialogDescription>
             Observa el flujo de trabajo entre los agentes mientras colaboran en la tarea.
@@ -368,7 +383,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
                         {isExecuting && <div className="flex items-center gap-2 mt-2"><Loader2 className="h-4 w-4 animate-spin text-primary inline-block" /><span className='text-sm text-muted-foreground'>Procesando turno...</span></div>}
                          {!isExecuting && executionError && <div className="mt-2 p-2 rounded bg-destructive/10 text-destructive text-sm font-medium">Ejecución detenida debido a un error.</div>}
                          {!isExecuting && !executionError && currentTurn >= MAX_WORKGROUP_TURNS && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución completada (Límite de turnos alcanzado).</div>}
-                         {!isExecuting && !executionError && currentTurn < MAX_WORKGROUP_TURNS && executionLogs.length > 1 && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución finalizada o detenida.</div>}
+                         {!isExecuting && !executionError && currentTurn < MAX_WORKGROUP_TURNS && executionLogs.length > 1 && !isExecuting && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución finalizada o detenida.</div>}
                     </pre>
                 </ScrollArea>
            </div>
@@ -388,3 +403,4 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
     </Dialog>
   );
 }
+
