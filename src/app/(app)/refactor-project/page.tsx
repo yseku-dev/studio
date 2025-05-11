@@ -20,13 +20,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from '@/hooks/use-toast';
-import { GitPullRequestDraft, UploadCloud, GitFork, Loader2, Wand2, Settings2, AlertTriangle, Copy, Trash2, ListOrdered, Eye, CheckCircle, XCircle } from "lucide-react";
+import { GitPullRequestDraft, UploadCloud, GitFork, Loader2, Wand2, Settings2, AlertTriangle, Copy, Trash2, ListOrdered, Eye, CheckCircle, XCircle, Minimize, Expand } from "lucide-react";
 import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
-import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGENT_NAME } from '@/config/agent-config';
+import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGENT_NAME, REFACTOR_AGENT_NAME } from '@/config/agent-config';
 import { LLM_PROVIDERS, LOCALSTORAGE_PROVIDER_ID_KEY, getLocalStorageApiKeyName, getLocalStorageModelName, type LLMProviderId } from '@/config/llm-config';
 import { handleGetRefactoringSuggestions, handleApplyRefactoringSuggestion, type HandleGetRefactoringSuggestionsPayload } from './actions';
+import { cn } from '@/lib/utils'; // Added import for cn
 
 const refactorParamsSchema = z.object({
   goals: z.string().optional(),
@@ -122,6 +123,7 @@ export default function RefactorProjectPage() {
     setAnalysisStatus("loading");
     setCurrentError(null);
     setSuggestions([]);
+    setDetailedLogs([]); // Clear previous logs
     addLog("Iniciando análisis de refactorización...");
 
     const file = data.projectFile;
@@ -132,30 +134,39 @@ export default function RefactorProjectPage() {
     if (file) {
       projectFileName = file.name;
       projectFileType = file.type;
+      addLog(`Procesando archivo: ${projectFileName} (Tipo: ${projectFileType || 'desconocido'})`);
       try {
-        // For ZIP, we'd ideally send the binary data or process on client to extract text.
-        // For now, if it's not JSON or text, we can't read its content as a simple string here.
         if (file.type === 'application/json' || file.type.startsWith('text/')) {
             projectFileContent = await file.text();
+            addLog(`Contenido de archivo de texto/JSON leído. Tamaño: ${projectFileContent.length} bytes.`);
         } else if (file.type === 'application/zip' || file.name.endsWith('.zip')) {
-            // We can't read ZIP content as simple text on client for now.
-            // The server action will handle the "simulated" placeholder.
-            // If actual ZIP processing were client-side, it'd be more complex.
-            addLog(`Archivo ZIP (${file.name}) seleccionado. El contenido textual no se leerá en el cliente para este tipo.`);
+            addLog(`Archivo ZIP (${file.name}) seleccionado. Se enviará como string base64 (simulado) o se procesará en servidor.`);
+            // Simulating base64 for now; server would handle actual ZIP processing.
+            // For a real implementation, you might read as ArrayBuffer and convert to base64.
+            // const arrayBuffer = await file.arrayBuffer();
+            // projectFileContent = Buffer.from(arrayBuffer).toString('base64'); 
+            // This is a placeholder since direct content reading of ZIP isn't straightforward in browser for text.
+            projectFileContent = `Contenido_ZIP_Placeholder_Nombre:${file.name}_Tipo:${file.type}`;
+            addLog(`Contenido ZIP (placeholder) preparado. Longitud: ${projectFileContent.length}`);
         } else {
-            toast({ title: "Error de Archivo", description: `No se puede procesar el contenido de '${file.name}' como texto.`, variant: "destructive" });
+            toast({ title: "Error de Archivo", description: `No se puede procesar el contenido de '${file.name}' como texto o ZIP estándar.`, variant: "destructive" });
             setAnalysisStatus("idle");
+            addLog(`Error: Tipo de archivo no soportado para lectura de contenido: ${file.name}`);
             return;
         }
       } catch (e) {
         toast({ title: "Error de Lectura", description: "No se pudo leer el contenido del archivo.", variant: "destructive" });
         setAnalysisStatus("idle");
+        addLog(`Error leyendo archivo ${file.name}: ${(e as Error).message}`);
         return;
       }
+    } else if (data.gitUrl) {
+        addLog(`Usando URL de Git: ${data.gitUrl} (Extracción de contenido es simulada).`);
     }
     
     let snapshot: LocalStorageSnapshot | undefined = undefined;
     if (data.configSource.startsWith('workgroup:')) {
+      addLog(`Usando grupo de trabajo. Recopilando snapshot de localStorage...`);
       snapshot = {
         [LOCALSTORAGE_PROVIDER_ID_KEY]: localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null,
         apiKeys: {},
@@ -167,7 +178,16 @@ export default function RefactorProjectPage() {
         snapshot!.modelNames[provider.id] = localStorage.getItem(getLocalStorageModelName(provider.id));
         snapshot!.apiUrls[provider.id] = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
       });
+      addLog(`Snapshot de localStorage recopilado para grupo de trabajo.`);
+    } else if (resolvedLlmOptions) {
+        addLog(`Usando configuración LLM directa: ${resolvedLlmOptions.providerId} - ${resolvedLlmOptions.modelName}`);
+    } else {
+        addLog(`Error: No se pudo resolver la configuración LLM para ${data.configSource}.`);
+        toast({ title: "Error de Configuración", description: `No se pudo resolver la configuración LLM para ${getSourceName(data.configSource)}.`, variant: "destructive"});
+        setAnalysisStatus("idle");
+        return;
     }
+
 
     const actionPayload: HandleGetRefactoringSuggestionsPayload = {
       projectFileContent,
@@ -184,47 +204,66 @@ export default function RefactorProjectPage() {
     };
     
     setAnalysisStatus("analyzing");
+    addLog(`Enviando solicitud de análisis al servidor...`);
     const result = await handleGetRefactoringSuggestions(actionPayload);
-    (result.workgroupLogs || []).forEach(logMsg => addLog(`[SERVER] ${logMsg}`));
-
+    (result.workgroupLogs || []).forEach(logMsg => addLog(`[SERVER_WG] ${logMsg}`)); // Log workgroup-specific logs
 
     if (result.success && result.data) {
       setSuggestions(result.data.map(s => ({...s, id: crypto.randomUUID(), status: 'pending'})));
       setAnalysisStatus("success");
-      toast({ title: "Análisis Completado", description: "Sugerencias de refactorización generadas." });
+      toast({ title: "Análisis Completado", description: `Sugerencias de refactorización generadas (${result.data.length}).` });
+      addLog(`Análisis completado. ${result.data.length} sugerencias recibidas.`);
     } else {
       setCurrentError(result.error || "Error desconocido durante el análisis.");
       setAnalysisStatus("error");
-      toast({ title: "Error de Análisis", description: result.error, variant: "destructive" });
+      toast({ title: "Error de Análisis", description: result.error || "No se pudieron generar sugerencias.", variant: "destructive", duration: 7000 });
+      addLog(`Error en el análisis: ${result.error || "Desconocido"}`);
     }
-    setAnalysisStatus(isProcessing ? "analyzing" : result.success ? "success" : "error");
   };
 
   const handleApplySuggestion = async (suggestionId: string) => {
     addLog(`Intentando aplicar sugerencia: ${suggestionId}`);
-    // TODO: Implement server action call
-    // For now, we need a projectIdentifier. This could be the projectFileName if dealing with single file content.
-    // If it's a ZIP or Git repo, this becomes more complex and would need server-side state.
     const suggestion = suggestions.find(s => s.id === suggestionId);
-    if (!suggestion) return;
+    if (!suggestion) {
+        addLog(`Error: Sugerencia con ID ${suggestionId} no encontrada.`);
+        return;
+    }
+    if (!suggestion.area || !suggestion.suggestedSnippet) {
+        addLog(`Error: Sugerencia ${suggestionId} (${suggestion.area}) no tiene contenido sugerido para aplicar.`);
+        toast({title: "No Aplicable", description: "Esta sugerencia no tiene un cambio de código directo para aplicar.", variant: "default"});
+        setSuggestions(prev => prev.map(s => s.id === suggestionId ? {...s, status: 'error', errorMessage: 'Sin contenido para aplicar.'} : s));
+        return;
+    }
 
-    toast({title: "Aplicando Sugerencia (Simulado)", description: `Aplicando cambios para ${suggestion.area}. La funcionalidad real está pendiente.`});
+    // SIMULATED: In a real scenario, this would involve updating files.
+    // For this simulation, we'll just mark it as applied.
+    // The server action `handleApplyRefactoringSuggestion` is a placeholder.
+    toast({title: "Aplicando Sugerencia (Simulado)", description: `Aplicando cambios para ${suggestion.area}. La funcionalidad real de modificación de archivos está pendiente.`});
+    await new Promise(resolve => setTimeout(resolve, 700)); // Simulate network delay
     setSuggestions(prev => prev.map(s => s.id === suggestionId ? {...s, status: 'applied'} : s));
-    // const result = await handleApplyRefactoringSuggestion({suggestionId, projectIdentifier: "current_project_context_placeholder"});
-    // Update suggestion status based on result
+    addLog(`Sugerencia ${suggestionId} marcada como aplicada (simulado).`);
   };
 
   const handleDismissSuggestion = (suggestionId: string) => {
+    addLog(`Descartando sugerencia: ${suggestionId}`);
     setSuggestions(prev => prev.map(s => s.id === suggestionId ? {...s, status: 'dismissed'} : s));
-    toast({title: "Sugerencia Descartada", description: `Sugerencia ${suggestionId} descartada.`});
+    toast({title: "Sugerencia Descartada"});
   };
   
   const handleApplyAllSuggestions = async () => {
-    addLog("Intentando aplicar todas las sugerencias...");
+    addLog("Intentando aplicar todas las sugerencias pendientes (simulado)...");
     toast({ title: "Aplicando Todas (Simulado)", description: "Se están aplicando todas las sugerencias. La funcionalidad real está pendiente." });
     await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate delay
-    setSuggestions(prev => prev.map(s => s.status === 'pending' ? {...s, status: 'applied'} : s));
-    toast({ title: "Todas las Sugerencias Aplicadas (Simulado)" });
+    let appliedCount = 0;
+    setSuggestions(prev => prev.map(s => {
+        if (s.status === 'pending' && s.suggestedSnippet) {
+            appliedCount++;
+            return {...s, status: 'applied'};
+        }
+        return s;
+    }));
+    toast({ title: "Todas las Sugerencias Aplicadas (Simulado)", description: `${appliedCount} sugerencias marcadas como aplicadas.` });
+    addLog(`${appliedCount} sugerencias marcadas como aplicadas (simulado).`);
   };
 
 
@@ -236,7 +275,8 @@ export default function RefactorProjectPage() {
     if (sourceId.startsWith(agentPrefix)) {
       const agentId = sourceId.substring(agentPrefix.length);
       const agent = agents.find(a => a.id === agentId);
-      return agent ? `Agente: ${agent.name}` : `Agente ${agentId.substring(0, 6)}...`;
+      // Use REFACTOR_AGENT_NAME if the specific agent matches it
+      return agent ? (agent.name === REFACTOR_AGENT_NAME ? REFACTOR_AGENT_NAME : `Agente: ${agent.name}`) : `Agente ${agentId.substring(0, 6)}...`;
     }
     if (sourceId.startsWith(workgroupPrefix)) {
       const workgroupId = sourceId.substring(workgroupPrefix.length);
@@ -285,11 +325,11 @@ export default function RefactorProjectPage() {
                       <SelectValue placeholder="Seleccionar fuente (Agente Refactorizador o Grupo)" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="global">Agente Refactorizador (Config. Global)</SelectItem>
-                      {agents.filter(a => a.name.toLowerCase().includes("refactor") || a.name === ORCHESTRATOR_AGENT_NAME || a.name === "RefactorizadorCodigoExperto").map(agent => (
+                      <SelectItem value="global">Agente {REFACTOR_AGENT_NAME} (Config. Global)</SelectItem>
+                      {agents.filter(a => a.name === REFACTOR_AGENT_NAME).map(agent => (
                         <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>
                       ))}
-                       {workgroups.filter(wg => wg.agentIds.some(agentId => agents.find(a => a.id === agentId)?.name.toLowerCase().includes("refactor") || agents.find(a => a.id === agentId)?.name === "RefactorizadorCodigoExperto")).map(wg => (
+                       {workgroups.filter(wg => wg.agentIds.some(agentId => agents.find(a => a.id === agentId)?.name === REFACTOR_AGENT_NAME)).map(wg => (
                         <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>
                       ))}
                     </SelectContent>
@@ -307,7 +347,7 @@ export default function RefactorProjectPage() {
               <TabsContent value="upload" className="mt-6">
                 <div className="space-y-2">
                   <Label htmlFor="project-file" className="text-base">Archivo del Proyecto (.zip, .json, .txt, .py, etc.)</Label>
-                  <Input id="project-file" type="file" accept=".zip,.json,application/zip,application/json,text/*,.py,.js,.ts,.java" onChange={handleFileChange} className="text-base file:text-base" />
+                  <Input id="project-file" type="file" accept=".zip,.json,application/zip,application/json,text/*,.py,.js,.ts,.java,.cs,.rb,.go,.php,.html,.css,.md" onChange={handleFileChange} className="text-base file:text-base" />
                   {fileForm.watch('projectFile') && <p className="text-sm text-muted-foreground">Seleccionado: {fileForm.watch('projectFile.name')}</p>}
                   {fileForm.formState.errors.projectFile && <p className="text-sm text-destructive mt-1">{fileForm.formState.errors.projectFile.message as string}</p>}
                 </div>
@@ -322,21 +362,21 @@ export default function RefactorProjectPage() {
               </TabsContent>
             </Tabs>
 
-            <Card className="bg-muted/30 p-4">
-              <CardTitle className="text-md mb-2">Parámetros de Refactorización</CardTitle>
+            <Card className="bg-muted/30 p-4 border border-border">
+              <CardTitle className="text-md mb-2 text-foreground">Parámetros de Refactorización</CardTitle>
               <div className="space-y-3">
                 <div>
-                  <Label htmlFor="goals">Metas (separadas por coma)</Label>
-                  <Input id="goals" {...paramsForm.register('goals')} placeholder="Ej: Mejorar rendimiento, Estandarizar código" />
+                  <Label htmlFor="goals" className="text-foreground">Metas (opcional, separadas por coma)</Label>
+                  <Input id="goals" {...paramsForm.register('goals')} placeholder="Ej: Mejorar rendimiento, Estandarizar código" className="bg-card"/>
                 </div>
                 <div>
-                  <Label htmlFor="priority">Prioridad General</Label>
+                  <Label htmlFor="priority" className="text-foreground">Prioridad General (opcional)</Label>
                   <Controller
                     name="priority"
                     control={paramsForm.control}
                     render={({ field }) => (
-                      <Select onValueChange={field.onChange} value={field.value}>
-                        <SelectTrigger id="priority"><SelectValue placeholder="Seleccionar prioridad" /></SelectTrigger>
+                      <Select onValueChange={field.onChange} value={field.value || ""}>
+                        <SelectTrigger id="priority" className="bg-card"><SelectValue placeholder="Seleccionar prioridad" /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="seguridad">Priorizar Seguridad</SelectItem>
                           <SelectItem value="legibilidad">Priorizar Legibilidad</SelectItem>
@@ -356,8 +396,8 @@ export default function RefactorProjectPage() {
               {isProcessing ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Wand2 className="mr-2 h-5 w-5" />} Analizar para Refactorizar
             </Button>
             {analysisStatus === 'success' && suggestions.length > 0 && (
-              <Button onClick={handleApplyAllSuggestions} variant="secondary" className="w-full md:w-auto text-base">
-                Aplicar Todas las Sugerencias ({suggestions.filter(s=>s.status === 'pending').length}) (Simulado)
+              <Button onClick={handleApplyAllSuggestions} variant="secondary" className="w-full md:w-auto text-base text-secondary-foreground">
+                Aplicar Todas las Sugerencias ({suggestions.filter(s=>s.status === 'pending' && s.suggestedSnippet).length}) (Simulado)
               </Button>
             )}
           </CardFooter>
@@ -368,6 +408,7 @@ export default function RefactorProjectPage() {
         <div data-ai-hint="project refactoring loading" className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6">
           <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
           <p className="text-lg text-foreground">Analizando proyecto para refactorización...</p>
+          <p className="text-sm text-muted-foreground">Esto puede tardar varios minutos dependiendo del tamaño del proyecto y el modelo LLM.</p>
         </div>
       )}
 
@@ -375,8 +416,8 @@ export default function RefactorProjectPage() {
         <Card className="shadow-lg border-destructive bg-destructive/10 mt-6">
           <CardHeader><CardTitle className="text-xl flex items-center gap-2 text-destructive"><AlertTriangle className="h-6 w-6" /> Error de Análisis</CardTitle></CardHeader>
           <CardContent className="space-y-2">
-            <p className="text-destructive">No se pudo completar el análisis:</p>
-            <ScrollArea className="h-[80px] p-2 border border-destructive/30 rounded bg-background/50"><pre className="text-xs text-foreground whitespace-pre-wrap">{currentError}</pre></ScrollArea>
+            <p className="text-destructive font-medium">No se pudo completar el análisis:</p>
+            <ScrollArea className="h-[80px] p-2 border border-destructive/30 rounded bg-card/80"><pre className="text-xs text-destructive whitespace-pre-wrap">{currentError}</pre></ScrollArea>
              <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(currentError)} className="mt-2 text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground">
                 <Copy className="mr-2 h-4 w-4"/> Copiar Error
             </Button>
@@ -385,41 +426,42 @@ export default function RefactorProjectPage() {
       )}
 
       {analysisStatus === "success" && suggestions.length > 0 && (
-        <Card className="mt-6">
+        <Card className="mt-6 shadow-lg">
           <CardHeader>
-            <CardTitle>Sugerencias de Refactorización ({suggestions.length})</CardTitle>
+            <CardTitle className="text-2xl text-primary">Sugerencias de Refactorización ({suggestions.length})</CardTitle>
+            <CardDescription>Revisa las sugerencias generadas por la IA. Aplicar cambios es actualmente simulado.</CardDescription>
           </CardHeader>
           <CardContent>
             <ScrollArea className="h-[500px] pr-3">
               <ul className="space-y-4">
                 {suggestions.map((s) => (
                   <li key={s.id}>
-                    <Card className="bg-card/50">
+                    <Card className="bg-card/80 border border-border hover:shadow-md">
                       <CardHeader className="pb-3">
                         <div className="flex justify-between items-start">
-                          <CardTitle className="text-md">{s.area}</CardTitle>
+                          <CardTitle className="text-md text-foreground">{s.area}</CardTitle>
                           <Badge variant={s.priority === 'Alta' ? 'destructive' : s.priority === 'Media' ? 'default' : 'outline'} className="capitalize text-xs shrink-0">{s.priority}</Badge>
                         </div>
-                        <CardDescription className="text-sm">{s.description}</CardDescription>
+                        <CardDescription className="text-sm text-muted-foreground pt-1">{s.description}</CardDescription>
                       </CardHeader>
                       {s.suggestedSnippet && (
                         <CardContent className="py-2">
-                          <Label className="text-xs">Cambio Sugerido:</Label>
-                          <ScrollArea className="max-h-32 mt-1 rounded bg-muted p-2 border"><pre className="text-xs font-mono whitespace-pre-wrap">{s.suggestedSnippet}</pre></ScrollArea>
+                          <Label className="text-xs text-foreground">Cambio Sugerido:</Label>
+                          <ScrollArea className="max-h-40 mt-1 rounded bg-muted p-2 border"><pre className="text-xs font-mono whitespace-pre-wrap text-foreground">{s.suggestedSnippet}</pre></ScrollArea>
                         </CardContent>
                       )}
                       <CardFooter className="pt-3 gap-2 flex-wrap">
-                        <Button size="sm" variant="outline" onClick={() => handleApplySuggestion(s.id)} disabled={s.status === 'applied' || s.status === 'dismissed'} className="text-xs">
-                          {s.status === 'applied' ? <CheckCircle className="mr-1 h-4 w-4"/> : <Wand2 className="mr-1 h-4 w-4" />}
-                          {s.status === 'applied' ? 'Aplicada (Simulado)' : 'Aplicar (Simulado)'}
+                        <Button size="sm" variant="outline" onClick={() => handleApplySuggestion(s.id)} disabled={s.status === 'applied' || s.status === 'dismissed' || !s.suggestedSnippet} className={cn("text-xs", s.status === 'applied' && "border-green-500 text-green-600")}>
+                          {s.status === 'applied' ? <CheckCircle className="mr-1 h-4 w-4"/> : s.status === 'error' ? <XCircle className="mr-1 h-4 w-4 text-destructive"/> : <Wand2 className="mr-1 h-4 w-4" />}
+                          {s.status === 'applied' ? 'Aplicada (Simulado)' : s.status === 'error' ? 'Error al aplicar' : 'Aplicar (Simulado)'}
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => toast({title: "Vista de Diff (Simulada)", description: `Mostrando diferencias para ${s.area}. Funcionalidad de Diff real está pendiente.`})} className="text-xs">
-                          <Eye className="mr-1 h-4 w-4"/> Ver Diff
+                        <Button size="sm" variant="ghost" onClick={() => toast({title: "Vista de Diff (Simulada)", description: `Mostrando diferencias para ${s.area}. Funcionalidad de Diff real está pendiente.`})} className="text-xs text-muted-foreground hover:text-primary">
+                          <Eye className="mr-1 h-4 w-4"/> Ver Diff (Simulado)
                         </Button>
                         <Button size="sm" variant="ghost" onClick={() => handleDismissSuggestion(s.id)} disabled={s.status === 'applied' || s.status === 'dismissed'} className="text-xs text-muted-foreground hover:text-destructive">
                           <Trash2 className="mr-1 h-4 w-4"/> Descartar
                         </Button>
-                         {s.status === 'error' && <p className="text-xs text-destructive flex items-center gap-1"><XCircle className="h-3 w-3"/>Error al aplicar: {s.errorMessage}</p>}
+                         {s.status === 'error' && s.errorMessage && <p className="text-xs text-destructive flex items-center gap-1 w-full mt-1"><AlertTriangle className="h-3 w-3"/>{s.errorMessage}</p>}
                       </CardFooter>
                     </Card>
                   </li>
@@ -429,13 +471,24 @@ export default function RefactorProjectPage() {
           </CardContent>
         </Card>
       )}
+       {analysisStatus === 'success' && suggestions.length === 0 && (
+        <Card className="mt-6 border-dashed border-border">
+            <CardContent className="p-6 text-center">
+                <GitPullRequestDraft className="mx-auto h-12 w-12 text-muted-foreground mb-3" />
+                <p className="text-lg font-medium text-foreground">No se generaron sugerencias</p>
+                <p className="text-sm text-muted-foreground">La IA no encontró puntos específicos de refactorización o el proyecto es muy pequeño.</p>
+            </CardContent>
+        </Card>
+       )}
 
       {detailedLogs.length > 0 && (
-        <Card className="mt-6 border-primary/30">
+        <Card className="mt-6 border-primary/30 shadow-md">
           <CardHeader className="pb-2 flex flex-row items-center justify-between">
             <CardTitle className="text-lg flex items-center gap-2 text-primary"><ListOrdered className="h-5 w-5" /> Logs de Ejecución</CardTitle>
             <div className="flex items-center gap-2">
-              <Button variant="ghost" size="icon" onClick={() => setLogsExpanded(!logsExpanded)} title={logsExpanded ? "Contraer" : "Expandir"}><ListOrdered className="h-4 w-4" /></Button>
+              <Button variant="ghost" size="icon" onClick={() => setLogsExpanded(!logsExpanded)} title={logsExpanded ? "Contraer Logs" : "Expandir Logs"}>
+                  {logsExpanded ? <Minimize className="h-4 w-4" /> : <Expand className="h-4 w-4" />}
+              </Button>
               <Button variant="ghost" size="icon" onClick={() => setDetailedLogs([])} title="Limpiar Logs"><Trash2 className="h-4 w-4 text-destructive" /></Button>
               <Button variant="ghost" size="icon" onClick={() => navigator.clipboard.writeText(detailedLogs.join("\n"))} title="Copiar Logs"><Copy className="h-4 w-4" /></Button>
             </div>
@@ -444,7 +497,7 @@ export default function RefactorProjectPage() {
             <ScrollArea className={cn("p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out", logsExpanded ? "h-[300px]" : "h-[100px]")}>
               <pre className="text-xs text-foreground whitespace-pre-wrap">
                 {detailedLogs.map((log, index) => (
-                  <span key={`log-${index}`} className={log.includes("[ERROR") || log.includes("Error:") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-500" : ""}>{log}\n</span>
+                  <span key={`log-${index}`} className={log.includes("[ERROR") || log.includes("Error:") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-600 dark:text-yellow-400" : ""}>{log}\n</span>
                 ))}
               </pre>
             </ScrollArea>
@@ -454,3 +507,4 @@ export default function RefactorProjectPage() {
     </div>
   );
 }
+
