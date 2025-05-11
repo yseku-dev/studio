@@ -1,4 +1,3 @@
-
 // src/components/workgroup-execution-modal.tsx
 'use client';
 
@@ -31,36 +30,36 @@ interface WorkgroupExecutionModalProps {
   isOpen: boolean;
   onClose: () => void;
   workgroup: WorkgroupConfig;
-  agents: AgentConfig[]; // Pass available agents to find names and orchestrator
-  workgroups: WorkgroupConfig[]; // Pass all workgroups for resolving LLM options
+  agents: AgentConfig[]; 
+  workgroups: WorkgroupConfig[]; 
 }
-
 
 type LogEntry = {
     timestamp: string;
     type: 'info' | 'agent' | 'error' | 'orchestrator' | 'system' | 'debug';
-    agentName?: string; // Name of the agent speaking or being called
+    agentName?: string; 
     message: string;
-    llmRequest?: any; // Store parts of the request if needed for debug
-    llmResponse?: any; // Store parts of the response if needed for debug
+    llmRequest?: any; 
+    llmResponse?: any; 
 };
 
 export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, workgroups }: WorkgroupExecutionModalProps) {
   const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
-  const [currentTurn, setCurrentTurn] = useState(0); // Renamed from currentTurnInternal
+  const isExecutingRef = useRef(false); // Ref to track execution state reliably
+  const [currentTurn, setCurrentTurn] = useState(0);
   const [conversationHistory, setConversationHistory] = useState<ChatMessage[]>([]);
   const [executionError, setExecutionError] = useState<string | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
-  const executionControllerRef = useRef<AbortController | null>(null); // To allow cancelling
-  const isMountedRef = useRef(false); // Track mount state
+  const executionControllerRef = useRef<AbortController | null>(null);
+  const isMountedRef = useRef(false);
   const { toast } = useToast();
 
   const orchestrator = agents.find(a => a.id === workgroup.agentIds.find(id => agents.find(a => a.id === id)?.name === ORCHESTRATOR_AGENT_NAME));
   const participantAgents = agents.filter(a => workgroup.agentIds.includes(a.id) && a.id !== orchestrator?.id);
 
   const logMessage = useCallback((logEntry: Omit<LogEntry, 'timestamp'>) => {
-    if (!isMountedRef.current) return; // Prevent logging if component unmounted
+    if (!isMountedRef.current) return;
     const timestamp = new Date().toLocaleTimeString('es-ES', { hour12: false });
     setExecutionLogs(prev => [...prev, { ...logEntry, timestamp }]);
   }, []);
@@ -69,45 +68,41 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
     return agents.find(a => a.id === agentId);
   }, [agents]);
 
-
   const runExecutionTurn = useCallback(async (turn: number, history: ChatMessage[], signal: AbortSignal) => {
     if (!isMountedRef.current || signal.aborted) {
         logMessage({ type: 'system', message: 'Ejecución detenida (Componente desmontado o señal cancelada).' });
         setIsExecuting(false);
+        isExecutingRef.current = false;
         return;
     }
 
     logMessage({ type: 'system', message: `Iniciando turno ${turn}/${MAX_WORKGROUP_TURNS}...` });
-    setCurrentTurn(turn); // Update UI turn count
+    setCurrentTurn(turn);
 
     if (!orchestrator) {
         logMessage({ type: 'error', message: 'Error crítico: Agente Orquestrador no encontrado.' });
         setExecutionError('Error crítico: Agente Orquestrador no encontrado.');
         setIsExecuting(false);
+        isExecutingRef.current = false;
         return;
     }
 
-    // Resolve orchestrator options using the utility
     const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, agents, workgroups);
     if (!orchestratorLlmOptions) {
         logMessage({ type: 'error', message: `Configuración LLM inválida para el Orquestrador (${orchestrator.name})` });
         setExecutionError(`Configuración LLM inválida para el Orquestrador (${orchestrator.name})`);
         setIsExecuting(false);
+        isExecutingRef.current = false;
         return;
     }
 
-    // Resolve participant agent options using the utility
     const participantAgentConfigs = participantAgents.reduce((acc, agent) => {
-        const llmOptions = resolveLlmOptionsForSource(`agent:${agent.id}`, agents, workgroups); // Resolve using utility
+        const llmOptions = resolveLlmOptionsForSource(`agent:${agent.id}`, agents, workgroups);
         if (llmOptions) {
             acc[agent.id] = {
-                id: agent.id,
-                name: agent.name,
-                systemMessage: agent.systemMessage,
-                llmProviderId: llmOptions.providerId,
-                llmModelName: llmOptions.modelName,
-                llmApiKey: llmOptions.apiKey,
-                llmApiUrl: llmOptions.apiUrl
+                id: agent.id, name: agent.name, systemMessage: agent.systemMessage,
+                llmProviderId: llmOptions.providerId, llmModelName: llmOptions.modelName,
+                llmApiKey: llmOptions.apiKey, llmApiUrl: llmOptions.apiUrl
             };
         } else {
             logMessage({ type: 'error', message: `Omitiendo agente ${agent.name} debido a configuración LLM inválida.` });
@@ -119,25 +114,18 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
          logMessage({ type: 'error', message: "No hay agentes participantes con configuración LLM válida." });
          setExecutionError("No hay agentes participantes con configuración LLM válida.");
          setIsExecuting(false);
+         isExecutingRef.current = false;
         return;
     }
 
     const payload: WorkgroupTurnPayload = {
-        workgroupName: workgroup.name,
-        task: workgroup.task,
-        conversationHistory: history, // Use current history for this turn
-        orchestrator: { // Use resolved options
-            id: orchestrator.id,
-            name: orchestrator.name,
-            systemMessage: orchestrator.systemMessage,
-            llmProviderId: orchestratorLlmOptions.providerId,
-            llmModelName: orchestratorLlmOptions.modelName,
-            llmApiKey: orchestratorLlmOptions.apiKey,
-            llmApiUrl: orchestratorLlmOptions.apiUrl
+        workgroupName: workgroup.name, task: workgroup.task, conversationHistory: history,
+        orchestrator: {
+            id: orchestrator.id, name: orchestrator.name, systemMessage: orchestrator.systemMessage,
+            llmProviderId: orchestratorLlmOptions.providerId, llmModelName: orchestratorLlmOptions.modelName,
+            llmApiKey: orchestratorLlmOptions.apiKey, llmApiUrl: orchestratorLlmOptions.apiUrl
         },
-        participantAgentConfigs: participantAgentConfigs,
-        currentTurn: turn, // Pass the current turn number
-        maxTurns: MAX_WORKGROUP_TURNS // Use constant
+        participantAgentConfigs, currentTurn: turn, maxTurns: MAX_WORKGROUP_TURNS
     };
 
     logMessage({ type: 'debug', message: `Enviando payload al servidor para el turno ${turn}`, llmRequest: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
@@ -145,7 +133,6 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
     try {
         const result: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
 
-        // Log server-side logs first
         if (result.serverLogs && result.serverLogs.length > 0) {
             result.serverLogs.forEach(log => {
                 const match = log.match(/^\[(.*?)\] \[(.*?)\] (.*)$/);
@@ -153,14 +140,18 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
                     const [, timestamp, type, messageData] = match;
                     let message = messageData;
                     let data;
-                    if(messageData.includes(' | Data: ')) {
-                        [message, data] = messageData.split(' | Data: ');
+                    const dataSplit = messageData.split(' | Data: ');
+                    if (dataSplit.length > 1) {
+                        message = dataSplit[0];
+                        try {
+                            data = JSON.parse(dataSplit.slice(1).join(' | Data: ')); // Rejoin if ' | Data: ' was in the data itself
+                        } catch {
+                            data = {raw: dataSplit.slice(1).join(' | Data: ')}; // If not valid JSON, keep as raw string
+                        }
                     }
                     logMessage({
-                        timestamp: timestamp,
-                        type: type.toLowerCase() as LogEntry['type'] || 'debug',
-                        message,
-                        llmResponse: data ? {raw: data} : undefined, // Pass data as llmResponse for server logs
+                        timestamp: timestamp, type: type.toLowerCase() as LogEntry['type'] || 'debug', message,
+                        llmResponse: data ? data : undefined,
                     });
                 } else {
                     logMessage({ type: 'debug', message: `[SERVER] ${log}` });
@@ -168,47 +159,44 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
             });
         }
 
-
         if (result.error) {
             logMessage({ type: 'error', message: `Error en el servidor durante el turno ${turn}: ${result.error}` });
             setExecutionError(result.error);
-            setIsExecuting(false); // Stop execution on server error
-            return; // Stop the sequence
+            setIsExecuting(false);
+            isExecutingRef.current = false;
+            return;
         }
-
-        // Update conversation history *before* scheduling the next turn
+        
         const updatedHistory = result.updatedHistory || history;
-        setConversationHistory(updatedHistory); // Update state for UI and next turn
+        setConversationHistory(updatedHistory);
 
-        // Log detailed interactions if provided
         if (result.orchestratorDecision) {
             const nextAgentName = getAgentById(result.orchestratorDecision.nextAgentId)?.name || result.orchestratorDecision.nextAgentId;
             logMessage({ type: 'orchestrator', agentName: orchestrator.name, message: `Decisión: ${result.orchestratorDecision.reason}. Próximo agente: ${nextAgentName}.`, llmResponse: { raw: result.orchestratorDecision.rawOutput } });
         }
         if (result.agentResponse) {
              const respondingAgentName = getAgentById(result.agentResponse.agentId)?.name || result.agentResponse.agentId;
-            logMessage({ type: 'agent', agentName: respondingAgentName, message: `Respuesta: ${result.agentResponse.content.substring(0,1000)}${result.agentResponse.content.length > 1000 ? '...' : ''}`, llmResponse: { raw: result.agentResponse.rawOutput } }); // Log more of the message
+            logMessage({ type: 'agent', agentName: respondingAgentName, message: `Respuesta: ${result.agentResponse.content}`, llmResponse: { raw: result.agentResponse.rawOutput } });
         }
-
 
         if (result.isComplete || turn >= MAX_WORKGROUP_TURNS) {
             logMessage({ type: 'system', message: `Ejecución finalizada (Razón: ${result.isComplete ? 'Tarea completada por orquestador' : 'Límite de turnos alcanzado'}).` });
             setIsExecuting(false);
+            isExecutingRef.current = false;
         } else if (!signal.aborted) {
-            // Schedule next turn after a delay
-            await new Promise(resolve => setTimeout(resolve, 1500)); // Delay between turns
+            await new Promise(resolve => setTimeout(resolve, 1500));
             if (!signal.aborted && isMountedRef.current) {
-                // Recursive call with the *next* turn number and the *updated* history
-                runExecutionTurn(turn + 1, updatedHistory, signal); // Pass updated history
+                runExecutionTurn(turn + 1, updatedHistory, signal);
             } else if (signal.aborted) {
                  logMessage({ type: 'system', message: 'Ejecución cancelada por el usuario durante la espera.' });
                  setIsExecuting(false);
+                 isExecutingRef.current = false;
             }
         } else {
             logMessage({ type: 'system', message: 'Ejecución cancelada por el usuario.' });
             setIsExecuting(false);
+            isExecutingRef.current = false;
         }
-
     } catch (error) {
         if (error instanceof Error && error.name === 'AbortError') {
             logMessage({ type: 'system', message: 'Ejecución cancelada por el usuario.' });
@@ -217,65 +205,67 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
             logMessage({ type: 'error', message: `Error en el cliente durante el turno ${turn}: ${errorMsg}` });
             setExecutionError(errorMsg);
         }
-        setIsExecuting(false); // Stop execution on client error or cancellation
+        setIsExecuting(false);
+        isExecutingRef.current = false;
     }
-
   }, [orchestrator, participantAgents, workgroup.name, workgroup.task, logMessage, getAgentById, agents, workgroups]);
 
-
   const startExecution = useCallback(() => {
-    if (isExecuting) return;
     setIsExecuting(true);
+    isExecutingRef.current = true;
     setExecutionLogs([]);
     const initialHistory: ChatMessage[] = [];
     setConversationHistory(initialHistory);
-    setCurrentTurn(0); // Start turn count before first execution
+    setCurrentTurn(0);
     setExecutionError(null);
-    executionControllerRef.current = new AbortController();
-
+    
     logMessage({ type: 'system', message: `Iniciando ejecución del grupo de trabajo "${workgroup.name}"...` });
     logMessage({ type: 'info', message: `Tarea: ${workgroup.task}` });
     logMessage({ type: 'info', message: `Orquestador: ${orchestrator?.name}` });
     logMessage({ type: 'info', message: `Participantes: ${participantAgents.map(a => a.name).join(', ')}` });
     logMessage({ type: 'info', message: `Máximo de turnos: ${MAX_WORKGROUP_TURNS}` });
 
-    // Start the first turn (turn 1)
+    if (executionControllerRef.current) {
+        executionControllerRef.current.abort(); // Abort previous if any
+    }
+    executionControllerRef.current = new AbortController();
     runExecutionTurn(1, initialHistory, executionControllerRef.current.signal);
+  }, [workgroup.name, workgroup.task, orchestrator, participantAgents, logMessage, runExecutionTurn]);
 
-  }, [isExecuting, workgroup.name, workgroup.task, orchestrator, participantAgents, logMessage, runExecutionTurn]);
-
-   // Effect to track mount state
-   useEffect(() => {
-        isMountedRef.current = true;
-        return () => {
-            isMountedRef.current = false;
-            // Cleanup: Abort any ongoing execution when the component unmounts
-            if (executionControllerRef.current) {
-                executionControllerRef.current.abort();
-                 console.log("Workgroup execution aborted on component unmount.");
-            }
-        };
-    }, []);
-
-
-  // Start execution when modal opens
   useEffect(() => {
-    if (isOpen && isMountedRef.current) { // Ensure component is mounted before starting
-      startExecution();
+    isMountedRef.current = true;
+    if (isOpen) {
+        if (!isExecutingRef.current) {
+            startExecution();
+        }
     } else {
-        // Cleanup if modal is closed while executing
+        if (isExecutingRef.current) {
+            isExecutingRef.current = false; // Update ref immediately
+            setIsExecuting(false); // Update state for UI
+        }
         if (executionControllerRef.current) {
             executionControllerRef.current.abort();
+            logMessage({ type: 'system', message: 'Ejecución detenida por cierre de modal.' });
             executionControllerRef.current = null;
         }
-         setIsExecuting(false); // Ensure execution stops if modal closes
+        // Reset state for next opening
+        setCurrentTurn(0);
+        // setExecutionLogs([]); // Keep logs visible until next execution starts
+        setConversationHistory([]);
+        // setExecutionError(null); // Keep error visible until next execution
     }
-    // Add startExecution to deps, ensure it's stable with useCallback
-   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
+    return () => {
+        isMountedRef.current = false;
+        if (executionControllerRef.current) {
+            executionControllerRef.current.abort();
+            console.log('[WorkgroupExecutionModal] Execution aborted on unmount.');
+            executionControllerRef.current = null;
+        }
+        isExecutingRef.current = false;
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, startExecution]); // startExecution is memoized
 
-
-  // Scroll to bottom when logs update
   useEffect(() => {
     if (scrollAreaRef.current) {
       const scrollViewport = scrollAreaRef.current.querySelector('div[data-radix-scroll-area-viewport]');
@@ -286,7 +276,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
   }, [executionLogs]);
 
   const handleCopyLogs = () => {
-    const logText = executionLogs.map(log => `[${log.timestamp}] [${log.type.toUpperCase()}]${log.agentName ? ` (${log.agentName})` : ''}: ${log.message}`).join('\n');
+    const logText = executionLogs.map(log => `[${log.timestamp}] [${log.type.toUpperCase()}]${log.agentName ? ` (${log.agentName})` : ''}: ${log.message}${log.llmRequest ? `\n  Request: ${JSON.stringify(log.llmRequest, null, 2)}` : ''}${log.llmResponse ? `\n  Response: ${JSON.stringify(log.llmResponse, null, 2)}` : ''}`).join('\n\n');
     navigator.clipboard.writeText(logText)
       .then(() => toast({ title: 'Logs Copiados', description: 'Los logs de ejecución han sido copiados.' }))
       .catch(() => toast({ title: 'Error al Copiar', description: 'No se pudieron copiar los logs.', variant: 'destructive' }));
@@ -294,10 +284,11 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
 
   const handleStopExecution = () => {
       if (executionControllerRef.current) {
-          executionControllerRef.current.abort(); // Signal cancellation
+          executionControllerRef.current.abort();
           logMessage({type: 'system', message: 'Solicitando cancelación de la ejecución...'});
       }
-      setIsExecuting(false); // Update state immediately
+      setIsExecuting(false);
+      isExecutingRef.current = false;
   };
 
   return (
@@ -306,7 +297,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
         <DialogHeader className="p-6 pb-4 border-b">
           <DialogTitle className="flex items-center gap-2">
             {isExecuting && currentTurn > 0 ? <Loader2 className="h-5 w-5 text-primary animate-spin" /> : isExecuting && currentTurn === 0 ? <Loader2 className="h-5 w-5 text-primary animate-spin" /> : <Play className="h-5 w-5 text-primary" /> }
-            Ejecución del Grupo: {workgroup.name} {isExecuting && currentTurn > 0 ? `(Turno ${currentTurn}/${MAX_WORKGROUP_TURNS})` : isExecuting && currentTurn === 0 ? '(Iniciando...)' : '(Finalizado)'}
+            Ejecución del Grupo: {workgroup.name} {isExecuting && currentTurn > 0 ? `(Turno ${currentTurn}/${MAX_WORKGROUP_TURNS})` : isExecuting && currentTurn === 0 ? '(Iniciando...)' : executionLogs.length > 0 ? '(Finalizado)' : '(Listo para iniciar)'}
           </DialogTitle>
           <DialogDescription>
             Observa el flujo de trabajo entre los agentes mientras colaboran en la tarea.
@@ -314,7 +305,6 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
         </DialogHeader>
 
         <div className="flex-1 p-4 md:p-6 overflow-hidden flex flex-col gap-4">
-           {/* Task Display */}
            <Card className='bg-muted/30 border-primary/20 flex-shrink-0 max-h-[100px] overflow-y-auto'>
               <CardHeader className='p-3 sticky top-0 bg-muted/50 z-10'>
                 <CardTitle className='text-sm font-medium text-primary'>Tarea Principal</CardTitle>
@@ -324,7 +314,6 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
                </CardContent>
            </Card>
 
-           {/* Log Area */}
            <div className="flex-1 border rounded-md p-1 flex flex-col bg-card min-h-0">
                 <div className='flex justify-between items-center p-2 border-b mb-1 sticky top-0 bg-card z-10'>
                     <h3 className="text-sm font-medium flex items-center gap-2">
@@ -365,17 +354,21 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
                                         {log.type.toUpperCase()}{log.agentName ? ` (${log.agentName})` : ''}:
                                      </span>
                                      <span className="ml-1">{log.message}</span>
-                                     {/* Log full raw LLM responses for detailed debugging */}
-                                     {log.llmResponse?.raw && (
-                                        <details className="mt-1 ml-4 text-xs opacity-80">
-                                            <summary className="cursor-pointer italic">Respuesta LLM Cruda</summary>
-                                            <div className="mt-1 p-1 border bg-background rounded max-h-40 overflow-auto">{log.llmResponse.raw}</div>
-                                        </details>
-                                      )}
-                                       {log.llmRequest && (
-                                        <details className="mt-1 ml-4 text-xs opacity-80">
-                                            <summary className="cursor-pointer italic">Detalles de Solicitud LLM</summary>
-                                             <div className="mt-1 p-1 border bg-background rounded max-h-40 overflow-auto">{JSON.stringify(log.llmRequest, null, 2)}</div>
+                                     {(log.llmRequest || log.llmResponse) && (
+                                        <details className="mt-1 ml-4 text-[10px] opacity-80 leading-tight">
+                                            <summary className="cursor-pointer italic text-muted-foreground">Detalles LLM</summary>
+                                            {log.llmRequest && (
+                                                <div className="mt-1 p-1 border bg-background rounded max-h-60 overflow-auto">
+                                                    <strong className="block text-muted-foreground">Solicitud:</strong>
+                                                    <pre className="whitespace-pre-wrap break-all">{typeof log.llmRequest === 'string' ? log.llmRequest : JSON.stringify(log.llmRequest, null, 2)}</pre>
+                                                </div>
+                                            )}
+                                            {log.llmResponse && (
+                                                <div className="mt-1 p-1 border bg-background rounded max-h-60 overflow-auto">
+                                                    <strong className="block text-muted-foreground">Respuesta:</strong>
+                                                    <pre className="whitespace-pre-wrap break-all">{typeof log.llmResponse === 'string' ? log.llmResponse : JSON.stringify(log.llmResponse, null, 2)}</pre>
+                                                </div>
+                                            )}
                                         </details>
                                       )}
                                 </div>
@@ -383,8 +376,8 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
                         })}
                         {isExecuting && <div className="flex items-center gap-2 mt-2"><Loader2 className="h-4 w-4 animate-spin text-primary inline-block" /><span className='text-sm text-muted-foreground'>Procesando turno...</span></div>}
                          {!isExecuting && executionError && <div className="mt-2 p-2 rounded bg-destructive/10 text-destructive text-sm font-medium">Ejecución detenida debido a un error.</div>}
-                         {!isExecuting && !executionError && currentTurn >= MAX_WORKGROUP_TURNS && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución completada (Límite de turnos alcanzado).</div>}
-                         {!isExecuting && !executionError && currentTurn < MAX_WORKGROUP_TURNS && executionLogs.length > 1 && !isExecuting && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución finalizada o detenida.</div>}
+                         {!isExecuting && !executionError && currentTurn >= MAX_WORKGROUP_TURNS && executionLogs.length > 0 && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución completada (Límite de turnos alcanzado).</div>}
+                         {!isExecuting && !executionError && currentTurn < MAX_WORKGROUP_TURNS && executionLogs.length > 1 && !isExecutingRef.current && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución finalizada o detenida.</div>}
                     </pre>
                 </ScrollArea>
            </div>
@@ -404,5 +397,3 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
     </Dialog>
   );
 }
-
-
