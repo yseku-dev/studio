@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2, FolderPlus, Wand2, AlertTriangle, DownloadCloud, CheckCircle, FileText, ListTree, Copy, Settings2 } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { handleGenerateProject } from './actions'; // TODO: Add initiateWorkgroupProjectGeneration
+import { handleGenerateProject, initiateWorkgroupProjectGeneration } from './actions'; 
 import type { HandleGenerateProjectResult, ProjectFile } from './actions';
 import JSZip from 'jszip';
 import {
@@ -38,7 +38,7 @@ import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
 import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config';
-// import { initiateWorkgroupProjectGeneration } from './actions'; // To be created
+
 
 const formSchema = z.object({
   prompt: z.string().min(15, 'El prompt debe tener al menos 15 caracteres para describir un proyecto.'),
@@ -131,11 +131,12 @@ export default function GenerateProjectPage() {
 
     if (watchedConfigSource.startsWith('workgroup:')) {
       const workgroupId = watchedConfigSource.split(':')[1];
-       toast({ title: "Generación con Grupo de Trabajo", description: "Funcionalidad pendiente de implementación para generación de proyectos con grupos.", duration: 5000});
-      // TODO: Implement workgroup project generation
-      // result = await initiateWorkgroupProjectGeneration(promptToConfirm, workgroupId, agents, workgroups);
-      setIsLoading(false); // Remove this line when implemented
-      return; // Remove this line when implemented
+       if (!workgroups.find(wg => wg.id === workgroupId) || agents.length === 0) {
+            toast({ title: "Error de Configuración de Grupo", description: "Grupo de trabajo no encontrado o agentes no cargados.", variant: "destructive"});
+            setIsLoading(false);
+            return;
+        }
+      result = await initiateWorkgroupProjectGeneration(promptToConfirm, workgroupId, agents, workgroups);
     } else {
       if (!resolvedLlmOptions) {
         toast({ title: "Error Interno", description: "Faltan opciones LLM para llamada directa.", variant: "destructive" });
@@ -296,7 +297,7 @@ export default function GenerateProjectPage() {
       </Card>
 
       {isLoading && (
-        <div data-ai-hint="project generation loading" className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6">
+        <div data-ai-hint="project structure generation" className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6">
           <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
           <p className="text-lg text-foreground">Generando estructura de proyecto...</p>
           <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos.</p>
@@ -363,3 +364,4 @@ export default function GenerateProjectPage() {
     </div>
   );
 }
+
