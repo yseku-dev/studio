@@ -231,9 +231,9 @@ Define equipos de agentes para tareas colaborativas.
 *   Muestra una lista de grupos creados.
 *   **Crear Grupo**:
     *   **Nombre, Descripción, Tarea Principal del Grupo**.
-    *   **Agentes en el Grupo**: Selecciona los agentes participantes. El agente **`OrquestadorFlujoAgentes`** se añade automáticamente y no se puede quitar; es responsable de dirigir el flujo de trabajo.
+    *   **Agentes en el Grupo**: Selecciona los agentes participantes. El agente **`OrquestadorFlujoAgentes`** (o "Orquestador del Grupo") se añade automáticamente y no se puede quitar; es responsable de dirigir el flujo de trabajo.
 *   **Acciones por Grupo**:
-    *   **Ejecutar (▶️)**: Abre un modal de ejecución donde el Orquestador comienza a procesar la tarea con los agentes seleccionados. Se muestra un log detallado de las interacciones, decisiones del orquestador y respuestas de los agentes. La ejecución tiene un número máximo de turnos.
+    *   **Ejecutar (▶️)**: Abre un modal de ejecución donde el Orquestador del Grupo comienza a procesar la tarea con los agentes seleccionados. Se muestra un log detallado de las interacciones, decisiones del orquestador y respuestas de los agentes. La ejecución tiene un número máximo de turnos.
     *   **Editar (✏️)**.
     *   **Eliminar (🗑️)**.
 
@@ -245,13 +245,13 @@ En la mayoría de las secciones que interactúan con un LLM (Generar Código, An
 
 1.  **Ajustes Globales**: Utiliza la configuración (proveedor, modelo, API key, URL) definida en la sección "Configuración".
 2.  **Agente: [Nombre del Agente]**: Utiliza la configuración LLM específica definida para ese agente en "Gestión de Agentes IA". Si el agente está configurado para usar "default", se recurrirá a los Ajustes Globales.
-3.  **Grupo: [Nombre del Grupo]** (Solo en AutoUpdate): La tarea (más las "Preferencias de Análisis") se pasa como objetivo principal al agente Orquestador del grupo seleccionado. El Orquestador utilizará su propia configuración LLM para tomar decisiones y luego invocará a otros agentes del grupo, cada uno usando su respectiva configuración LLM.
+3.  **Grupo: [Nombre del Grupo]** (En AutoUpdate, Generar Código, Generar Proyecto, Analizar Código, Analizar Proyecto): La tarea o prompt principal se pasa como objetivo al agente Orquestador del Grupo seleccionado. El Orquestador utilizará su propia configuración LLM para tomar decisiones y luego invocará a otros agentes del grupo, cada uno usando su respectiva configuración LLM.
 
 ### Agentes y Grupos de Trabajo
 
 *   **Agentes**: Son entidades IA con un rol (definido por su mensaje de sistema), capacidades y una configuración LLM. Actúan individualmente o como parte de un grupo.
 *   **Grupos de Trabajo**: Son equipos de agentes colaborando en una tarea común.
-    *   El agente `OrquestadorFlujoAgentes` es fundamental. Basado en la tarea del grupo, el historial de conversación y su propio prompt, decide qué agente debe actuar a continuación o si la tarea está completa.
+    *   El **Orquestador del Grupo** (agente `OrquestadorFlujoAgentes`) es una pieza obligatoria y fundamental. Se encarga de recibir y gestionar todas las respuestas generadas dentro del grupo. En caso de que el usuario no haya realizado una propuesta explícita sobre el siguiente paso, el Orquestador decidirá a qué agente o subgrupo derivar la interacción. Todas las respuestas deben pasar obligatoriamente por el Orquestador para garantizar un flujo coordinado y la toma de decisiones centralizada.
     *   La ejecución de un grupo es una secuencia de turnos. En cada turno, el Orquestador toma una decisión, y luego el agente seleccionado (si lo hay) responde. Esto continúa hasta que la tarea se considera completa o se alcanza el número máximo de turnos.
 
 ## Manejo de Errores

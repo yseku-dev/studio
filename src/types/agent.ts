@@ -37,8 +37,17 @@ export interface WorkgroupConfig {
   id: string;
   name: string;
   description: string;
-  agentIds: string[]; // Array de IDs de agentes
-  task: string; // La tarea general para el grupo de trabajo
+  /**
+   * Array de IDs de agentes que pertenecen a este grupo de trabajo.
+   * Incluye obligatoriamente el ID del agente 'OrquestadorFlujoAgentes' (u 'Orquestador del Grupo'),
+   * que es central para la gestión del flujo de trabajo.
+   */
+  agentIds: string[];
+  /**
+   * La tarea general o el objetivo principal asignado a este grupo de trabajo.
+   * El Orquestador del Grupo utiliza esta tarea como punto de partida para dirigir las interacciones.
+   */
+  task: string;
   // Futuros campos: admin_agent_id, mode (e.g., 'round_robin', 'auto'), max_rounds
 }
 
