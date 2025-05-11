@@ -2,7 +2,7 @@
 // src/app/(app)/workgroups/page.tsx
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react'; // Added useCallback
 import { useForm, SubmitHandler, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -27,7 +27,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger, // Added AlertDialogTrigger
+  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { WorkgroupExecutionModal } from '@/components/workgroup-execution-modal';
 import { LOCALSTORAGE_WORKGROUPS_KEY, LOCALSTORAGE_AGENTS_KEY, ORCHESTRATOR_AGENT_NAME } from '@/config/agent-config';
@@ -110,27 +110,33 @@ export default function WorkgroupsPage() {
             console.error("Error parsing stored workgroups:", e);
             localStorage.removeItem(LOCALSTORAGE_WORKGROUPS_KEY); 
             setWorkgroups([]);
+            initializeDefaultWorkgroup(agentsList); // Pass agentsList here
        }
     } else if (agentsList.length > 0) {
-      const defaultAgentIds = defaultWorkgroup.agentNames
-        .map(name => agentsList.find(a => a.name === name)?.id)
-        .filter((id): id is string => !!id);
-
-      const orchestrator = agentsList.find(a => a.name === ORCHESTRATOR_AGENT_NAME);
-
-      if (orchestrator && defaultAgentIds.length > 0) { 
-        const initialWorkgroup: WorkgroupConfig = {
-          id: crypto.randomUUID(),
-          name: defaultWorkgroup.name,
-          description: defaultWorkgroup.description,
-          task: defaultWorkgroup.task,
-          agentIds: [orchestrator.id, ...defaultAgentIds], 
-        };
-        setWorkgroups([initialWorkgroup]);
-        localStorage.setItem(LOCALSTORAGE_WORKGROUPS_KEY, JSON.stringify([initialWorkgroup]));
-      }
+      initializeDefaultWorkgroup(agentsList);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  
+  const initializeDefaultWorkgroup = (agentsList: AgentConfig[]) => {
+    const defaultAgentIds = defaultWorkgroup.agentNames
+      .map(name => agentsList.find(a => a.name === name)?.id)
+      .filter((id): id is string => !!id);
+  
+    const orchestrator = agentsList.find(a => a.name === ORCHESTRATOR_AGENT_NAME);
+  
+    if (orchestrator && defaultAgentIds.length > 0) { 
+      const initialWorkgroup: WorkgroupConfig = {
+        id: crypto.randomUUID(),
+        name: defaultWorkgroup.name,
+        description: defaultWorkgroup.description,
+        task: defaultWorkgroup.task,
+        agentIds: Array.from(new Set([orchestrator.id, ...defaultAgentIds])), // Ensure orchestrator is unique
+      };
+      setWorkgroups([initialWorkgroup]);
+      localStorage.setItem(LOCALSTORAGE_WORKGROUPS_KEY, JSON.stringify([initialWorkgroup]));
+    }
+  };
 
   const handleOpenForm = (workgroup?: WorkgroupConfig) => {
      if (!orchestratorAgent) {
@@ -207,10 +213,6 @@ export default function WorkgroupsPage() {
     }
     setExecutingWorkgroup(workgroup);
     setIsExecutionModalOpen(true);
-    toast({
-      title: 'Iniciando Grupo de Trabajo',
-      description: `Abriendo vista de ejecución para "${workgroup.name}".`,
-    });
   };
 
   const getAgentNameById = (agentId: string): string => {
@@ -225,9 +227,95 @@ export default function WorkgroupsPage() {
     }
   };
 
+  const handleCloseExecutionModal = useCallback(() => {
+    setIsExecutionModalOpen(false);
+    setExecutingWorkgroup(null);
+  }, []);
+
+
   return (
     <>
     <Dialog open={isFormOpen} onOpenChange={handleDialogVisibilityChange}>
+      <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>{editingWorkgroup ? 'Editar Grupo de Trabajo' : 'Crear Nuevo Grupo de Trabajo'}</DialogTitle>
+            <DialogDescription>
+              {editingWorkgroup ? 'Modifica los detalles de tu grupo.' : 'Define un nuevo grupo y asígnale agentes y una tarea.'} El agente "{ORCHESTRATOR_AGENT_NAME}" se añadirá automáticamente.
+            </DialogDescription>
+          </DialogHeader>
+          <form id="workgroup-form-id" onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
+            <ScrollArea className="max-h-[60vh] p-1 -mx-1 pr-4">
+              <div className="space-y-4 px-1">
+                <div>
+                  <Label htmlFor="wg-name">Nombre del Grupo</Label>
+                  <Input id="wg-name" {...register('name')} placeholder="Ej: Equipo de Redacción, Grupo de Análisis de Datos" />
+                  {errors.name && <p className="text-sm text-destructive mt-1">{errors.name.message}</p>}
+                </div>
+                <div>
+                  <Label htmlFor="wg-description">Descripción Corta</Label>
+                  <Input id="wg-description" {...register('description')} placeholder="Ej: Responsable de generar contenido para el blog" />
+                  {errors.description && <p className="text-sm text-destructive mt-1">{errors.description.message}</p>}
+                </div>
+                <div>
+                  <Label htmlFor="wg-task">Tarea Principal del Grupo</Label>
+                  <Textarea id="wg-task" {...register('task')} rows={6} placeholder="Ej: Escribir un artículo de 1000 palabras sobre..." />
+                  {errors.task && <p className="text-sm text-destructive mt-1">{errors.task.message}</p>}
+                </div>
+                <div>
+                  <Label className="mb-2 block">Agentes en el Grupo (Selecciona al menos uno)</Label>
+                  {selectableAgents.length === 0 ? (
+                     <p className="text-sm text-muted-foreground">No hay agentes disponibles para seleccionar (además del Orquestrador). Por favor, crea más agentes.</p>
+                  ) : (
+                    <Controller
+                        control={control}
+                        name="agentIds"
+                        render={({ field }) => (
+                            <div className="space-y-2 max-h-48 overflow-y-auto border rounded-md p-3">
+                             {orchestratorAgent && (
+                                <div className="flex items-center space-x-2 opacity-70">
+                                     <Checkbox id={`agent-${orchestratorAgent.id}-display`} checked={true} disabled={true} />
+                                    <label htmlFor={`agent-${orchestratorAgent.id}-display`} className="text-sm font-medium leading-none flex items-center gap-1 text-muted-foreground">
+                                        <Lock className="h-3 w-3"/>
+                                        {orchestratorAgent.name} (Automático)
+                                    </label>
+                                </div>
+                             )}
+                             {selectableAgents.map(agent => (
+                                <div key={agent.id} className="flex items-center space-x-2">
+                                <Checkbox
+                                    id={`agent-select-${agent.id}`}
+                                    checked={field.value?.includes(agent.id)}
+                                    onCheckedChange={(checked) => {
+                                    const currentAgentIds = field.value || [];
+                                    return checked
+                                        ? field.onChange([...currentAgentIds, agent.id])
+                                        : field.onChange(currentAgentIds.filter(id => id !== agent.id));
+                                    }}
+                                />
+                                <label htmlFor={`agent-select-${agent.id}`} className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                                    {agent.name} <span className="text-xs text-muted-foreground">({agent.description.substring(0,30)}...)</span>
+                                </label>
+                                </div>
+                            ))}
+                            </div>
+                        )}
+                        />
+                  )}
+                  {errors.agentIds && <p className="text-sm text-destructive mt-1">{errors.agentIds.message}</p>}
+                </div>
+              </div>
+            </ScrollArea>
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button type="button" variant="outline">Cancelar</Button>
+              </DialogClose>
+              <Button type="submit" form="workgroup-form-id" disabled={selectableAgents.length === 0 && !editingWorkgroup}>
+                <Users2 className="mr-2 h-4 w-4" />
+                {editingWorkgroup ? 'Guardar Cambios' : 'Crear Grupo'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
       <div className="space-y-6">
         <Card className="shadow-lg w-full max-w-6xl mx-auto"> 
           <CardHeader className="flex flex-row items-center justify-between">
@@ -323,97 +411,13 @@ export default function WorkgroupsPage() {
             )}
           </CardContent>
         </Card>
-        {/* Agent Group Creation/Editing Form Dialog, wrapped in Dialog component */}
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{editingWorkgroup ? 'Editar Grupo de Trabajo' : 'Crear Nuevo Grupo de Trabajo'}</DialogTitle>
-            <DialogDescription>
-              {editingWorkgroup ? 'Modifica los detalles de tu grupo.' : 'Define un nuevo grupo y asígnale agentes y una tarea.'} El agente "{ORCHESTRATOR_AGENT_NAME}" se añadirá automáticamente.
-            </DialogDescription>
-          </DialogHeader>
-          <form id="workgroup-form-id" onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
-            <ScrollArea className="max-h-[60vh] p-1 -mx-1 pr-4">
-              <div className="space-y-4 px-1">
-                <div>
-                  <Label htmlFor="wg-name">Nombre del Grupo</Label>
-                  <Input id="wg-name" {...register('name')} placeholder="Ej: Equipo de Redacción, Grupo de Análisis de Datos" />
-                  {errors.name && <p className="text-sm text-destructive mt-1">{errors.name.message}</p>}
-                </div>
-                <div>
-                  <Label htmlFor="wg-description">Descripción Corta</Label>
-                  <Input id="wg-description" {...register('description')} placeholder="Ej: Responsable de generar contenido para el blog" />
-                  {errors.description && <p className="text-sm text-destructive mt-1">{errors.description.message}</p>}
-                </div>
-                <div>
-                  <Label htmlFor="wg-task">Tarea Principal del Grupo</Label>
-                  <Textarea id="wg-task" {...register('task')} rows={6} placeholder="Ej: Escribir un artículo de 1000 palabras sobre..." />
-                  {errors.task && <p className="text-sm text-destructive mt-1">{errors.task.message}</p>}
-                </div>
-                <div>
-                  <Label className="mb-2 block">Agentes en el Grupo (Selecciona al menos uno)</Label>
-                  {selectableAgents.length === 0 ? (
-                     <p className="text-sm text-muted-foreground">No hay agentes disponibles para seleccionar (además del Orquestrador). Por favor, crea más agentes.</p>
-                  ) : (
-                    <Controller
-                        control={control}
-                        name="agentIds"
-                        render={({ field }) => (
-                            <div className="space-y-2 max-h-48 overflow-y-auto border rounded-md p-3">
-                             {orchestratorAgent && (
-                                <div className="flex items-center space-x-2 opacity-70">
-                                     <Checkbox id={`agent-${orchestratorAgent.id}-display`} checked={true} disabled={true} />
-                                    <label htmlFor={`agent-${orchestratorAgent.id}-display`} className="text-sm font-medium leading-none flex items-center gap-1 text-muted-foreground">
-                                        <Lock className="h-3 w-3"/>
-                                        {orchestratorAgent.name} (Automático)
-                                    </label>
-                                </div>
-                             )}
-                             {selectableAgents.map(agent => (
-                                <div key={agent.id} className="flex items-center space-x-2">
-                                <Checkbox
-                                    id={`agent-select-${agent.id}`}
-                                    checked={field.value?.includes(agent.id)}
-                                    onCheckedChange={(checked) => {
-                                    const currentAgentIds = field.value || [];
-                                    return checked
-                                        ? field.onChange([...currentAgentIds, agent.id])
-                                        : field.onChange(currentAgentIds.filter(id => id !== agent.id));
-                                    }}
-                                />
-                                <label htmlFor={`agent-select-${agent.id}`} className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                                    {agent.name} <span className="text-xs text-muted-foreground">({agent.description.substring(0,30)}...)</span>
-                                </label>
-                                </div>
-                            ))}
-                            </div>
-                        )}
-                        />
-                  )}
-                  {errors.agentIds && <p className="text-sm text-destructive mt-1">{errors.agentIds.message}</p>}
-                </div>
-              </div>
-            </ScrollArea>
-            <DialogFooter>
-              <DialogClose asChild>
-                <Button type="button" variant="outline">Cancelar</Button>
-              </DialogClose>
-              <Button type="submit" form="workgroup-form-id" disabled={selectableAgents.length === 0 && !editingWorkgroup}>
-                <Users2 className="mr-2 h-4 w-4" />
-                {editingWorkgroup ? 'Guardar Cambios' : 'Crear Grupo'}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
       </div>
     </Dialog>
 
       {executingWorkgroup && (
         <WorkgroupExecutionModal
           isOpen={isExecutionModalOpen}
-          onClose={() => {
-            setIsExecutionModalOpen(false);
-            setExecutingWorkgroup(null);
-          }}
+          onClose={handleCloseExecutionModal}
           workgroup={executingWorkgroup}
           agents={availableAgents}
           workgroups={workgroups} 

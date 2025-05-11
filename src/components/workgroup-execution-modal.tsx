@@ -1,3 +1,4 @@
+
 // src/components/workgroup-execution-modal.tsx
 'use client';
 
@@ -12,8 +13,8 @@ import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
-import { handleWorkgroupTurn } from '@/app/(app)/workgroups/actions'; // Import the server action
-import type { WorkgroupTurnPayload, WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions'; // Import types
+import { handleWorkgroupTurn } from '@/app/(app)/workgroups/actions'; 
+import type { WorkgroupTurnPayload, WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions'; 
 import type { ChatMessage } from '@/services/groq';
 import {
     DEFAULT_LLM_PROVIDER,
@@ -23,8 +24,8 @@ import {
     getLocalStorageModelName,
     LOCALSTORAGE_PROVIDER_ID_KEY
 } from '@/config/llm-config';
-import { ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS } from '@/config/agent-config'; // Use constants
-import { resolveLlmOptionsForSource } from '@/lib/llm-utils'; // Import the helper
+import { ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS } from '@/config/agent-config'; 
+import { resolveLlmOptionsForSource } from '@/lib/llm-utils'; 
 
 interface WorkgroupExecutionModalProps {
   isOpen: boolean;
@@ -46,7 +47,7 @@ type LogEntry = {
 export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, workgroups }: WorkgroupExecutionModalProps) {
   const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
-  const isExecutingRef = useRef(false); // Ref to track execution state reliably
+  const isExecutingRef = useRef(false); 
   const [currentTurn, setCurrentTurn] = useState(0);
   const [conversationHistory, setConversationHistory] = useState<ChatMessage[]>([]);
   const [executionError, setExecutionError] = useState<string | null>(null);
@@ -55,8 +56,8 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
   const isMountedRef = useRef(false);
   const { toast } = useToast();
 
-  const orchestrator = agents.find(a => a.id === workgroup.agentIds.find(id => agents.find(a => a.id === id)?.name === ORCHESTRATOR_AGENT_NAME));
-  const participantAgents = agents.filter(a => workgroup.agentIds.includes(a.id) && a.id !== orchestrator?.id);
+  const orchestrator = useMemo(() => agents.find(a => a.id === workgroup.agentIds.find(id => agents.find(a => a.id === id)?.name === ORCHESTRATOR_AGENT_NAME)), [agents, workgroup.agentIds]);
+  const participantAgents = useMemo(() => agents.filter(a => workgroup.agentIds.includes(a.id) && a.id !== orchestrator?.id), [agents, workgroup.agentIds, orchestrator]);
 
   const logMessage = useCallback((logEntry: Omit<LogEntry, 'timestamp'>) => {
     if (!isMountedRef.current) return;
@@ -144,9 +145,9 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
                     if (dataSplit.length > 1) {
                         message = dataSplit[0];
                         try {
-                            data = JSON.parse(dataSplit.slice(1).join(' | Data: ')); // Rejoin if ' | Data: ' was in the data itself
+                            data = JSON.parse(dataSplit.slice(1).join(' | Data: ')); 
                         } catch {
-                            data = {raw: dataSplit.slice(1).join(' | Data: ')}; // If not valid JSON, keep as raw string
+                            data = {raw: dataSplit.slice(1).join(' | Data: ')}; 
                         }
                     }
                     logMessage({
@@ -208,7 +209,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
         setIsExecuting(false);
         isExecutingRef.current = false;
     }
-  }, [orchestrator, participantAgents, workgroup.name, workgroup.task, logMessage, getAgentById, agents, workgroups]);
+  }, [orchestrator, participantAgents, workgroup.name, workgroup.task, logMessage, getAgentById, agents, workgroups, setExecutionError, setIsExecuting, setConversationHistory]);
 
   const startExecution = useCallback(() => {
     setIsExecuting(true);
@@ -226,7 +227,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
     logMessage({ type: 'info', message: `Máximo de turnos: ${MAX_WORKGROUP_TURNS}` });
 
     if (executionControllerRef.current) {
-        executionControllerRef.current.abort(); // Abort previous if any
+        executionControllerRef.current.abort(); 
     }
     executionControllerRef.current = new AbortController();
     runExecutionTurn(1, initialHistory, executionControllerRef.current.signal);
@@ -240,19 +241,14 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
         }
     } else {
         if (isExecutingRef.current) {
-            isExecutingRef.current = false; // Update ref immediately
-            setIsExecuting(false); // Update state for UI
+            isExecutingRef.current = false; 
+            setIsExecuting(false); 
         }
         if (executionControllerRef.current) {
             executionControllerRef.current.abort();
             logMessage({ type: 'system', message: 'Ejecución detenida por cierre de modal.' });
             executionControllerRef.current = null;
         }
-        // Reset state for next opening
-        setCurrentTurn(0);
-        // setExecutionLogs([]); // Keep logs visible until next execution starts
-        setConversationHistory([]);
-        // setExecutionError(null); // Keep error visible until next execution
     }
     return () => {
         isMountedRef.current = false;
@@ -263,8 +259,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
         }
         isExecutingRef.current = false;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, startExecution]); // startExecution is memoized
+  }, [isOpen, startExecution, logMessage]); 
 
   useEffect(() => {
     if (scrollAreaRef.current) {
@@ -291,8 +286,14 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
       isExecutingRef.current = false;
   };
 
+  const handleDialogEvent = useCallback((open: boolean) => {
+      if (!open) {
+          onClose();
+      }
+  }, [onClose]);
+
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => { if (!open) onClose() }}>
+    <Dialog open={isOpen} onOpenChange={handleDialogEvent}>
       <DialogContent className="sm:max-w-4xl lg:max-w-6xl h-[85vh] flex flex-col p-0">
         <DialogHeader className="p-6 pb-4 border-b">
           <DialogTitle className="flex items-center gap-2">
@@ -397,3 +398,4 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
     </Dialog>
   );
 }
+
