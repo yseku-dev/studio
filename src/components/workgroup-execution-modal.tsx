@@ -32,6 +32,7 @@ interface WorkgroupExecutionModalProps {
   onClose: () => void;
   workgroup: WorkgroupConfig;
   agents: AgentConfig[]; // Pass available agents to find names and orchestrator
+  workgroups: WorkgroupConfig[]; // Pass all workgroups for resolving LLM options
 }
 
 
@@ -44,7 +45,7 @@ type LogEntry = {
     llmResponse?: any; // Store parts of the response if needed for debug
 };
 
-export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: WorkgroupExecutionModalProps) {
+export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, workgroups }: WorkgroupExecutionModalProps) {
   const [executionLogs, setExecutionLogs] = useState<LogEntry[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
   const [currentTurn, setCurrentTurn] = useState(0); // Renamed from currentTurnInternal
@@ -186,7 +187,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
         }
         if (result.agentResponse) {
              const respondingAgentName = getAgentById(result.agentResponse.agentId)?.name || result.agentResponse.agentId;
-            logMessage({ type: 'agent', agentName: respondingAgentName, message: `Respuesta: ${result.agentResponse.content.substring(0,500)}${result.agentResponse.content.length > 500 ? '...' : ''}`, llmResponse: { raw: result.agentResponse.rawOutput } }); // Log truncated message, full response in debug
+            logMessage({ type: 'agent', agentName: respondingAgentName, message: `Respuesta: ${result.agentResponse.content.substring(0,1000)}${result.agentResponse.content.length > 1000 ? '...' : ''}`, llmResponse: { raw: result.agentResponse.rawOutput } }); // Log more of the message
         }
 
 
@@ -219,7 +220,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
         setIsExecuting(false); // Stop execution on client error or cancellation
     }
 
-  }, [orchestrator, participantAgents, workgroup.name, workgroup.task, logMessage, getAgentById, agents, workgroups]); // Added 'agents' and 'workgroups' for resolveLlmOptionsForSource
+  }, [orchestrator, participantAgents, workgroup.name, workgroup.task, logMessage, getAgentById, agents, workgroups]);
 
 
   const startExecution = useCallback(() => {
@@ -403,4 +404,5 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents }: 
     </Dialog>
   );
 }
+
 

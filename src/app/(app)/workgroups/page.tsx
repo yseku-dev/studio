@@ -279,7 +279,7 @@ export default function WorkgroupsPage() {
                                 const isOrchestrator = agentName === ORCHESTRATOR_AGENT_NAME;
                                 return (
                                     <Badge key={id} variant={isOrchestrator ? "default" : "secondary"} className={isOrchestrator ? "bg-accent text-accent-foreground" : ""}>
-                                        {isOrchestrator && <Lock className="mr-1 h-3 w-3" />}
+                                        {isOrchestrator && <Lock className="mr-1 h-3 w-3"/>}
                                         {agentName}
                                     </Badge>
                                 );
@@ -421,8 +421,10 @@ export default function WorkgroupsPage() {
           }}
           workgroup={executingWorkgroup}
           agents={availableAgents}
+          workgroups={workgroups}
         />
       )}
     </>
   );
 }
+
