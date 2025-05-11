@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -6,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork, Trash2, Expand, Minimize, Workflow } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion, handleUploadToGit } from './actions';
+import type { AppSourceFile } from './actions';
 import type { ProjectAnalysisResponse, LLMOptions, SuggestionItem } from '@/services/groq'; // Import SuggestionItem
 import type { SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -98,7 +100,7 @@ export default function AutoUpdatePage() {
   const [currentAnalysisError, setCurrentAnalysisError] = useState<string | null>(null);
   const [suggestionsWithStatus, setSuggestionsWithStatus] = useState<SuggestionWithStatus[]>([]);
   const [isDownloading, setIsDownloading] = useState(false); // Initialize to false
-  const [projectFiles, setProjectFiles] = useState<Awaited<ReturnType<typeof getApplicationSourceBundle>>['files']>([]);
+  const [projectFiles, setProjectFiles] = useState<AppSourceFile[]>([]);
   const [analysisPreferences, setAnalysisPreferences] = useState<string>("");
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ processed: 0, total: 0 });
   const [autoFixSuggestion, setAutoFixSuggestion] = useState<SuggestErrorFixOutput | null>(null);
@@ -382,7 +384,8 @@ export default function AutoUpdatePage() {
       description: `Cargando y preparando el código fuente...`
     });
 
-    await fetchProjectFiles(initialLogs);
+    // Ensure project files are current before analysis
+    await fetchProjectFiles(initialLogs); 
 
     if (selectedConfigSource.startsWith("workgroup:")) {
         const workgroupId = selectedConfigSource.split(":")[1];
@@ -548,58 +551,73 @@ export default function AutoUpdatePage() {
   };
   const handleToggleLogsExpansion = () => setLogsExpanded(prev => !prev);
 
-  const handleDownloadSource = async () => {
+ const handleDownloadSource = async (format: 'zip' | 'json' = 'zip') => {
     setIsDownloading(true);
     const currentLogsCopy = [...detailedLogs];
-    currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Iniciando preparación para descarga de código fuente.`);
-    toast({ title: "Preparando Descarga", description: "Recopilando archivos fuente..." });
+    currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Iniciando preparación para descarga de código fuente en formato ${format.toUpperCase()}.`);
+    toast({ title: "Preparando Descarga", description: `Recopilando archivos fuente para formato ${format.toUpperCase()}...` });
 
-    let filesToZip = projectFiles;
-    if (!filesToZip || filesToZip.length === 0) {
+    let filesToProcess = projectFiles;
+    if (!filesToProcess || filesToProcess.length === 0) {
       currentLogsCopy.push(`[CLIENT WARN ${new Date().toISOString()}] projectFiles está vacío, intentando obtener de nuevo.`);
       const bundleResult = await getApplicationSourceBundle(false, currentLogsCopy);
       if (bundleResult.success && bundleResult.files) {
-        filesToZip = bundleResult.files;
-        setProjectFiles(filesToZip);
+        filesToProcess = bundleResult.files;
+        setProjectFiles(filesToProcess); // Actualizar el estado si se vuelven a cargar
       } else {
         toast({ title: "Error al Obtener Código", description: bundleResult.error || "No se pudo obtener el código fuente.", variant: "destructive" });
         setIsDownloading(false);
-        currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener código para ZIP: ${bundleResult.error}`);
+        currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener código para ${format.toUpperCase()}: ${bundleResult.error}`);
         setDetailedLogs(currentLogsCopy);
         return;
       }
     }
-    currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Se empaquetarán ${filesToZip?.length || 0} archivos.`);
-    if (filesToZip && filesToZip.length > 0) {
+    currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Se procesarán ${filesToProcess?.length || 0} archivos para formato ${format.toUpperCase()}.`);
+
+    if (filesToProcess && filesToProcess.length > 0) {
       try {
-        const zip = new JSZip();
-        filesToZip.forEach(file => {
-          if (file.fileName && file.fileName.trim() !== "" && !file.content.startsWith("// Archivo binario") && !file.content.startsWith("// Error:")) {
-            zip.file(file.fileName, file.content);
-            currentLogsCopy.push(`[CLIENT DETAIL ${new Date().toISOString()}] Añadido al ZIP: ${file.fileName}`);
-          } else {
-            currentLogsCopy.push(`[CLIENT WARN ${new Date().toISOString()}] Omitido en ZIP: ${file.fileName}`);
-          }
-        });
-        const zipBlob = await zip.generateAsync({ type: "blob" });
-        const url = URL.createObjectURL(zipBlob);
+        let blob: Blob;
+        let fileNameSuffix: string;
+        let downloadFileName: string;
+
+        if (format === 'zip') {
+          const zip = new JSZip();
+          filesToProcess.forEach(file => {
+            if (file.fileName && file.fileName.trim() !== "" && !file.content.startsWith("// Archivo binario") && !file.content.startsWith("// Error:")) {
+              zip.file(file.fileName, file.content);
+              currentLogsCopy.push(`[CLIENT DETAIL ${new Date().toISOString()}] Añadido al ZIP: ${file.fileName}`);
+            } else {
+              currentLogsCopy.push(`[CLIENT WARN ${new Date().toISOString()}] Omitido en ZIP: ${file.fileName}`);
+            }
+          });
+          blob = await zip.generateAsync({ type: "blob" });
+          fileNameSuffix = '.zip';
+          downloadFileName = 'codealchemist-source.zip';
+        } else { // json
+          const jsonData = JSON.stringify(filesToProcess, null, 2);
+          blob = new Blob([jsonData], { type: 'application/json;charset=utf-8' });
+          fileNameSuffix = '.json';
+          downloadFileName = 'codealchemist-source.json';
+        }
+
+        const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'codealchemist-source.zip';
+        a.download = downloadFileName;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        toast({ title: "Descarga Iniciada", description: "El paquete de código fuente se está descargando." });
-        currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Descarga ZIP iniciada.`);
+        toast({ title: "Descarga Iniciada", description: `El paquete de código fuente (${format.toUpperCase()}) se está descargando.` });
+        currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Descarga ${format.toUpperCase()} iniciada.`);
       } catch (e) {
         const error = e instanceof Error ? e.message : "Error desconocido";
-        toast({ title: "Error al Crear Descarga ZIP", description: `No se pudo crear el ZIP: ${error}`, variant: "destructive" });
-        currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al crear ZIP: ${error}`);
+        toast({ title: `Error al Crear Descarga ${format.toUpperCase()}`, description: `No se pudo crear el archivo ${format.toUpperCase()}: ${error}`, variant: "destructive" });
+        currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al crear ${format.toUpperCase()}: ${error}`);
       }
     } else {
       toast({ title: "Error al Obtener Código", description: "No se encontraron archivos para empaquetar.", variant: "destructive" });
-      currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error: No se encontraron archivos para ZIP.`);
+      currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error: No se encontraron archivos para ${format.toUpperCase()}.`);
     }
     setDetailedLogs(currentLogsCopy);
     setIsDownloading(false);
@@ -716,8 +734,11 @@ export default function AutoUpdatePage() {
               {status === "analyzing" || status === "loading_source" || status === "processing_workgroup_turn" ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Sparkles className="mr-2 h-5 w-5" />}
               Iniciar Auto-Análisis
             </Button>
-            <Button onClick={handleDownloadSource} disabled={isDownloading || projectFiles.length === 0 || isProcessing} variant="outline" className="text-base py-3 px-6 text-foreground">
+            <Button onClick={() => handleDownloadSource('zip')} disabled={isDownloading || projectFiles.length === 0 || isProcessing} variant="outline" className="text-base py-3 px-6 text-foreground">
               {isDownloading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <DownloadCloud className="mr-2 h-5 w-5" />} Descargar Código (ZIP)
+            </Button>
+             <Button onClick={() => handleDownloadSource('json')} disabled={isDownloading || projectFiles.length === 0 || isProcessing} variant="outline" className="text-base py-3 px-6 text-foreground">
+              {isDownloading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <DownloadCloud className="mr-2 h-5 w-5" />} Descargar Código (JSON)
             </Button>
             <Button onClick={handleInitialGitUpload} disabled={!isGitConfigured || projectFiles.length === 0 || isProcessing} variant="outline" className="text-base py-3 px-6 text-foreground"
               title={!isGitConfigured ? "Configura Git en Ajustes." : "Subir código a Git"}>
@@ -927,3 +948,6 @@ export default function AutoUpdatePage() {
     </>
   );
 }
+
+
+    
