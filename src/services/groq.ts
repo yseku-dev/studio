@@ -1,3 +1,4 @@
+
 import {
   LLM_PROVIDERS,
   MODELS_BY_PROVIDER,
@@ -23,16 +24,19 @@ export interface CodeSuggestionResponse {
   explanation: string;
 }
 
+// Define the type for a single suggestion item
+export interface SuggestionItem {
+  area: string;
+  suggestion: string;
+  priority?: 'high' | 'medium' | 'low';
+  suggestedFullFileContent?: string;
+}
+
 // Generic response for project analysis
 export interface ProjectAnalysisResponse {
   analysisTitle: string;
   identifiedAreas: string[];
-  suggestions: Array<{
-    area: string;
-    suggestion: string;
-    priority?: 'high' | 'medium' | 'low';
-    suggestedFullFileContent?: string;
-  }>;
+  suggestions: Array<SuggestionItem>; // Use the named SuggestionItem type
   overallAssessment: string;
 }
 

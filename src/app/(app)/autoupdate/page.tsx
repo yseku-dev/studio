@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork, Trash2, Expand, Minimize, Workflow } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion, handleUploadToGit } from './actions';
-import type { ProjectAnalysisResponse, LLMOptions } from '@/services/groq';
+import type { ProjectAnalysisResponse, LLMOptions, SuggestionItem } from '@/services/groq'; // Import SuggestionItem
 import type { SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -49,15 +49,16 @@ import type { ChatMessage } from '@/services/groq';
 
 type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "processing_workgroup_turn" | "success" | "error" | "fixing_error" | "uploading_git" | "fixing_git_error";
 
+type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
+
+
 // Define the type for a single suggestion item from the response
 // Correctly extend the type of an element in the 'suggestions' array
-interface SingleSuggestion extends ProjectAnalysisResponse['suggestions'][number] {
-  id?: string; // id might not exist initially, make it optional
-  // Add other fields from the base type if needed, e.g.:
-  area: string;
-  suggestion: string;
-  priority?: 'high' | 'medium' | 'low';
-  suggestedFullFileContent?: string;
+// The type ProjectAnalysisResponse['suggestions'][number] is equivalent to SuggestionItem
+interface SingleSuggestion extends SuggestionItem {
+  id?: string; // Add an optional id, which might not exist on the initial SuggestionItem
+  // Fields like 'area', 'suggestion', 'priority', 'suggestedFullFileContent'
+  // are inherited from SuggestionItem and do not need to be re-declared here.
 }
 
 
@@ -67,9 +68,6 @@ interface SuggestionWithStatus extends SingleSuggestion {
   errorMessage?: string;
   originalContent?: string;
 }
-
-
-type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
 
 
 interface AnalysisProgress {
@@ -327,11 +325,24 @@ export default function AutoUpdatePage() {
         participantAgentConfigs, currentTurn: turn, maxTurns: MAX_WORKGROUP_TURNS
     };
 
-    addWorkgroupLog({ type: 'debug', message: `Enviando payload a handleWorkgroupTurn para el turno ${turn}. Tarea (inicio): ${task.substring(0,100)}...`});
+    addWorkgroupLog({ type: 'debug', message: `Enviando payload a handleWorkgroupTurn para el turno ${turn}. Tarea (inicio): ${task.substring(0,500)}...`, llmRequest: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
 
     try {
         const result: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
-        (result.serverLogs || []).forEach(log => addWorkgroupLog({ type: 'debug', message: `[SERVER] ${log}` }));
+        (result.serverLogs || []).forEach(serverLogMsg => {
+             const match = serverLogMsg.match(/^\[(.*?)\] \[(.*?)\] (.*)$/);
+             if (match) {
+                 const [, timestamp, type, messageData] = match;
+                 let message = messageData;
+                 let data;
+                 if(messageData.includes(' | Data: ')) {
+                    [message, data] = messageData.split(' | Data: ');
+                 }
+                 addWorkgroupLog({ timestamp, type: type.toLowerCase() as LogEntry['type'] || 'debug', message, llmResponse: data ? {raw: data} : undefined });
+             } else {
+                 addWorkgroupLog({ type: 'debug', message: `[SERVER] ${serverLogMsg}` });
+             }
+        });
 
         if (result.error) {
             addWorkgroupLog({ type: 'error', message: `Error en servidor (turno ${turn}): ${result.error}` });
@@ -340,31 +351,32 @@ export default function AutoUpdatePage() {
             return;
         }
         
-        setWorkgroupConversationHistory(result.updatedHistory || history);
+        const newHistory = result.updatedHistory || history;
+        setConversationHistory(newHistory);
+
 
         if (result.orchestratorDecision) {
             const nextAgentConfig = agents.find(a => a.id === result.orchestratorDecision?.nextAgentId);
-            addWorkgroupLog({ type: 'orchestrator', agentName: orchestratorAgent.name, message: `Decisión: ${result.orchestratorDecision.reason}. Próximo: ${nextAgentConfig?.name || result.orchestratorDecision.nextAgentId}` });
+            addWorkgroupLog({ type: 'orchestrator', agentName: orchestratorAgent.name, message: `Decisión: ${result.orchestratorDecision.reason}. Próximo: ${nextAgentConfig?.name || result.orchestratorDecision.nextAgentId}`, llmResponse: {raw: result.orchestratorDecision.rawOutput} });
         }
         if (result.agentResponse) {
             const respondingAgent = agents.find(a => a.id === result.agentResponse?.agentId);
-            addWorkgroupLog({ type: 'agent', agentName: respondingAgent?.name || result.agentResponse.agentId, message: `Respuesta (extracto): ${result.agentResponse.content.substring(0, 200)}...` });
-            // The "final" response for analysis is expected from an agent, likely the last one chosen by orchestrator or when task is "COMPLETADO"
-            // Attempt to parse this as ProjectAnalysisResponse
+            addWorkgroupLog({ type: 'agent', agentName: respondingAgent?.name || result.agentResponse.agentId, message: `Respuesta (inicio): ${result.agentResponse.content.substring(0, 500)}...`, llmResponse: {raw: result.agentResponse.rawOutput} });
+           
             if (result.isComplete || result.orchestratorDecision?.nextAgentId === "COMPLETADO") {
                 try {
+                    // Attempt to parse the full agent response as ProjectAnalysisResponse
                     const finalAnalysis = JSON.parse(result.agentResponse.content) as ProjectAnalysisResponse;
-                     // Validate finalAnalysis structure
                     if (finalAnalysis && finalAnalysis.analysisTitle && Array.isArray(finalAnalysis.suggestions)) {
                          processAnalysisResult(finalAnalysis);
                          addWorkgroupLog({ type: 'system', message: `Análisis del grupo de trabajo completado y procesado.`});
-                         return; // End of workgroup analysis
+                         return; 
                     } else {
                          throw new Error("La respuesta final del agente no tiene el formato ProjectAnalysisResponse esperado.");
                     }
                 } catch (parseError) {
-                    addWorkgroupLog({ type: 'error', message: `Error al parsear la respuesta final del agente como JSON: ${(parseError as Error).message}. Contenido: ${result.agentResponse.content.substring(0,300)}...`});
-                    setCurrentAnalysisError("La respuesta final del grupo de trabajo no pudo ser interpretada.");
+                    addWorkgroupLog({ type: 'error', message: `Error al parsear la respuesta final del agente como JSON para ProjectAnalysisResponse: ${(parseError as Error).message}. Contenido completo en logs del servidor.`});
+                    setCurrentAnalysisError("La respuesta final del grupo de trabajo no pudo ser interpretada como un análisis de proyecto válido.");
                     setStatus("error");
                     return;
                 }
@@ -373,16 +385,16 @@ export default function AutoUpdatePage() {
 
         if (result.isComplete || turn >= MAX_WORKGROUP_TURNS) {
             addWorkgroupLog({ type: 'system', message: `Ejecución del análisis de grupo ${result.isComplete ? 'marcada como completada' : 'alcanzó el límite de turnos'}.` });
-             if (!analysisResult) { // If no specific analysis result was parsed yet
+             if (!analysisResult && !(result.agentResponse && result.orchestratorDecision?.nextAgentId === "COMPLETADO")) { 
                 setCurrentAnalysisError("El grupo de trabajo finalizó pero no se obtuvo un resultado de análisis claro.");
                 setStatus("error");
             } else {
-                 setStatus("success"); // If analysisResult was set by processAnalysisResult
+                 setStatus("success");
             }
         } else if (!signal.aborted) {
             await new Promise(resolve => setTimeout(resolve, 1500));
             if (!signal.aborted && isMountedRef.current) {
-                runWorkgroupAnalysisTurn(turn + 1, result.updatedHistory || history, signal, workgroup, task);
+                runWorkgroupAnalysisTurn(turn + 1, newHistory, signal, workgroup, task);
             }
         }
     } catch (error) {
@@ -410,7 +422,7 @@ export default function AutoUpdatePage() {
       }
       return { ...s, id: `suggestion-${index}-${Date.now()}`, status: currentStatus, originalContent: relatedFile?.content };
     });
-    setSuggestionsWithStatus(initialSuggestions as SuggestionWithStatus[]);
+    setSuggestionsWithStatus(initialSuggestions as SuggestionWithStatus[]); // Cast here
     setStatus("success");
     toast({ title: "Análisis Completado", description: `Se han generado sugerencias.` });
     addDetailedLog(`Análisis completado y resultados procesados en UI.`);
@@ -644,7 +656,8 @@ export default function AutoUpdatePage() {
 
 
   return (
-    <div className="flex flex-col gap-6">
+    <> {/* Added Fragment */}
+      <div className="flex flex-col gap-6">
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle className="text-3xl font-bold text-primary flex items-center gap-2">
@@ -899,6 +912,8 @@ export default function AutoUpdatePage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+      </div>
+    </> 
   );
 }
+
