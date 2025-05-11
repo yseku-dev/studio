@@ -26,15 +26,15 @@ interface RefactorProjectAIResponse {
 }
 
 export interface HandleGetRefactoringSuggestionsPayload {
-  projectFile?: File; // For ZIP/JSON upload
-  gitUrl?: string;    // For Git URL
+  projectFileContent?: string; // Changed from File object
+  projectFileName?: string;    // Added for context
+  projectFileType?: string;    // Added for context
+  gitUrl?: string;
   goals?: string;
   priority?: "seguridad" | "legibilidad" | "rendimiento" | "estandarizar" | "reducir_complejidad";
-  configSource: string; // 'global', 'agent:<id>', 'workgroup:<id>'
-  // LLMOptions are resolved on the client and passed if not using workgroup
-  llmOptions?: LLMOptions; 
-  // For workgroup, these are needed to resolve options on server
-  agents?: AgentConfig[]; 
+  configSource: string;
+  llmOptions?: LLMOptions;
+  agents?: AgentConfig[];
   workgroups?: WorkgroupConfig[];
   localStorageSnapshot?: LocalStorageSnapshot;
 }
@@ -43,10 +43,10 @@ export interface HandleGetRefactoringSuggestionsResult {
   success: boolean;
   data?: RefactoringSuggestionItem[];
   error?: string;
-  workgroupLogs?: string[]; // For workgroup execution
+  workgroupLogs?: string[];
 }
 
-const REFACTOR_LLM_API_TIMEOUT_MS = 180000; // 3 minutes, project analysis can be long
+const REFACTOR_LLM_API_TIMEOUT_MS = 180000;
 
 
 // --- Main Action to get Refactoring Suggestions ---
@@ -62,35 +62,37 @@ export async function handleGetRefactoringSuggestions(
 
   log('INFO', `Iniciando obtención de sugerencias de refactorización.`);
 
-  let projectContent: string;
+  let projectContent: string | undefined = undefined;
 
-  if (payload.projectFile) {
-    log('INFO', `Procesando archivo subido: ${payload.projectFile.name}`);
-    // TODO: Implement ZIP/JSON processing to extract content
-    // For now, simulate reading content if it's a text-based JSON
-    if (payload.projectFile.type === 'application/json') {
-        try {
-            projectContent = await payload.projectFile.text();
-            log('INFO', `Contenido JSON leído del archivo. Tamaño: ${projectContent.length}`);
-        } catch (e) {
-            log('ERROR', `Error al leer el archivo JSON: ${(e as Error).message}`);
-            return { success: false, error: "Error al leer el archivo JSON.", workgroupLogs: serverLogs };
-        }
-    } else if (payload.projectFile.name.endsWith('.zip')) {
-         log('WARN', 'Procesamiento de ZIP aún no implementado. Usando placeholder.');
-         projectContent = "// Contenido del proyecto ZIP (simulado) - Implementar descompresión y concatenación.";
+  if (payload.projectFileContent) {
+    log('INFO', `Procesando contenido de archivo: ${payload.projectFileName} (${payload.projectFileType})`);
+    // Simulate processing based on type, actual ZIP/JSON parsing would be more complex
+    if (payload.projectFileType === 'application/json' || payload.projectFileName?.endsWith('.json')) {
+        projectContent = payload.projectFileContent;
+        log('INFO', `Contenido JSON procesado. Tamaño: ${projectContent.length}`);
+    } else if (payload.projectFileType === 'application/zip' || payload.projectFileName?.endsWith('.zip')) {
+         log('WARN', 'Procesamiento de ZIP (desde contenido string) aún no implementado. Usando placeholder con nombre de archivo.');
+         // For actual ZIP processing from content, you'd need a library that handles ArrayBuffer/Uint8Array.
+         // This simulation assumes the content might be textual or a placeholder instruction.
+         projectContent = `// Contenido del proyecto ZIP (simulado a partir de string) para ${payload.projectFileName} - Implementar descompresión y concatenación si el contenido es el binario.`;
+    } else if (payload.projectFileType?.startsWith('text/')) {
+        projectContent = payload.projectFileContent;
+        log('INFO', `Contenido de archivo de texto (${payload.projectFileName}) procesado. Tamaño: ${projectContent.length}`);
     } else {
-        log('ERROR', `Tipo de archivo no soportado: ${payload.projectFile.type}`);
-        return { success: false, error: "Tipo de archivo no soportado para refactorización (solo ZIP/JSON).", workgroupLogs: serverLogs };
+        log('ERROR', `Tipo de archivo no soportado o contenido no textual: ${payload.projectFileName} (${payload.projectFileType})`);
+        return { success: false, error: `Tipo de archivo no soportado o no es procesable como texto: ${payload.projectFileName}`, workgroupLogs: serverLogs };
     }
   } else if (payload.gitUrl) {
     log('INFO', `Procesando URL de Git: ${payload.gitUrl} (Simulado)`);
     // TODO: Implement Git clone and content extraction (complex, simulate for now)
-    projectContent = `// Contenido del proyecto desde Git URL ${payload.gitUrl} (simulado).`;
-  } else {
-    log('ERROR', 'No se proporcionó archivo ni URL de Git.');
-    return { success: false, error: "Fuente del proyecto no especificada.", workgroupLogs: serverLogs };
+    projectContent = `// Contenido del proyecto desde Git URL ${payload.gitUrl} (simulado). Implementar clonación y extracción de contenido.`;
   }
+  
+  if (projectContent === undefined) {
+    log('ERROR', 'No se proporcionó contenido de archivo ni URL de Git válidos.');
+    return { success: false, error: "Fuente del proyecto no especificada o no procesable.", workgroupLogs: serverLogs };
+  }
+
 
   // --- Determine LLM configuration ---
   let llmOptionsToUse: LLMOptions | null = null;
@@ -107,15 +109,8 @@ export async function handleGetRefactoringSuggestions(
     if (!orchestratorAgentConfig) {
       return { success: false, error: `Agente Orquestador no encontrado en el grupo '${workgroupForAnalysis.name}'.`, workgroupLogs: serverLogs };
     }
-    // LLM options for orchestrator will be resolved inside handleWorkgroupTurn using localStorageSnapshot
-  } else if (payload.configSource.startsWith('agent:')) {
-    const agentId = payload.configSource.split(':')[1];
-    const agent = payload.agents?.find(a => a.id === agentId);
-    if (!agent) return { success: false, error: `Agente '${agentId}' no encontrado.`, workgroupLogs: serverLogs };
-    // Ensure a valid localStorageSnapshot is passed if agents/workgroups are also passed
-    llmOptionsToUse = resolveLlmOptionsForSource(payload.configSource, payload.agents || [], payload.workgroups || [], payload.localStorageSnapshot);
-  } else { // global
-    llmOptionsToUse = resolveLlmOptionsForSource('global', payload.agents || [], payload.workgroups || [], payload.localStorageSnapshot);
+  } else {
+     llmOptionsToUse = resolveLlmOptionsForSource(payload.configSource, payload.agents || [], payload.workgroups || [], payload.localStorageSnapshot);
   }
 
   if (!llmOptionsToUse && !workgroupForAnalysis) {
@@ -136,7 +131,7 @@ Tu respuesta DEBE ser un objeto JSON con la clave "refactoringSuggestions", que 
 No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
 
   const taskForWorkgroup = `Analizar el siguiente proyecto para refactorización. ${refactoringGoals} ${refactoringPriority}
-El proyecto es (concatenado o JSON):
+El proyecto es (contenido textual):
 ${projectContent.substring(0, 15000)} ${projectContent.length > 15000 ? "\n... (contenido truncado para el prompt)" : ""}
 La respuesta final de un agente especialista en refactorización DEBE ser un objeto JSON con la clave "refactoringSuggestions" como se describe en el prompt del sistema del Refactorizador.`;
 
@@ -208,25 +203,18 @@ La respuesta final de un agente especialista en refactorización DEBE ser un obj
       log('INFO', `Usando llamada directa a LLM para refactorización con proveedor ${llmOptionsToUse.providerId}.`);
       const messages: ChatMessage[] = [
         { role: "system", content: systemPromptForDirectCall },
-        { role: "user", content: `Proyecto (archivos concatenados/JSON):\n\n${projectContent.substring(0, 15000)} ${projectContent.length > 15000 ? "\n... (contenido truncado)" : ""}` }
+        { role: "user", content: `Proyecto (contenido textual):\n\n${projectContent.substring(0, 15000)} ${projectContent.length > 15000 ? "\n... (contenido truncado)" : ""}` }
       ];
 
-      // Use a generic request function similar to those in other actions.ts
-      // For now, assuming analyzeProjectSourceChunk can be adapted or a new one created.
-      // This is a placeholder, needs proper implementation of makeLLMRequest or similar.
       const response = await analyzeProjectSourceChunk(projectContent, { ...llmOptionsToUse, timeoutMs: REFACTOR_LLM_API_TIMEOUT_MS }, 
         `Metas: ${payload.goals || 'generales'}. Prioridad: ${payload.priority || 'ninguna'}. Prompt del sistema para refactorización usado internamente.`
       );
       
-      // The response from analyzeProjectSourceChunk is ProjectAnalysisResponse.
-      // We need to map it or expect the AI to return in RefactorProjectAIResponse format.
-      // For now, let's assume we get something that can be mapped.
-      // This is a simplification and should ideally call a dedicated LLM request for refactoring.
       if (response.suggestions) {
         const mappedSuggestions: RefactoringSuggestionItem[] = response.suggestions.map(s => ({
           area: s.area,
           description: s.suggestion,
-          priority: s.priority || 'Media', // Default if not provided
+          priority: s.priority || 'Media',
           suggestedSnippet: s.suggestedFullFileContent,
         }));
         return { success: true, data: mappedSuggestions, workgroupLogs: serverLogs };
@@ -247,31 +235,19 @@ La respuesta final de un agente especialista en refactorización DEBE ser un obj
 // Placeholder for applying a single refactoring suggestion
 export interface ApplyRefactoringSuggestionPayload {
   suggestionId: string;
-  // Need a way to identify the project context on the server, e.g., a session ID or the full project data again.
-  // This is complex for ZIP uploads as server needs to maintain state or re-process.
-  projectIdentifier: string; // Could be a temporary ID for an uploaded project session
-  // originalFileContent: string; // To verify before applying
-  // suggestedFileContent: string;
-  // filePath: string;
+  projectIdentifier: string; 
 }
 
 export interface ApplyRefactoringSuggestionResult {
   success: boolean;
   error?: string;
-  updatedFileContent?: string; // If applicable and successful
+  updatedFileContent?: string;
 }
 
 export async function handleApplyRefactoringSuggestion(
   payload: ApplyRefactoringSuggestionPayload
 ): Promise<ApplyRefactoringSuggestionResult> {
-  console.log("TODO: Implement apply refactoring suggestion logic", payload);
-  // This would involve:
-  // 1. Retrieving the project state (e.g., from temp storage for a ZIP upload).
-  // 2. Finding the specific file based on `payload.filePath`.
-  // 3. (Optional but recommended) Verifying `originalFileContent`.
-  // 4. Replacing content with `suggestedFileContent`.
-  // 5. Saving the updated project state.
-  // For now, simulate success.
+  console.log("TODO: Implementar lógica para aplicar sugerencia de refactorización", payload);
   await new Promise(resolve => setTimeout(resolve, 500));
   return { success: true, updatedFileContent: "// Contenido del archivo actualizado (simulado)" };
 }

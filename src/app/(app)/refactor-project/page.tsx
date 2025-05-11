@@ -26,8 +26,7 @@ import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm
 import type { LLMOptions } from '@/services/groq';
 import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGENT_NAME } from '@/config/agent-config';
 import { LLM_PROVIDERS, LOCALSTORAGE_PROVIDER_ID_KEY, getLocalStorageApiKeyName, getLocalStorageModelName, type LLMProviderId } from '@/config/llm-config';
-// TODO: Import server actions: handleGetRefactoringSuggestions, handleApplyRefactoringSuggestion
-// import { handleGetRefactoringSuggestions, handleApplyRefactoringSuggestion } from './actions';
+import { handleGetRefactoringSuggestions, handleApplyRefactoringSuggestion, type HandleGetRefactoringSuggestionsPayload } from './actions';
 
 const refactorParamsSchema = z.object({
   goals: z.string().optional(),
@@ -42,7 +41,7 @@ const fileOrUrlSchema = z.object({
   gitUrl: z.string().url({ message: "URL de Git inválida." }).optional(),
 }).refine(data => data.projectFile || data.gitUrl, {
   message: "Debes subir un archivo o proporcionar una URL de Git.",
-  path: ["projectFile"], // Or path: ["gitUrl"]
+  path: ["projectFile"], 
 });
 
 type FileOrUrlFormData = z.infer<typeof fileOrUrlSchema>;
@@ -53,7 +52,7 @@ interface RefactoringSuggestion {
   description: string;
   priority: 'Alta' | 'Media' | 'Baja';
   suggestedSnippet?: string;
-  originalContent?: string; // For diff view
+  originalContent?: string; 
   status?: 'pending' | 'applied' | 'dismissed' | 'error';
   errorMessage?: string;
 }
@@ -103,12 +102,15 @@ export default function RefactorProjectPage() {
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files[0]) {
       const file = event.target.files[0];
-      if (file.type === 'application/zip' || file.name.endsWith('.zip') || file.type === 'application/json' || file.name.endsWith('.json')) {
+      // Allow more general text files in addition to zip/json for content reading
+      if (file.type === 'application/zip' || file.name.endsWith('.zip') || 
+          file.type === 'application/json' || file.name.endsWith('.json') ||
+          file.type.startsWith('text/')) {
         fileForm.setValue('projectFile', file);
         fileForm.clearErrors('projectFile');
         toast({ title: "Archivo Seleccionado", description: file.name });
       } else {
-        toast({ title: "Tipo de Archivo Inválido", description: "Por favor, selecciona un archivo .zip o .json.", variant: "destructive" });
+        toast({ title: "Tipo de Archivo Inválido", description: "Por favor, selecciona un archivo .zip, .json o de texto.", variant: "destructive" });
         fileForm.setValue('projectFile', undefined);
         event.target.value = '';
       }
@@ -122,41 +124,94 @@ export default function RefactorProjectPage() {
     setSuggestions([]);
     addLog("Iniciando análisis de refactorización...");
 
-    // TODO: Implement actual analysis call to server action
-    // const actionPayload = { ...data, ...params, llmOptions: resolvedLlmOptions };
-    // const result = await handleGetRefactoringSuggestions(actionPayload);
+    const file = data.projectFile;
+    let projectFileContent: string | undefined;
+    let projectFileName: string | undefined;
+    let projectFileType: string | undefined;
 
-    // Simulate AI call
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    if (file) {
+      projectFileName = file.name;
+      projectFileType = file.type;
+      try {
+        // For ZIP, we'd ideally send the binary data or process on client to extract text.
+        // For now, if it's not JSON or text, we can't read its content as a simple string here.
+        if (file.type === 'application/json' || file.type.startsWith('text/')) {
+            projectFileContent = await file.text();
+        } else if (file.type === 'application/zip' || file.name.endsWith('.zip')) {
+            // We can't read ZIP content as simple text on client for now.
+            // The server action will handle the "simulated" placeholder.
+            // If actual ZIP processing were client-side, it'd be more complex.
+            addLog(`Archivo ZIP (${file.name}) seleccionado. El contenido textual no se leerá en el cliente para este tipo.`);
+        } else {
+            toast({ title: "Error de Archivo", description: `No se puede procesar el contenido de '${file.name}' como texto.`, variant: "destructive" });
+            setAnalysisStatus("idle");
+            return;
+        }
+      } catch (e) {
+        toast({ title: "Error de Lectura", description: "No se pudo leer el contenido del archivo.", variant: "destructive" });
+        setAnalysisStatus("idle");
+        return;
+      }
+    }
     
-    // Example:
-    // if (result.success && result.data) {
-    //   setSuggestions(result.data.map(s => ({...s, id: crypto.randomUUID(), status: 'pending'})));
-    //   setAnalysisStatus("success");
-    //   toast({ title: "Análisis Completado", description: "Sugerencias de refactorización generadas." });
-    // } else {
-    //   setCurrentError(result.error || "Error desconocido durante el análisis.");
-    //   setAnalysisStatus("error");
-    //   toast({ title: "Error de Análisis", description: result.error, variant: "destructive" });
-    // }
+    let snapshot: LocalStorageSnapshot | undefined = undefined;
+    if (data.configSource.startsWith('workgroup:')) {
+      snapshot = {
+        [LOCALSTORAGE_PROVIDER_ID_KEY]: localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null,
+        apiKeys: {},
+        modelNames: {},
+        apiUrls: {},
+      };
+      LLM_PROVIDERS.forEach(provider => {
+        snapshot!.apiKeys[provider.id] = localStorage.getItem(getLocalStorageApiKeyName(provider.id));
+        snapshot!.modelNames[provider.id] = localStorage.getItem(getLocalStorageModelName(provider.id));
+        snapshot!.apiUrls[provider.id] = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
+      });
+    }
 
-    // Simulated response
-    setSuggestions([
-      { id: crypto.randomUUID(), area: "src/components/button.tsx", description: "Reemplazar bucle for con map para mejorar legibilidad.", priority: "Media", suggestedSnippet: "items.map(item => <div key={item.id}>{item.name}</div>);", originalContent: "for (let i=0; i < items.length; i++) { ... }", status: "pending"},
-      { id: crypto.randomUUID(), area: "src/services/api.ts", description: "Usar async/await en lugar de promesas anidadas.", priority: "Alta", suggestedSnippet: "async function fetchData() {\n  const response = await fetch('/api/data');\n  return await response.json();\n}", originalContent: "fetch('/api/data').then(res => res.json()).then(data => ...);", status: "pending"},
-    ]);
-    setAnalysisStatus("success");
-    toast({ title: "Análisis Simulado Completado", description: "Sugerencias de refactorización generadas." });
-    addLog("Análisis simulado completado.");
+    const actionPayload: HandleGetRefactoringSuggestionsPayload = {
+      projectFileContent,
+      projectFileName,
+      projectFileType,
+      gitUrl: data.gitUrl,
+      goals: params.goals,
+      priority: params.priority,
+      configSource: data.configSource,
+      llmOptions: data.configSource.startsWith('workgroup:') ? undefined : resolvedLlmOptions || undefined,
+      agents: data.configSource.startsWith('workgroup:') ? agents : undefined,
+      workgroups: data.configSource.startsWith('workgroup:') ? workgroups : undefined,
+      localStorageSnapshot: snapshot,
+    };
+    
+    setAnalysisStatus("analyzing");
+    const result = await handleGetRefactoringSuggestions(actionPayload);
+    (result.workgroupLogs || []).forEach(logMsg => addLog(`[SERVER] ${logMsg}`));
+
+
+    if (result.success && result.data) {
+      setSuggestions(result.data.map(s => ({...s, id: crypto.randomUUID(), status: 'pending'})));
+      setAnalysisStatus("success");
+      toast({ title: "Análisis Completado", description: "Sugerencias de refactorización generadas." });
+    } else {
+      setCurrentError(result.error || "Error desconocido durante el análisis.");
+      setAnalysisStatus("error");
+      toast({ title: "Error de Análisis", description: result.error, variant: "destructive" });
+    }
+    setAnalysisStatus(isProcessing ? "analyzing" : result.success ? "success" : "error");
   };
 
   const handleApplySuggestion = async (suggestionId: string) => {
     addLog(`Intentando aplicar sugerencia: ${suggestionId}`);
     // TODO: Implement server action call
-    // const result = await handleApplyRefactoringSuggestion(suggestionId, projectData);
-    // Update suggestion status based on result
+    // For now, we need a projectIdentifier. This could be the projectFileName if dealing with single file content.
+    // If it's a ZIP or Git repo, this becomes more complex and would need server-side state.
+    const suggestion = suggestions.find(s => s.id === suggestionId);
+    if (!suggestion) return;
+
+    toast({title: "Aplicando Sugerencia (Simulado)", description: `Aplicando cambios para ${suggestion.area}. La funcionalidad real está pendiente.`});
     setSuggestions(prev => prev.map(s => s.id === suggestionId ? {...s, status: 'applied'} : s));
-    toast({title: "Sugerencia Aplicada (Simulado)", description: `Cambios para ${suggestionId} aplicados.`});
+    // const result = await handleApplyRefactoringSuggestion({suggestionId, projectIdentifier: "current_project_context_placeholder"});
+    // Update suggestion status based on result
   };
 
   const handleDismissSuggestion = (suggestionId: string) => {
@@ -166,16 +221,15 @@ export default function RefactorProjectPage() {
   
   const handleApplyAllSuggestions = async () => {
     addLog("Intentando aplicar todas las sugerencias...");
-    // TODO: Implement logic for bulk application, potentially using workgroup
-    toast({ title: "Aplicando Todas (Simulado)", description: "Se están aplicando todas las sugerencias." });
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    toast({ title: "Aplicando Todas (Simulado)", description: "Se están aplicando todas las sugerencias. La funcionalidad real está pendiente." });
+    await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate delay
     setSuggestions(prev => prev.map(s => s.status === 'pending' ? {...s, status: 'applied'} : s));
     toast({ title: "Todas las Sugerencias Aplicadas (Simulado)" });
   };
 
 
   const getSourceName = (sourceId: string): string => {
-    if (sourceId === 'global') return 'Global (Refactorizador por defecto)';
+    if (sourceId === 'global') return 'Agente Refactorizador (Config. Global)';
     const agentPrefix = "agent:";
     const workgroupPrefix = "workgroup:";
 
@@ -193,7 +247,10 @@ export default function RefactorProjectPage() {
   };
   
   const isProcessing = analysisStatus === "loading" || analysisStatus === "analyzing";
-  const canSubmit = isProcessing || (activeTab === "upload" && !fileForm.watch('projectFile')) || (activeTab === "git" && !fileForm.watch('gitUrl')) || (!resolvedLlmOptions && !watchedConfigSource.startsWith("workgroup:"));
+  const formValues = fileForm.watch();
+  const canSubmit = isProcessing || 
+                    (!formValues.projectFile && !formValues.gitUrl) || 
+                    (!resolvedLlmOptions && !watchedConfigSource.startsWith("workgroup:"));
 
 
   return (
@@ -229,12 +286,10 @@ export default function RefactorProjectPage() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="global">Agente Refactorizador (Config. Global)</SelectItem>
-                      {/* Filter agents to show only "Refactorizador" or agents with refactoring capabilities */}
-                      {agents.filter(a => a.name.toLowerCase().includes("refactor") || a.name === "Refactorizador").map(agent => (
+                      {agents.filter(a => a.name.toLowerCase().includes("refactor") || a.name === ORCHESTRATOR_AGENT_NAME || a.name === "RefactorizadorCodigoExperto").map(agent => (
                         <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>
                       ))}
-                      {/* Filter workgroups to show those including a "Refactorizador" */}
-                       {workgroups.filter(wg => wg.agentIds.some(agentId => agents.find(a => a.id === agentId)?.name.toLowerCase().includes("refactor"))).map(wg => (
+                       {workgroups.filter(wg => wg.agentIds.some(agentId => agents.find(a => a.id === agentId)?.name.toLowerCase().includes("refactor") || agents.find(a => a.id === agentId)?.name === "RefactorizadorCodigoExperto")).map(wg => (
                         <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>
                       ))}
                     </SelectContent>
@@ -246,13 +301,13 @@ export default function RefactorProjectPage() {
 
             <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "upload" | "git")} className="w-full">
               <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="upload" className="gap-2"><UploadCloud className="h-5 w-5" /> Subir Archivo (ZIP/JSON)</TabsTrigger>
+                <TabsTrigger value="upload" className="gap-2"><UploadCloud className="h-5 w-5" /> Subir Archivo (ZIP/JSON/Texto)</TabsTrigger>
                 <TabsTrigger value="git" className="gap-2"><GitFork className="h-5 w-5" /> Desde Repositorio Git</TabsTrigger>
               </TabsList>
               <TabsContent value="upload" className="mt-6">
                 <div className="space-y-2">
-                  <Label htmlFor="project-file" className="text-base">Archivo del Proyecto (.zip o .json)</Label>
-                  <Input id="project-file" type="file" accept=".zip,.json,application/zip,application/json" onChange={handleFileChange} className="text-base file:text-base" />
+                  <Label htmlFor="project-file" className="text-base">Archivo del Proyecto (.zip, .json, .txt, .py, etc.)</Label>
+                  <Input id="project-file" type="file" accept=".zip,.json,application/zip,application/json,text/*,.py,.js,.ts,.java" onChange={handleFileChange} className="text-base file:text-base" />
                   {fileForm.watch('projectFile') && <p className="text-sm text-muted-foreground">Seleccionado: {fileForm.watch('projectFile.name')}</p>}
                   {fileForm.formState.errors.projectFile && <p className="text-sm text-destructive mt-1">{fileForm.formState.errors.projectFile.message as string}</p>}
                 </div>
@@ -262,7 +317,7 @@ export default function RefactorProjectPage() {
                   <Label htmlFor="git-url" className="text-base">URL del Repositorio Git</Label>
                   <Input id="git-url" type="url" placeholder="https://github.com/usuario/repo.git" {...fileForm.register('gitUrl')} className="text-base" />
                   {fileForm.formState.errors.gitUrl && <p className="text-sm text-destructive mt-1">{fileForm.formState.errors.gitUrl.message}</p>}
-                   <p className="text-xs text-muted-foreground">Funcionalidad de Git aún en desarrollo. Actualmente simulada.</p>
+                   <p className="text-xs text-muted-foreground">Funcionalidad de Git aún en desarrollo. Actualmente simulada para la extracción de contenido.</p>
                 </div>
               </TabsContent>
             </Tabs>
@@ -302,7 +357,7 @@ export default function RefactorProjectPage() {
             </Button>
             {analysisStatus === 'success' && suggestions.length > 0 && (
               <Button onClick={handleApplyAllSuggestions} variant="secondary" className="w-full md:w-auto text-base">
-                Aplicar Todas las Sugerencias ({suggestions.filter(s=>s.status === 'pending').length})
+                Aplicar Todas las Sugerencias ({suggestions.filter(s=>s.status === 'pending').length}) (Simulado)
               </Button>
             )}
           </CardFooter>
@@ -356,9 +411,9 @@ export default function RefactorProjectPage() {
                       <CardFooter className="pt-3 gap-2 flex-wrap">
                         <Button size="sm" variant="outline" onClick={() => handleApplySuggestion(s.id)} disabled={s.status === 'applied' || s.status === 'dismissed'} className="text-xs">
                           {s.status === 'applied' ? <CheckCircle className="mr-1 h-4 w-4"/> : <Wand2 className="mr-1 h-4 w-4" />}
-                          {s.status === 'applied' ? 'Aplicada' : 'Aplicar'}
+                          {s.status === 'applied' ? 'Aplicada (Simulado)' : 'Aplicar (Simulado)'}
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => toast({title: "Vista de Diff (Simulada)", description: `Mostrando diferencias para ${s.area}.`})} className="text-xs">
+                        <Button size="sm" variant="ghost" onClick={() => toast({title: "Vista de Diff (Simulada)", description: `Mostrando diferencias para ${s.area}. Funcionalidad de Diff real está pendiente.`})} className="text-xs">
                           <Eye className="mr-1 h-4 w-4"/> Ver Diff
                         </Button>
                         <Button size="sm" variant="ghost" onClick={() => handleDismissSuggestion(s.id)} disabled={s.status === 'applied' || s.status === 'dismissed'} className="text-xs text-muted-foreground hover:text-destructive">
