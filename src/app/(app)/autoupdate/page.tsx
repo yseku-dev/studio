@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -187,6 +186,170 @@ export default function AutoUpdatePage() {
     }
   };
 
+  const processAnalysisResult = useCallback((data: ProjectAnalysisResponse) => {
+    setAnalysisResult(data);
+    const initialSuggestions = data.suggestions.map((s, index) => {
+      const relatedFile = projectFiles?.find(f => {
+        if (!s.area) return false;
+        const normalizePath = (p: string) => p.replace(/^\.\//, '').replace(/^src\//, '');
+        const areaLower = normalizePath(s.area.toLowerCase());
+        const fileNameLower = normalizePath(f.fileName.toLowerCase());
+        const baseAreaLower = areaLower.split(' (parte ')[0];
+        return fileNameLower === baseAreaLower;
+      });
+      let currentStatus: SuggestionStatus = "pending";
+      if (!s.area || !s.suggestedFullFileContent || !relatedFile?.content) {
+        currentStatus = "not_applicable";
+      }
+      return { ...s, id: `suggestion-${index}-${Date.now()}`, status: currentStatus, originalContent: relatedFile?.content };
+    });
+    setSuggestionsWithStatus(initialSuggestions as SuggestionWithStatus[]); // Cast here
+    setStatus("success");
+    toast({ title: "Análisis Completado", description: `Se han generado sugerencias.` });
+    addDetailedLog(`Análisis completado y resultados procesados en UI.`);
+  }, [projectFiles, toast, addDetailedLog]);
+
+
+  const runWorkgroupAnalysisTurn = useCallback(async (
+    turn: number,
+    history: ChatMessage[],
+    signal: AbortSignal,
+    workgroup: WorkgroupConfig,
+    task: string
+  ) => {
+    if (!isMountedRef.current || signal.aborted) {
+        addWorkgroupLog({ type: 'system', message: 'Ejecución de análisis de grupo detenida.' });
+        if (status === "processing_workgroup_turn") setStatus("idle"); 
+        return;
+    }
+    addWorkgroupLog({ type: 'system', message: `Iniciando turno de análisis ${turn}/${MAX_WORKGROUP_TURNS} para el grupo ${workgroup.name}...` });
+    setCurrentWorkgroupTurn(turn);
+    setStatus("processing_workgroup_turn");
+
+    const orchestratorAgent = agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME && workgroup.agentIds.includes(a.id));
+    if (!orchestratorAgent) {
+        addWorkgroupLog({ type: 'error', message: 'Error crítico: Agente Orquestador no encontrado en el grupo.' });
+        setCurrentAnalysisError("Orquestrador no encontrado en el grupo.");
+        setStatus("error");
+        return;
+    }
+
+    const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestratorAgent.id}`, agents, workgroups);
+    if (!orchestratorLlmOptions) {
+        addWorkgroupLog({ type: 'error', message: `Configuración LLM inválida para Orquestrador (${orchestratorAgent.name})`});
+        setCurrentAnalysisError(`Configuración LLM inválida para Orquestrador.`);
+        setStatus("error");
+        return;
+    }
+    
+    const participantAgentDetails = workgroup.agentIds
+        .filter(id => id !== orchestratorAgent.id)
+        .map(id => agents.find(a => a.id === id))
+        .filter(agent => agent !== undefined) as AgentConfig[];
+
+    const participantAgentConfigs = participantAgentDetails.reduce((acc, agent) => {
+        const llmOptions = resolveLlmOptionsForSource(`agent:${agent.id}`, agents, workgroups);
+        if (llmOptions) {
+            acc[agent.id] = {
+                id: agent.id, name: agent.name, systemMessage: agent.systemMessage,
+                llmProviderId: llmOptions.providerId, llmModelName: llmOptions.modelName,
+                llmApiKey: llmOptions.apiKey, llmApiUrl: llmOptions.apiUrl
+            };
+        }
+        return acc;
+    }, {} as WorkgroupTurnPayload['participantAgentConfigs']);
+
+
+    const payload: WorkgroupTurnPayload = {
+        workgroupName: workgroup.name, task, conversationHistory: history,
+        orchestrator: {
+            id: orchestratorAgent.id, name: orchestratorAgent.name, systemMessage: orchestratorAgent.systemMessage,
+            llmProviderId: orchestratorLlmOptions.providerId, llmModelName: orchestratorLlmOptions.modelName,
+            llmApiKey: orchestratorLlmOptions.apiKey, llmApiUrl: orchestratorLlmOptions.apiUrl
+        },
+        participantAgentConfigs, currentTurn: turn, maxTurns: MAX_WORKGROUP_TURNS
+    };
+
+    addWorkgroupLog({ type: 'debug', message: `Enviando payload a handleWorkgroupTurn para el turno ${turn}. Tarea (inicio): ${task.substring(0,500)}...`, llmRequest: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
+
+    try {
+        const result: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
+        (result.serverLogs || []).forEach(serverLogMsg => {
+             const match = serverLogMsg.match(/^\[(.*?)\] \[(.*?)\] (.*)$/);
+             if (match) {
+                 const [, timestamp, type, messageData] = match;
+                 let message = messageData;
+                 let data;
+                 if(messageData.includes(' | Data: ')) {
+                    [message, data] = messageData.split(' | Data: ');
+                 }
+                 addWorkgroupLog({ timestamp, type: type.toLowerCase() as LogEntry['type'] || 'debug', message, llmResponse: data ? {raw: data} : undefined });
+             } else {
+                 addWorkgroupLog({ type: 'debug', message: `[SERVER] ${serverLogMsg}` });
+             }
+        });
+
+        if (result.error) {
+            addWorkgroupLog({ type: 'error', message: `Error en servidor (turno ${turn}): ${result.error}` });
+            setCurrentAnalysisError(result.error);
+            setStatus("error");
+            return;
+        }
+        
+        const newHistory = result.updatedHistory || history;
+        setWorkgroupConversationHistory(newHistory);
+
+
+        if (result.orchestratorDecision) {
+            const nextAgentConfig = agents.find(a => a.id === result.orchestratorDecision?.nextAgentId);
+            addWorkgroupLog({ type: 'orchestrator', agentName: orchestratorAgent.name, message: `Decisión: ${result.orchestratorDecision.reason}. Próximo: ${nextAgentConfig?.name || result.orchestratorDecision.nextAgentId}`, llmResponse: {raw: result.orchestratorDecision.rawOutput} });
+        }
+        if (result.agentResponse) {
+            const respondingAgent = agents.find(a => a.id === result.agentResponse?.agentId);
+            addWorkgroupLog({ type: 'agent', agentName: respondingAgent?.name || result.agentResponse.agentId, message: `Respuesta (inicio): ${result.agentResponse.content.substring(0, 500)}...`, llmResponse: {raw: result.agentResponse.rawOutput} });
+           
+            if (result.isComplete || result.orchestratorDecision?.nextAgentId === "COMPLETADO") {
+                try {
+                    // Attempt to parse the full agent response as ProjectAnalysisResponse
+                    const finalAnalysis = JSON.parse(result.agentResponse.content) as ProjectAnalysisResponse;
+                    if (finalAnalysis && finalAnalysis.analysisTitle && Array.isArray(finalAnalysis.suggestions)) {
+                         processAnalysisResult(finalAnalysis);
+                         addWorkgroupLog({ type: 'system', message: `Análisis del grupo de trabajo completado y procesado.`});
+                         return; 
+                    } else {
+                         throw new Error("La respuesta final del agente no tiene el formato ProjectAnalysisResponse esperado.");
+                    }
+                } catch (parseError) {
+                    addWorkgroupLog({ type: 'error', message: `Error al parsear la respuesta final del agente como JSON para ProjectAnalysisResponse: ${(parseError as Error).message}. Contenido completo en logs del servidor.`});
+                    setCurrentAnalysisError("La respuesta final del grupo de trabajo no pudo ser interpretada como un análisis de proyecto válido.");
+                    setStatus("error");
+                    return;
+                }
+            }
+        }
+
+        if (result.isComplete || turn >= MAX_WORKGROUP_TURNS) {
+            addWorkgroupLog({ type: 'system', message: `Ejecución del análisis de grupo ${result.isComplete ? 'marcada como completada' : 'alcanzó el límite de turnos'}.` });
+             if (!analysisResult && !(result.agentResponse && result.orchestratorDecision?.nextAgentId === "COMPLETADO")) { 
+                setCurrentAnalysisError("El grupo de trabajo finalizó pero no se obtuvo un resultado de análisis claro.");
+                setStatus("error");
+            } else {
+                 setStatus("success");
+            }
+        } else if (!signal.aborted) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            if (!signal.aborted && isMountedRef.current) {
+                runWorkgroupAnalysisTurn(turn + 1, newHistory, signal, workgroup, task);
+            }
+        }
+    } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Error desconocido en cliente procesando turno de grupo.';
+        addWorkgroupLog({ type: 'error', message: `Error en cliente (turno ${turn}): ${errorMsg}` });
+        setCurrentAnalysisError(errorMsg);
+        setStatus("error");
+    }
+  }, [addWorkgroupLog, agents, workgroups, processAnalysisResult, status, setWorkgroupConversationHistory]);
+
   const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
     const options = resolvedLlmOptions;
     if (!options && !selectedConfigSource.startsWith("workgroup:")) {
@@ -274,169 +437,6 @@ export default function AutoUpdatePage() {
     }
   };
   
-  const runWorkgroupAnalysisTurn = async (
-    turn: number,
-    history: ChatMessage[],
-    signal: AbortSignal,
-    workgroup: WorkgroupConfig,
-    task: string
-  ) => {
-    if (!isMountedRef.current || signal.aborted) {
-        addWorkgroupLog({ type: 'system', message: 'Ejecución de análisis de grupo detenida.' });
-        if (status === "processing_workgroup_turn") setStatus("idle"); // Or "error" if appropriate
-        return;
-    }
-    addWorkgroupLog({ type: 'system', message: `Iniciando turno de análisis ${turn}/${MAX_WORKGROUP_TURNS} para el grupo ${workgroup.name}...` });
-    setCurrentWorkgroupTurn(turn);
-    setStatus("processing_workgroup_turn");
-
-    const orchestratorAgent = agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME && workgroup.agentIds.includes(a.id));
-    if (!orchestratorAgent) {
-        addWorkgroupLog({ type: 'error', message: 'Error crítico: Agente Orquestador no encontrado en el grupo.' });
-        setCurrentAnalysisError("Orquestrador no encontrado en el grupo.");
-        setStatus("error");
-        return;
-    }
-
-    const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestratorAgent.id}`, agents, workgroups);
-    if (!orchestratorLlmOptions) {
-        addWorkgroupLog({ type: 'error', message: `Configuración LLM inválida para Orquestrador (${orchestratorAgent.name})`});
-        setCurrentAnalysisError(`Configuración LLM inválida para Orquestrador.`);
-        setStatus("error");
-        return;
-    }
-    
-    const participantAgentDetails = workgroup.agentIds
-        .filter(id => id !== orchestratorAgent.id)
-        .map(id => agents.find(a => a.id === id))
-        .filter(agent => agent !== undefined) as AgentConfig[];
-
-    const participantAgentConfigs = participantAgentDetails.reduce((acc, agent) => {
-        const llmOptions = resolveLlmOptionsForSource(`agent:${agent.id}`, agents, workgroups);
-        if (llmOptions) {
-            acc[agent.id] = {
-                id: agent.id, name: agent.name, systemMessage: agent.systemMessage,
-                llmProviderId: llmOptions.providerId, llmModelName: llmOptions.modelName,
-                llmApiKey: llmOptions.apiKey, llmApiUrl: llmOptions.apiUrl
-            };
-        }
-        return acc;
-    }, {} as WorkgroupTurnPayload['participantAgentConfigs']);
-
-
-    const payload: WorkgroupTurnPayload = {
-        workgroupName: workgroup.name, task, conversationHistory: history,
-        orchestrator: {
-            id: orchestratorAgent.id, name: orchestratorAgent.name, systemMessage: orchestratorAgent.systemMessage,
-            llmProviderId: orchestratorLlmOptions.providerId, llmModelName: orchestratorLlmOptions.modelName,
-            llmApiKey: orchestratorLlmOptions.apiKey, llmApiUrl: orchestratorLlmOptions.apiUrl
-        },
-        participantAgentConfigs, currentTurn: turn, maxTurns: MAX_WORKGROUP_TURNS
-    };
-
-    addWorkgroupLog({ type: 'debug', message: `Enviando payload a handleWorkgroupTurn para el turno ${turn}. Tarea (inicio): ${task.substring(0,500)}...`, llmRequest: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
-
-    try {
-        const result: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
-        (result.serverLogs || []).forEach(serverLogMsg => {
-             const match = serverLogMsg.match(/^\[(.*?)\] \[(.*?)\] (.*)$/);
-             if (match) {
-                 const [, timestamp, type, messageData] = match;
-                 let message = messageData;
-                 let data;
-                 if(messageData.includes(' | Data: ')) {
-                    [message, data] = messageData.split(' | Data: ');
-                 }
-                 addWorkgroupLog({ timestamp, type: type.toLowerCase() as LogEntry['type'] || 'debug', message, llmResponse: data ? {raw: data} : undefined });
-             } else {
-                 addWorkgroupLog({ type: 'debug', message: `[SERVER] ${serverLogMsg}` });
-             }
-        });
-
-        if (result.error) {
-            addWorkgroupLog({ type: 'error', message: `Error en servidor (turno ${turn}): ${result.error}` });
-            setCurrentAnalysisError(result.error);
-            setStatus("error");
-            return;
-        }
-        
-        const newHistory = result.updatedHistory || history;
-        setConversationHistory(newHistory);
-
-
-        if (result.orchestratorDecision) {
-            const nextAgentConfig = agents.find(a => a.id === result.orchestratorDecision?.nextAgentId);
-            addWorkgroupLog({ type: 'orchestrator', agentName: orchestratorAgent.name, message: `Decisión: ${result.orchestratorDecision.reason}. Próximo: ${nextAgentConfig?.name || result.orchestratorDecision.nextAgentId}`, llmResponse: {raw: result.orchestratorDecision.rawOutput} });
-        }
-        if (result.agentResponse) {
-            const respondingAgent = agents.find(a => a.id === result.agentResponse?.agentId);
-            addWorkgroupLog({ type: 'agent', agentName: respondingAgent?.name || result.agentResponse.agentId, message: `Respuesta (inicio): ${result.agentResponse.content.substring(0, 500)}...`, llmResponse: {raw: result.agentResponse.rawOutput} });
-           
-            if (result.isComplete || result.orchestratorDecision?.nextAgentId === "COMPLETADO") {
-                try {
-                    // Attempt to parse the full agent response as ProjectAnalysisResponse
-                    const finalAnalysis = JSON.parse(result.agentResponse.content) as ProjectAnalysisResponse;
-                    if (finalAnalysis && finalAnalysis.analysisTitle && Array.isArray(finalAnalysis.suggestions)) {
-                         processAnalysisResult(finalAnalysis);
-                         addWorkgroupLog({ type: 'system', message: `Análisis del grupo de trabajo completado y procesado.`});
-                         return; 
-                    } else {
-                         throw new Error("La respuesta final del agente no tiene el formato ProjectAnalysisResponse esperado.");
-                    }
-                } catch (parseError) {
-                    addWorkgroupLog({ type: 'error', message: `Error al parsear la respuesta final del agente como JSON para ProjectAnalysisResponse: ${(parseError as Error).message}. Contenido completo en logs del servidor.`});
-                    setCurrentAnalysisError("La respuesta final del grupo de trabajo no pudo ser interpretada como un análisis de proyecto válido.");
-                    setStatus("error");
-                    return;
-                }
-            }
-        }
-
-        if (result.isComplete || turn >= MAX_WORKGROUP_TURNS) {
-            addWorkgroupLog({ type: 'system', message: `Ejecución del análisis de grupo ${result.isComplete ? 'marcada como completada' : 'alcanzó el límite de turnos'}.` });
-             if (!analysisResult && !(result.agentResponse && result.orchestratorDecision?.nextAgentId === "COMPLETADO")) { 
-                setCurrentAnalysisError("El grupo de trabajo finalizó pero no se obtuvo un resultado de análisis claro.");
-                setStatus("error");
-            } else {
-                 setStatus("success");
-            }
-        } else if (!signal.aborted) {
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            if (!signal.aborted && isMountedRef.current) {
-                runWorkgroupAnalysisTurn(turn + 1, newHistory, signal, workgroup, task);
-            }
-        }
-    } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Error desconocido en cliente procesando turno de grupo.';
-        addWorkgroupLog({ type: 'error', message: `Error en cliente (turno ${turn}): ${errorMsg}` });
-        setCurrentAnalysisError(errorMsg);
-        setStatus("error");
-    }
-  };
-
-  const processAnalysisResult = (data: ProjectAnalysisResponse) => {
-    setAnalysisResult(data);
-    const initialSuggestions = data.suggestions.map((s, index) => {
-      const relatedFile = projectFiles?.find(f => {
-        if (!s.area) return false;
-        const normalizePath = (p: string) => p.replace(/^\.\//, '').replace(/^src\//, '');
-        const areaLower = normalizePath(s.area.toLowerCase());
-        const fileNameLower = normalizePath(f.fileName.toLowerCase());
-        const baseAreaLower = areaLower.split(' (parte ')[0];
-        return fileNameLower === baseAreaLower;
-      });
-      let currentStatus: SuggestionStatus = "pending";
-      if (!s.area || !s.suggestedFullFileContent || !relatedFile?.content) {
-        currentStatus = "not_applicable";
-      }
-      return { ...s, id: `suggestion-${index}-${Date.now()}`, status: currentStatus, originalContent: relatedFile?.content };
-    });
-    setSuggestionsWithStatus(initialSuggestions as SuggestionWithStatus[]); // Cast here
-    setStatus("success");
-    toast({ title: "Análisis Completado", description: `Se han generado sugerencias.` });
-    addDetailedLog(`Análisis completado y resultados procesados en UI.`);
-  };
-
   const handleAnalysisError = (errorMsg: string | undefined) => {
     setStatus("error");
     setCurrentAnalysisError(errorMsg || "Ocurrió un error desconocido durante el auto-análisis.");
@@ -924,7 +924,6 @@ export default function AutoUpdatePage() {
         </AlertDialogContent>
       </AlertDialog>
       </div>
-    </> 
+    </>
   );
 }
-
