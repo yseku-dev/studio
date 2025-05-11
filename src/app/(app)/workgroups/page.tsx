@@ -27,8 +27,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
+} from "@/components/ui/alert-dialog"; // AlertDialogTrigger is not needed here directly
 import { WorkgroupExecutionModal } from '@/components/workgroup-execution-modal'; // Import the new modal
 import { LOCALSTORAGE_WORKGROUPS_KEY, LOCALSTORAGE_AGENTS_KEY, ORCHESTRATOR_AGENT_NAME } from '@/config/agent-config'; // Use constants
 
@@ -36,27 +35,14 @@ import { LOCALSTORAGE_WORKGROUPS_KEY, LOCALSTORAGE_AGENTS_KEY, ORCHESTRATOR_AGEN
 const defaultWorkgroup: Omit<WorkgroupConfig, 'id' | 'agentIds'> & { agentNames: string[] } = {
   name: "EquipoDesarrolloSoftware",
   description: "Un equipo multidisciplinario capaz de abordar diversas tareas de desarrollo de software, gestionado por un Orquestador.",
-  task: `Creación de agentes individuales:
-Los agentes necesarios para el proyecto se crean con permisos específicos , incluyendo:
-Lectura/escritura de archivos y datos.
-Creación y gestión de entornos virtuales (ej: Python Virtualenv, Docker).
-Ejecución de comandos en sistemas operativos o entornos de desarrollo.
-Acceso a su propio código fuente para modificaciones o auditorías.
-Configuración de modelos LLM:
-Cada agente puede usar un servidor LLM por defecto o elegir entre otros disponibles en la infraestructura (ej: OpenAI, Anthropic, modelos locales).
-Grupo inicial y rol del Orquestador :
-Al crear el grupo inicial , se incluyen automáticamente todos los agentes mencionados, junto con el Orquestador como componente central.
-Funciones del Orquestador en el grupo:
-Recepción de prompts: El Orquestador actúa como punto único de entrada para los inputs del usuario, gestionando todas las interacciones.
-Coordinación interna: Evalúa los resultados de los agentes, decide la acción siguiente y garantiza una ejecución óptima del flujo de trabajo .
-Configuración de LLM:
-Puede usar un servidor LLM por defecto o seleccionar otro disponible, independientemente de las configuraciones individuales de los agentes.
-Integra todas las entradas del usuario directamente en el próximo flujo de trabajo gestionado.
-Modos de operación:
-En grupos:
-Los agentes reciben instrucciones desde el Orquestador , procesan tareas según sus funciones y devuelven resultados al Orquestador , que los evalúa y decide la siguiente acción.
-Interacciones directas con el usuario:
-Si un agente actúa fuera de un grupo, responde directamente a través de la interfaz de usuario, sin pasar por el Orquestador , operando de forma autónoma.`,
+  task: `Este grupo de trabajo simula un equipo de producción de software completo. Dada una descripción de proyecto o una necesidad funcional, el Orquestador coordinará a los agentes especializados (JefeDeProducto, ArquitectoSoftware, DesarrolladorSoftware, IngenieroPruebas, IngenieroDevOps, RepresentanteUsuario) para: 
+1. Definir requisitos y alcance. 
+2. Diseñar la arquitectura técnica. 
+3. Implementar el código. 
+4. Asegurar la calidad mediante pruebas. 
+5. Preparar para el despliegue y gestionar la infraestructura si es necesario. 
+6. Validar desde la perspectiva del usuario. 
+El objetivo es entregar una solución funcional o un análisis detallado basado en la solicitud inicial.`,
   agentNames: [
     "JefeDeProducto",
     "ArquitectoSoftware",
@@ -64,7 +50,6 @@ Si un agente actúa fuera de un grupo, responde directamente a través de la int
     "IngenieroPruebas",
     "IngenieroDevOps",
     "RepresentanteUsuario",
-    // Orchestrator name removed, added automatically
   ],
 };
 
@@ -73,8 +58,6 @@ const workgroupSchema = z.object({
   name: z.string().min(3, 'El nombre debe tener al menos 3 caracteres.'),
   description: z.string().min(10, 'La descripción debe tener al menos 10 caracteres.'),
   task: z.string().min(20, 'La tarea debe tener al menos 20 caracteres.'),
-  // AgentIds from the form will NOT include the orchestrator, we add it manually.
-  // Ensure at least one *other* agent is selected.
   agentIds: z.array(z.string()).min(1, 'Debes seleccionar al menos un agente (además del Orquestador).'),
 });
 
@@ -87,8 +70,8 @@ export default function WorkgroupsPage() {
   const [availableAgents, setAvailableAgents] = useState<AgentConfig[]>([]);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingWorkgroup, setEditingWorkgroup] = useState<WorkgroupConfig | null>(null);
-  const [executingWorkgroup, setExecutingWorkgroup] = useState<WorkgroupConfig | null>(null); // State for the running workgroup
-  const [isExecutionModalOpen, setIsExecutionModalOpen] = useState(false); // State for execution modal visibility
+  const [executingWorkgroup, setExecutingWorkgroup] = useState<WorkgroupConfig | null>(null); 
+  const [isExecutionModalOpen, setIsExecutionModalOpen] = useState(false); 
   const { toast } = useToast();
 
   const orchestratorAgent = useMemo(() =>
@@ -125,12 +108,10 @@ export default function WorkgroupsPage() {
            setWorkgroups(JSON.parse(storedWorkgroups));
        } catch(e) {
             console.error("Error parsing stored workgroups:", e);
-            localStorage.removeItem(LOCALSTORAGE_WORKGROUPS_KEY); // Clear corrupted data
+            localStorage.removeItem(LOCALSTORAGE_WORKGROUPS_KEY); 
             setWorkgroups([]);
-            // Optionally re-initialize default if needed
        }
     } else if (agentsList.length > 0) {
-      // Pre-populate with default workgroup if agents exist and no workgroups are stored
       const defaultAgentIds = defaultWorkgroup.agentNames
         .map(name => agentsList.find(a => a.name === name)?.id)
         .filter((id): id is string => !!id);
@@ -143,7 +124,7 @@ export default function WorkgroupsPage() {
           name: defaultWorkgroup.name,
           description: defaultWorkgroup.description,
           task: defaultWorkgroup.task,
-          agentIds: [orchestrator.id, ...defaultAgentIds], // Add orchestrator ID
+          agentIds: [orchestrator.id, ...defaultAgentIds], 
         };
         setWorkgroups([initialWorkgroup]);
         localStorage.setItem(LOCALSTORAGE_WORKGROUPS_KEY, JSON.stringify([initialWorkgroup]));
@@ -162,7 +143,6 @@ export default function WorkgroupsPage() {
     }
     if (workgroup) {
       setEditingWorkgroup(workgroup);
-      // Filter out orchestrator ID for the form state
       const selectableAgentIds = workgroup.agentIds.filter(id => id !== orchestratorAgent?.id);
       reset({
         name: workgroup.name,
@@ -172,7 +152,7 @@ export default function WorkgroupsPage() {
       });
     } else {
       setEditingWorkgroup(null);
-      reset({ name: '', description: '', task: '', agentIds: [] });
+      reset({ name: '', description: '', task: defaultWorkgroup.task, agentIds: [] }); // Set default task for new groups
     }
     setIsFormOpen(true);
   };
@@ -187,7 +167,6 @@ export default function WorkgroupsPage() {
       return;
     }
 
-    // Ensure orchestrator ID is always included, removing duplicates if necessary
     const finalAgentIds = Array.from(new Set([orchestratorAgent.id, ...data.agentIds]));
 
     const newWorkgroup: WorkgroupConfig = {
@@ -218,11 +197,10 @@ export default function WorkgroupsPage() {
   };
 
   const handleRunWorkgroup = (workgroup: WorkgroupConfig) => {
-     // Check if orchestrator exists and is included
     if (!orchestratorAgent || !workgroup.agentIds.includes(orchestratorAgent.id)) {
       toast({
         title: 'Error de Configuración',
-        description: `El grupo "${workgroup.name}" no incluye al agente Orquestador necesario o este no existe.`,
+        description: `El grupo "${workgroup.name}" no incluye al agente Orquestador (${ORCHESTRATOR_AGENT_NAME}) o este no existe.`,
         variant: 'destructive',
       });
       return;
@@ -243,7 +221,7 @@ export default function WorkgroupsPage() {
     setIsFormOpen(open);
     if (!open) {
       setEditingWorkgroup(null);
-      reset({ name: '', description: '', task: '', agentIds: [] });
+      reset({ name: '', description: '', task: defaultWorkgroup.task, agentIds: [] });
     }
   };
 
@@ -251,7 +229,7 @@ export default function WorkgroupsPage() {
     <>
     <Dialog open={isFormOpen} onOpenChange={handleDialogVisibilityChange}>
       <div className="space-y-6">
-        <Card className="shadow-lg w-full max-w-6xl mx-auto"> {/* Increased width */}
+        <Card className="shadow-lg w-full max-w-6xl mx-auto"> 
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
               <CardTitle className="text-2xl flex items-center gap-2">
@@ -263,13 +241,13 @@ export default function WorkgroupsPage() {
               </CardDescription>
             </div>
              <DialogTrigger asChild>
-               <Button onClick={() => handleOpenForm()} disabled={availableAgents.length <= 1 || !orchestratorAgent}> {/* Adjusted disabled condition */}
+               <Button onClick={() => handleOpenForm()} disabled={availableAgents.length <= 1 || !orchestratorAgent}> 
                 <PlusCircle className="mr-2 h-4 w-4" /> Crear Grupo
               </Button>
             </DialogTrigger>
           </CardHeader>
           <CardContent>
-             {availableAgents.length <= 1 && !orchestratorAgent && ( // Check if only orchestrator agent exists or no agents
+             {availableAgents.length <= 1 && !orchestratorAgent && ( 
               <p className="text-destructive text-center py-4">
                 Primero debes crear agentes (además del Orquestador) en la página de <a href="/agents" className="underline hover:text-destructive/80">Gestión de Agentes</a> para poder crear grupos de trabajo.
               </p>
@@ -278,8 +256,8 @@ export default function WorkgroupsPage() {
               <p className="text-muted-foreground text-center py-8">No hay grupos de trabajo creados. ¡Empieza creando uno!</p>
             )}
             {workgroups.length > 0 && (
-               <ScrollArea className="h-[calc(100vh-20rem)]"> {/* Adjusted height */}
-                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3"> {/* Adjusted columns */}
+               <ScrollArea className="h-[calc(100vh-20rem)]"> 
+                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3"> 
                   {workgroups.map(wg => (
                     <Card key={wg.id} className="flex flex-col">
                       <CardHeader>
@@ -345,7 +323,7 @@ export default function WorkgroupsPage() {
             )}
           </CardContent>
         </Card>
-
+        {/* Agent Group Creation/Editing Form Dialog, wrapped in Dialog component */}
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{editingWorkgroup ? 'Editar Grupo de Trabajo' : 'Crear Nuevo Grupo de Trabajo'}</DialogTitle>
@@ -353,7 +331,7 @@ export default function WorkgroupsPage() {
               {editingWorkgroup ? 'Modifica los detalles de tu grupo.' : 'Define un nuevo grupo y asígnale agentes y una tarea.'} El agente Orquestador se añadirá automáticamente.
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
+          <form id="workgroup-form-id" onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
             <ScrollArea className="max-h-[60vh] p-1 -mx-1 pr-4">
               <div className="space-y-4 px-1">
                 <div>
@@ -368,34 +346,32 @@ export default function WorkgroupsPage() {
                 </div>
                 <div>
                   <Label htmlFor="wg-task">Tarea Principal del Grupo</Label>
-                  <Textarea id="wg-task" {...register('task')} rows={4} placeholder="Ej: Escribir un artículo de 1000 palabras sobre..." />
+                  <Textarea id="wg-task" {...register('task')} rows={6} placeholder="Ej: Escribir un artículo de 1000 palabras sobre..." />
                   {errors.task && <p className="text-sm text-destructive mt-1">{errors.task.message}</p>}
                 </div>
                 <div>
                   <Label className="mb-2 block">Agentes en el Grupo (Selecciona al menos uno)</Label>
                   {selectableAgents.length === 0 ? (
-                     <p className="text-sm text-muted-foreground">No hay agentes disponibles para seleccionar (además del Orquestador). Por favor, crea más agentes.</p>
+                     <p className="text-sm text-muted-foreground">No hay agentes disponibles para seleccionar (además del Orquestrador). Por favor, crea más agentes.</p>
                   ) : (
                     <Controller
                         control={control}
                         name="agentIds"
                         render={({ field }) => (
                             <div className="space-y-2 max-h-48 overflow-y-auto border rounded-md p-3">
-                             {/* Display Orchestrator as disabled and always included */}
                              {orchestratorAgent && (
                                 <div className="flex items-center space-x-2 opacity-70">
-                                     <Checkbox id={`agent-${orchestratorAgent.id}`} checked={true} disabled={true} />
-                                    <label htmlFor={`agent-${orchestratorAgent.id}`} className="text-sm font-medium leading-none flex items-center gap-1 text-muted-foreground">
+                                     <Checkbox id={`agent-${orchestratorAgent.id}-display`} checked={true} disabled={true} />
+                                    <label htmlFor={`agent-${orchestratorAgent.id}-display`} className="text-sm font-medium leading-none flex items-center gap-1 text-muted-foreground">
                                         <Lock className="h-3 w-3"/>
                                         {orchestratorAgent.name} (Automático)
                                     </label>
                                 </div>
                              )}
-                             {/* Display selectable agents */}
                              {selectableAgents.map(agent => (
                                 <div key={agent.id} className="flex items-center space-x-2">
                                 <Checkbox
-                                    id={`agent-${agent.id}`}
+                                    id={`agent-select-${agent.id}`}
                                     checked={field.value?.includes(agent.id)}
                                     onCheckedChange={(checked) => {
                                     const currentAgentIds = field.value || [];
@@ -404,7 +380,7 @@ export default function WorkgroupsPage() {
                                         : field.onChange(currentAgentIds.filter(id => id !== agent.id));
                                     }}
                                 />
-                                <label htmlFor={`agent-${agent.id}`} className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                                <label htmlFor={`agent-select-${agent.id}`} className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
                                     {agent.name} <span className="text-xs text-muted-foreground">({agent.description.substring(0,30)}...)</span>
                                 </label>
                                 </div>
@@ -421,7 +397,7 @@ export default function WorkgroupsPage() {
               <DialogClose asChild>
                 <Button type="button" variant="outline">Cancelar</Button>
               </DialogClose>
-              <Button type="submit" disabled={selectableAgents.length === 0}>
+              <Button type="submit" form="workgroup-form-id" disabled={selectableAgents.length === 0 && !editingWorkgroup}>
                 <Users2 className="mr-2 h-4 w-4" />
                 {editingWorkgroup ? 'Guardar Cambios' : 'Crear Grupo'}
               </Button>
@@ -431,7 +407,6 @@ export default function WorkgroupsPage() {
       </div>
     </Dialog>
 
-      {/* Workgroup Execution Modal */}
       {executingWorkgroup && (
         <WorkgroupExecutionModal
           isOpen={isExecutionModalOpen}
@@ -441,10 +416,9 @@ export default function WorkgroupsPage() {
           }}
           workgroup={executingWorkgroup}
           agents={availableAgents}
-          workgroups={workgroups} // Pass all workgroups for LLM resolution within modal if needed
+          workgroups={workgroups} 
         />
       )}
     </>
   );
 }
-
