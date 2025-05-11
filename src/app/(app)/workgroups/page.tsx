@@ -36,7 +36,7 @@ import { LOCALSTORAGE_WORKGROUPS_KEY, LOCALSTORAGE_AGENTS_KEY, ORCHESTRATOR_AGEN
 const defaultWorkgroup: Omit<WorkgroupConfig, 'id' | 'agentIds'> & { agentNames: string[] } = {
   name: "EquipoDesarrolloSoftware",
   description: "Un equipo multidisciplinario para desarrollar una aplicación de lista de tareas.",
-  task: "Desarrollar una aplicación web de lista de tareas (To-Do List) simple pero funcional. La aplicación debe permitir a los usuarios crear, ver, editar y eliminar tareas. Debe tener una interfaz de usuario intuitiva y persistencia de datos (simulada en frontend con localStorage si no hay backend).",
+  task: "Este grupo de trabajo es capaz de gestionar el ciclo de vida completo del desarrollo de software. Sus capacidades incluyen: definición de requisitos de producto, diseño de arquitectura de software, desarrollo y codificación de aplicaciones, pruebas de calidad (QA), gestión de infraestructura (DevOps), despliegues, y la incorporación de feedback del usuario. Puede abordar una amplia gama de tareas de desarrollo de software, desde aplicaciones simples hasta sistemas más complejos.",
   agentNames: [
     "JefeDeProducto",
     "ArquitectoSoftware",
@@ -421,7 +421,7 @@ export default function WorkgroupsPage() {
           }}
           workgroup={executingWorkgroup}
           agents={availableAgents}
-          workgroups={workgroups}
+          workgroups={workgroups} // Pass all workgroups for LLM resolution within modal if needed
         />
       )}
     </>
