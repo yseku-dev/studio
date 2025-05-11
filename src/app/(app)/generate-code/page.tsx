@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2, CodeXml, Wand2, AlertTriangle, Copy, CheckCircle, Settings2 } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { handleGenerateCode } from './actions';
+import { handleGenerateCode, initiateWorkgroupCodeGeneration } from './actions'; // Import new action
 import type { HandleGenerateCodeResult } from './actions';
 import {
   AlertDialog,
@@ -32,10 +32,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { AgentConfig, WorkgroupConfig } from '@/types/agent'; // Added WorkgroupConfig
+import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
-import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config'; // Added WORKGROUPS_KEY
+import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config';
 
 const formSchema = z.object({
   prompt: z.string().min(10, 'El prompt debe tener al menos 10 caracteres.'),
@@ -50,11 +50,10 @@ export default function GenerateCodePage() {
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [isConfirming, setIsConfirming] = useState(false);
   const [promptToConfirm, setPromptToConfirm] = useState<string>("");
-  const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null);
+  const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null); // Still useful for direct LLM calls
 
   const [agents, setAgents] = useState<AgentConfig[]>([]);
-  const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]); // Added workgroups state
-  // const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global'); // Not strictly needed if watching form value
+  const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
 
   const { toast } = useToast();
 
@@ -81,7 +80,7 @@ export default function GenerateCodePage() {
     if (storedAgents) {
       try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing stored agents:", e); setAgents([]); }
     }
-    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY); // Load workgroups
+    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
     if (storedWorkgroups) {
       try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); }
     }
@@ -89,31 +88,38 @@ export default function GenerateCodePage() {
   }, [setValue]);
 
   useEffect(() => {
-    const options = resolveLlmOptionsForSource(watchedConfigSource, agents, workgroups); // Pass workgroups
+    // For direct LLM calls, we still need resolvedLlmOptions.
+    // For workgroups, the server action will handle resolving internal agent LLM options.
+    const options = resolveLlmOptionsForSource(watchedConfigSource, agents, workgroups);
     setResolvedLlmOptions(options);
-  }, [watchedConfigSource, agents, workgroups]); // Add workgroups to dependency array
+  }, [watchedConfigSource, agents, workgroups]);
 
 
   const onSubmit: SubmitHandler<FormData> = async (data) => {
-     const options = resolveLlmOptionsForSource(data.configSource, agents, workgroups); // Pass workgroups
-     if (!options) {
-        toast({
-            title: "Configuración LLM Incompleta",
-            description: `La configuración LLM seleccionada (${getSourceName(data.configSource)}) está incompleta. Revisa los Ajustes, Agentes o Grupos.`,
-            variant: "destructive",
-            duration: 7000,
-        });
-        return;
-     }
-     setResolvedLlmOptions(options);
+    // If it's not a workgroup, we need resolved LLM options.
+    if (!data.configSource.startsWith('workgroup:')) {
+        const options = resolveLlmOptionsForSource(data.configSource, agents, workgroups);
+        if (!options) {
+            toast({
+                title: "Configuración LLM Incompleta",
+                description: `La configuración LLM seleccionada (${getSourceName(data.configSource)}) está incompleta. Revisa los Ajustes o Agentes.`,
+                variant: "destructive",
+                duration: 7000,
+            });
+            return;
+        }
+        setResolvedLlmOptions(options); // Store for direct call
+    } else {
+        setResolvedLlmOptions(null); // Not needed for workgroup call directly here
+    }
     setPromptToConfirm(data.prompt);
     setIsConfirming(true);
   };
 
   const proceedWithGeneration = async () => {
     setIsConfirming(false);
-    if (!promptToConfirm || !resolvedLlmOptions) {
-        toast({ title: "Error Interno", description: "Falta el prompt o las opciones LLM.", variant: "destructive" });
+    if (!promptToConfirm) {
+        toast({ title: "Error Interno", description: "Falta el prompt.", variant: "destructive" });
         return;
     };
 
@@ -121,13 +127,31 @@ export default function GenerateCodePage() {
     setGenerationResult(null);
     setGenerationError(null);
 
-    const result = await handleGenerateCode(
-        promptToConfirm,
-        resolvedLlmOptions.providerId,
-        resolvedLlmOptions.apiKey,
-        resolvedLlmOptions.modelName,
-        resolvedLlmOptions.apiUrl
-    );
+    let result: HandleGenerateCodeResult;
+
+    if (watchedConfigSource.startsWith('workgroup:')) {
+        const workgroupId = watchedConfigSource.split(':')[1];
+        if (!workgroups.find(wg => wg.id === workgroupId) || agents.length === 0) {
+            toast({ title: "Error de Configuración de Grupo", description: "Grupo de trabajo no encontrado o agentes no cargados.", variant: "destructive"});
+            setIsLoading(false);
+            return;
+        }
+        result = await initiateWorkgroupCodeGeneration(promptToConfirm, workgroupId, agents, workgroups);
+    } else {
+        if (!resolvedLlmOptions) {
+            toast({ title: "Error Interno", description: "Faltan opciones LLM para llamada directa.", variant: "destructive" });
+            setIsLoading(false);
+            return;
+        }
+        result = await handleGenerateCode(
+            promptToConfirm,
+            resolvedLlmOptions.providerId,
+            resolvedLlmOptions.apiKey,
+            resolvedLlmOptions.modelName,
+            resolvedLlmOptions.apiUrl
+        );
+    }
+    
 
     if (result.success && result.data) {
       setGenerationResult(result.data);
@@ -159,12 +183,16 @@ export default function GenerateCodePage() {
       const agentId = sourceId.split(':')[1];
       return agents.find(a => a.id === agentId)?.name || `Agente ${agentId.substring(0,6)}...`;
     }
-    if (sourceId.startsWith('workgroup:')) { // Handle workgroup source
+    if (sourceId.startsWith('workgroup:')) {
       const workgroupId = sourceId.split(':')[1];
       return workgroups.find(wg => wg.id === workgroupId)?.name || `Grupo ${workgroupId.substring(0,6)}...`;
     }
     return 'Desconocido';
   };
+  
+  const isWorkgroupSelected = watchedConfigSource.startsWith('workgroup:');
+  const canSubmit = isLoading || !currentPrompt || (!resolvedLlmOptions && !isWorkgroupSelected) || (isWorkgroupSelected && workgroups.length === 0);
+
 
   return (
     <div className="space-y-6">
@@ -175,10 +203,12 @@ export default function GenerateCodePage() {
           </CardTitle>
           <CardDescription>
             Describe el código que necesitas y la IA lo generará usando la configuración LLM seleccionada.
-            {!resolvedLlmOptions && watchedConfigSource ? (
+            {!resolvedLlmOptions && !isWorkgroupSelected && watchedConfigSource ? (
                  <span className="text-destructive block mt-1"> (Configuración para '{getSourceName(watchedConfigSource)}' incompleta)</span>
-             ) : resolvedLlmOptions ? (
+             ) : resolvedLlmOptions && !isWorkgroupSelected ? (
                 <span className="text-foreground block mt-1">(Usando: {getSourceName(watchedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
+             ) : isWorkgroupSelected ? (
+                <span className="text-foreground block mt-1">(Usando Grupo: {getSourceName(watchedConfigSource)})</span>
              ) : (
                  <span className="text-muted-foreground block mt-1">(Selecciona fuente de configuración)</span>
              )}
@@ -201,12 +231,12 @@ export default function GenerateCodePage() {
                             <SelectContent>
                                 <SelectItem value="global">Ajustes Globales</SelectItem>
                                 {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
-                                {/* Removed workgroups from here as generate-code is typically a single LLM call, not a multi-agent task */}
+                                {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
                             </SelectContent>
                         </Select>
                     )} />
                 {errors.configSource && <p className="text-sm text-destructive mt-1">{errors.configSource.message}</p>}
-                 {!resolvedLlmOptions && watchedConfigSource && (
+                 {!resolvedLlmOptions && !isWorkgroupSelected && watchedConfigSource && (
                      <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(watchedConfigSource)}' incompleta. Revisa Ajustes o Agentes.</p>
                 )}
             </div>
@@ -214,7 +244,7 @@ export default function GenerateCodePage() {
           <CardFooter>
             <AlertDialog open={isConfirming} onOpenChange={setIsConfirming}>
               <AlertDialogTrigger asChild>
-                 <Button type="submit" disabled={isLoading || !currentPrompt || !resolvedLlmOptions} className="w-full md:w-auto">
+                 <Button type="submit" disabled={canSubmit} className="w-full md:w-auto">
                   {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wand2 className="mr-2 h-4 w-4" />} Generar Código
                 </Button>
               </AlertDialogTrigger>
@@ -223,7 +253,12 @@ export default function GenerateCodePage() {
                   <AlertDialogTitle>Confirmar Generación</AlertDialogTitle>
                   <AlertDialogDescription>
                     Generar código con '{getSourceName(watchedConfigSource)}'?
-                    <div className="mt-1 text-xs text-muted-foreground">(Proveedor: {resolvedLlmOptions?.providerId}, Modelo: {resolvedLlmOptions?.modelName})</div>
+                    {!isWorkgroupSelected && resolvedLlmOptions && (
+                        <div className="mt-1 text-xs text-muted-foreground">(Proveedor: {resolvedLlmOptions?.providerId}, Modelo: {resolvedLlmOptions?.modelName})</div>
+                    )}
+                     {isWorkgroupSelected && (
+                        <div className="mt-1 text-xs text-muted-foreground">(Grupo de Trabajo)</div>
+                    )}
                     <ScrollArea className="h-[150px] mt-2 p-2 border rounded bg-muted/30">
                         <pre className="text-xs text-foreground whitespace-pre-wrap">{promptToConfirm}</pre>
                     </ScrollArea>

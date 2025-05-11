@@ -21,10 +21,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { AgentConfig, WorkgroupConfig } from '@/types/agent'; // Added WorkgroupConfig
+import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
-import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config'; // Added WORKGROUPS_KEY
+import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config';
+// Import action for workgroup-based analysis (to be created or adapted)
+// import { handleAnalyzeCodeViaWorkgroup } from '@/app/(app)/analyze/actions'; 
 
 const formSchema = z.object({
   code: z.string().min(10, 'El código debe tener al menos 10 caracteres.'),
@@ -50,8 +52,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
   const [fileName, setFileName] = useState<string | null>(null);
   
   const [agents, setAgents] = useState<AgentConfig[]>([]);
-  const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]); // Added workgroups state
-  // const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global'); // Managed by form now
+  const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
   const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null);
 
   const { toast } = useToast();
@@ -76,17 +77,17 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
     if (storedAgents) {
       try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing stored agents:", e); setAgents([]); }
     }
-    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY); // Load workgroups
+    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
     if (storedWorkgroups) {
       try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); }
     }
-    setValue('configSource', 'global'); // Ensure default is set after agents/workgroups load
+    setValue('configSource', 'global');
   }, [setValue]);
 
   useEffect(() => {
-    const options = resolveLlmOptionsForSource(watchedConfigSource, agents, workgroups); // Pass workgroups
+    const options = resolveLlmOptionsForSource(watchedConfigSource, agents, workgroups);
     setResolvedLlmOptions(options);
-  }, [watchedConfigSource, agents, workgroups]); // Add workgroups to dependency
+  }, [watchedConfigSource, agents, workgroups]);
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -122,6 +123,23 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
      }
     setIsLoading(true); setAnalysisResult(null); setAnalysisError(null); setOriginalCode(data.code);
 
+    if (data.configSource.startsWith('workgroup:')) {
+      const workgroupId = data.configSource.split(':')[1];
+      toast({ title: "Análisis con Grupo de Trabajo", description: "Funcionalidad pendiente de implementación para análisis de código con grupos.", duration: 5000});
+      // TODO: Implement workgroup analysis logic
+      // const result = await handleAnalyzeCodeViaWorkgroup(data.code, workgroupId, agents, workgroups);
+      // if (result.success && result.data) {
+      //   setAnalysisResult(result.data);
+      //   toast({ title: 'Análisis con Grupo Completo' });
+      // } else {
+      //   setAnalysisError(result.error || 'Error desconocido en análisis con grupo.');
+      //   toast({ title: 'Análisis con Grupo Fallido', variant: 'destructive' });
+      // }
+      setIsLoading(false); // Remove this when implemented
+      return; // Remove this when implemented
+    }
+
+    // Standard LLM call
     const result = await handleAnalyzeCode(data.code, options.providerId, options.apiKey, options.modelName, options.apiUrl);
 
     if (result.success && result.data) {
@@ -150,7 +168,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
       const agentId = sourceId.split(':')[1];
       return agents.find(a => a.id === agentId)?.name || `Agente ${agentId.substring(0,6)}...`;
     }
-    if (sourceId.startsWith('workgroup:')) { // Handle workgroup source
+    if (sourceId.startsWith('workgroup:')) {
       const workgroupId = sourceId.split(':')[1];
       return workgroups.find(wg => wg.id === workgroupId)?.name || `Grupo ${workgroupId.substring(0,6)}...`;
     }
@@ -195,9 +213,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
                             <SelectContent>
                                 <SelectItem value="global">Ajustes Globales</SelectItem>
                                 {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
-                                {/* Workgroups might be overkill for single code snippet analysis, confirm if needed.
                                 {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
-                                */}
                             </SelectContent>
                         </Select>
                     )} />

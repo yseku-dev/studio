@@ -16,10 +16,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { AgentConfig, WorkgroupConfig } from '@/types/agent'; // Added WorkgroupConfig
+import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
-import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config'; // Added WORKGROUPS_KEY
+import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config';
+// TODO: import { handleAnalyzeProjectViaWorkgroup } from './actions';
 
 type AnalysisStatus = "idle" | "loading" | "success" | "error";
 
@@ -28,11 +29,11 @@ export default function ProjectAnalysisPage() {
   const [projectFile, setProjectFile] = useState<File | null>(null);
   const [gitUrl, setGitUrl] = useState<string>("");
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>("idle");
-  const [analysisResult, setAnalysisResult] = useState<string | null>(null);
+  const [analysisResult, setAnalysisResult] = useState<string | null>(null); // Keep as string for simulated result
   const { toast } = useToast();
 
   const [agents, setAgents] = useState<AgentConfig[]>([]);
-  const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]); // Added workgroups state
+  const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
   const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global');
   const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null);
 
@@ -41,16 +42,16 @@ export default function ProjectAnalysisPage() {
     if (storedAgents) {
       try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing stored agents:", e); setAgents([]); }
     }
-    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY); // Load workgroups
+    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
     if (storedWorkgroups) {
       try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); }
     }
   }, []);
 
   useEffect(() => {
-    const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups); // Pass workgroups
+    const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups);
     setResolvedLlmOptions(options);
-  }, [selectedConfigSource, agents, workgroups]); // Add workgroups to dependency
+  }, [selectedConfigSource, agents, workgroups]);
 
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -79,10 +80,21 @@ export default function ProjectAnalysisPage() {
   };
 
   const handleAnalyzeProject = async () => {
+     if (selectedConfigSource.startsWith('workgroup:')) {
+        // Workgroup logic
+        toast({ title: "Análisis con Grupo (Simulado)", description: `Iniciando análisis del proyecto con el grupo '${getSourceName(selectedConfigSource)}'. La funcionalidad real está pendiente.`, duration: 5000 });
+        setAnalysisStatus("loading");
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        setAnalysisResult(`Análisis simulado de proyecto con grupo '${getSourceName(selectedConfigSource)}'.`);
+        setAnalysisStatus("success");
+        return;
+     }
+     
+     // Direct LLM call logic
      if (!resolvedLlmOptions) {
         toast({
             title: "Configuración LLM Incompleta",
-            description: `Configuración para '${getSourceName(selectedConfigSource)}' incompleta. Revisa Ajustes, Agentes o Grupos.`,
+            description: `Configuración para '${getSourceName(selectedConfigSource)}' incompleta.`,
             variant: "destructive", duration: 7000,
         }); return;
      }
@@ -90,7 +102,7 @@ export default function ProjectAnalysisPage() {
     if (activeTab === "git" && !gitUrl) { toast({ title: "URL Faltante", description: "Ingresa URL Git.", variant: "destructive" }); return; }
 
     setAnalysisStatus("loading"); setAnalysisResult(null);
-    console.log("Simulating analysis with options:", resolvedLlmOptions);
+    console.log("Simulating analysis with options:", resolvedLlmOptions); // Keep for direct call context
     await new Promise(resolve => setTimeout(resolve, 2000));
 
     if (activeTab === "upload" && projectFile) {
@@ -101,6 +113,10 @@ export default function ProjectAnalysisPage() {
     setAnalysisStatus("success");
     toast({ title: "Análisis Iniciado (Simulado)", description: `Análisis para ${activeTab === "upload" ? projectFile?.name : gitUrl} con '${getSourceName(selectedConfigSource)}'.` });
   };
+  
+  const isWorkgroupSelected = selectedConfigSource.startsWith('workgroup:');
+  const canSubmit = analysisStatus === "loading" || (!resolvedLlmOptions && !isWorkgroupSelected) || (isWorkgroupSelected && workgroups.length === 0) || (activeTab === "upload" && !projectFile) || (activeTab === "git" && !gitUrl);
+
 
   return (
     <div className="flex flex-col gap-6">
@@ -109,10 +125,12 @@ export default function ProjectAnalysisPage() {
           <CardTitle className="text-3xl font-bold text-primary flex items-center gap-2"><FolderSearch className="h-8 w-8" /> Analizar Proyecto Completo</CardTitle>
           <CardDescription>
             Sube ZIP/JSON o URL Git para análisis usando config LLM seleccionada.
-            {!resolvedLlmOptions && selectedConfigSource ? (
+             {!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource ? (
                  <span className="text-destructive block mt-1"> (Configuración para '{getSourceName(selectedConfigSource)}' incompleta)</span>
-             ) : resolvedLlmOptions ? (
+             ) : resolvedLlmOptions && !isWorkgroupSelected ? (
                 <span className="text-foreground block mt-1">(Usando: {getSourceName(selectedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
+             ) : isWorkgroupSelected ? (
+                <span className="text-foreground block mt-1">(Usando Grupo: {getSourceName(selectedConfigSource)})</span>
              ) : (
                  <span className="text-muted-foreground block mt-1">(Selecciona fuente de configuración)</span>
              )}
@@ -126,13 +144,11 @@ export default function ProjectAnalysisPage() {
                     <SelectContent>
                         <SelectItem value="global">Ajustes Globales</SelectItem>
                         {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
-                        {/* TODO: Implement project analysis via workgroup if desired.
                         {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
-                        */}
                     </SelectContent>
                 </Select>
-                {!resolvedLlmOptions && selectedConfigSource && (
-                     <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(selectedConfigSource)}' incompleta. Revisa Ajustes, Agentes o Grupos.</p>
+                {!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource && (
+                     <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(selectedConfigSource)}' incompleta. Revisa Ajustes o Agentes.</p>
                 )}
             </div>
           <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "upload" | "git")} className="w-full">
@@ -154,7 +170,7 @@ export default function ProjectAnalysisPage() {
               </div>
             </TabsContent>
           </Tabs>
-          <Button onClick={handleAnalyzeProject} disabled={analysisStatus === "loading" || !resolvedLlmOptions} className="w-full md:w-auto text-base py-3 px-6">
+          <Button onClick={handleAnalyzeProject} disabled={canSubmit} className="w-full md:w-auto text-base py-3 px-6">
             {analysisStatus === "loading" ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <FolderSearch className="mr-2 h-5 w-5" />} Analizar Proyecto
           </Button>
           {analysisStatus !== "idle" && (

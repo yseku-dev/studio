@@ -1,28 +1,33 @@
 
 'use server';
 
-import type { LLMOptions } from '@/services/groq';
-import { generateCodeFromPrompt as callLLMToGenerateCode } from '@/services/groq'; // Renamed import
-import { GeneratedCodeResponse as GeneratedCodeLLMResponse } from '@/services/groq'; // Use generic type from service
+import type { LLMOptions, ChatMessage } from '@/services/groq';
+import { generateCodeFromPrompt as callLLMToGenerateCode } from '@/services/groq'; 
+import { GeneratedCodeResponse as GeneratedCodeLLMResponse } from '@/services/groq'; 
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
+import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
+import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
+import { ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS } from '@/config/agent-config';
+import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
 
-// Re-exporting the type from the service for consistency in the action interface
+
 export type GeneratedCodeData = GeneratedCodeLLMResponse;
 
 export interface HandleGenerateCodeResult {
   success: boolean;
   data?: GeneratedCodeData;
   error?: string;
+  workgroupLogs?: string[]; // For workgroup-based generation
 }
 
-const LLM_API_TIMEOUT_MS_GENERATE_CODE = 90000; // 90 segundos para generación de código
+const LLM_API_TIMEOUT_MS_GENERATE_CODE = 90000; 
 
 export async function handleGenerateCode(
   prompt: string,
-  providerId: LLMProviderId, // Expect providerId
+  providerId: LLMProviderId, 
   apiKey: string,
   modelName: string,
-  apiUrl?: string // Optional API URL for local LLMs
+  apiUrl?: string 
 ): Promise<HandleGenerateCodeResult> {
 
   const currentProvider = LLM_PROVIDERS.find(p => p.id === providerId);
@@ -49,7 +54,7 @@ export async function handleGenerateCode(
     return { success: true, data: result };
   } catch (error) {
     const operationName = `la generación del código con ${currentProvider.name}`;
-    console.error(`Error en ${operationName}:`, error); // Log the raw error
+    console.error(`Error en ${operationName}:`, error); 
     
     let detailMessage: string;
     if (error instanceof Error) {
@@ -72,4 +77,114 @@ export async function handleGenerateCode(
     
     return { success: false, error: `Falló ${operationName}: ${detailMessage}` };
   }
+}
+
+
+export async function initiateWorkgroupCodeGeneration(
+  prompt: string,
+  workgroupId: string,
+  allAgents: AgentConfig[],
+  allWorkgroups: WorkgroupConfig[]
+): Promise<HandleGenerateCodeResult> {
+  const serverLogs: string[] = [];
+  const log = (type: 'INFO' | 'ERROR' | 'DEBUG', message: string, data?: any) => {
+    const logMsg = `[WG_GenCode-${type}] ${message}${data ? ' | Data: ' + JSON.stringify(data) : ''}`;
+    console.log(logMsg);
+    serverLogs.push(logMsg);
+  };
+
+  log('INFO', `Iniciando generación de código con grupo de trabajo ID: ${workgroupId}`);
+  
+  const workgroup = allWorkgroups.find(wg => wg.id === workgroupId);
+  if (!workgroup) {
+    log('ERROR', `Grupo de trabajo con ID ${workgroupId} no encontrado.`);
+    return { success: false, error: `Grupo de trabajo no encontrado.`, workgroupLogs: serverLogs };
+  }
+
+  const orchestrator = allAgents.find(a => a.name === ORCHESTRATOR_AGENT_NAME && workgroup.agentIds.includes(a.id));
+  if (!orchestrator) {
+    log('ERROR', `Agente Orquestador no encontrado en el grupo ${workgroup.name}.`);
+    return { success: false, error: `Orquestador no encontrado en el grupo.`, workgroupLogs: serverLogs };
+  }
+
+  const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, allAgents, allWorkgroups);
+  if (!orchestratorLlmOptions) {
+    log('ERROR', `Configuración LLM inválida para Orquestador (${orchestrator.name}) en grupo ${workgroup.name}.`);
+    return { success: false, error: `Configuración LLM inválida para Orquestador.`, workgroupLogs: serverLogs };
+  }
+
+  const participantAgentConfigs = workgroup.agentIds
+    .filter(id => id !== orchestrator.id)
+    .map(id => allAgents.find(a => a.id === id))
+    .filter(agent => agent !== undefined)
+    .reduce((acc, agent) => {
+      const llmOptions = resolveLlmOptionsForSource(`agent:${agent!.id}`, allAgents, allWorkgroups);
+      if (llmOptions) {
+        acc[agent!.id] = {
+          id: agent!.id, name: agent!.name, systemMessage: agent!.systemMessage,
+          llmProviderId: llmOptions.providerId, llmModelName: llmOptions.modelName,
+          llmApiKey: llmOptions.apiKey, llmApiUrl: llmOptions.apiUrl
+        };
+      } else {
+        log('ERROR', `Configuración LLM inválida para agente participante ${agent!.name}, omitiendo.`);
+      }
+      return acc;
+    }, {} as WorkgroupTurnPayload['participantAgentConfigs']);
+
+  let conversationHistory: ChatMessage[] = [];
+  const taskForWorkgroup = `Genera código basado en la siguiente descripción. Tu respuesta final (probablemente del agente DesarrolladorSoftware o similar) DEBE ser un objeto JSON con las claves "generatedCode" (string) y opcionalmente "explanation" (string). Descripción del usuario: "${prompt}"`;
+
+  for (let turn = 1; turn <= MAX_WORKGROUP_TURNS; turn++) {
+    log('INFO', `Procesando turno ${turn}/${MAX_WORKGROUP_TURNS} para la generación de código.`);
+    const payload: WorkgroupTurnPayload = {
+      workgroupName: workgroup.name,
+      task: taskForWorkgroup,
+      conversationHistory,
+      orchestrator: {
+        id: orchestrator.id, name: orchestrator.name, systemMessage: orchestrator.systemMessage,
+        llmProviderId: orchestratorLlmOptions.providerId, llmModelName: orchestratorLlmOptions.modelName,
+        llmApiKey: orchestratorLlmOptions.apiKey, llmApiUrl: orchestratorLlmOptions.apiUrl
+      },
+      participantAgentConfigs,
+      currentTurn: turn,
+      maxTurns: MAX_WORKGROUP_TURNS
+    };
+
+    const turnResult: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
+    serverLogs.push(...(turnResult.serverLogs || []).map(sl => `[Turn ${turn} ServerLog] ${sl}`));
+    
+    if (turnResult.error) {
+      log('ERROR', `Error en el turno ${turn}: ${turnResult.error}`);
+      return { success: false, error: `Error en el grupo de trabajo (turno ${turn}): ${turnResult.error}`, workgroupLogs: serverLogs };
+    }
+
+    conversationHistory = turnResult.updatedHistory;
+
+    if (turnResult.isComplete || turnResult.orchestratorDecision?.nextAgentId === "COMPLETADO") {
+      log('INFO', `Grupo de trabajo completó la generación de código en el turno ${turn}.`);
+      const finalResponseContent = turnResult.agentResponse?.content || conversationHistory.findLast(m => m.role === 'assistant')?.content;
+      if (finalResponseContent) {
+        try {
+          // Clean potential markdown code block fences
+          const cleanedContent = finalResponseContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+          const parsedData = JSON.parse(cleanedContent) as GeneratedCodeData;
+          if (typeof parsedData.generatedCode === 'string') {
+            return { success: true, data: parsedData, workgroupLogs: serverLogs };
+          } else {
+            log('ERROR', 'Respuesta final del grupo no contenía "generatedCode" como string.', parsedData);
+            return { success: false, error: "La respuesta final del grupo no tuvo el formato esperado (falta 'generatedCode').", workgroupLogs: serverLogs };
+          }
+        } catch (e) {
+          log('ERROR', `Error al parsear la respuesta final del grupo como JSON: ${(e as Error).message}`, { content: finalResponseContent });
+          return { success: false, error: `Error al interpretar la respuesta final del grupo. Contenido: ${finalResponseContent.substring(0,100)}...`, workgroupLogs: serverLogs };
+        }
+      } else {
+        log('ERROR', 'El grupo de trabajo finalizó pero no hubo respuesta de agente para extraer el código.');
+        return { success: false, error: "El grupo de trabajo finalizó sin generar código.", workgroupLogs: serverLogs };
+      }
+    }
+  }
+
+  log('ERROR', `Grupo de trabajo alcanzó el máximo de turnos (${MAX_WORKGROUP_TURNS}) sin completar la generación de código.`);
+  return { success: false, error: `El grupo de trabajo no completó la generación en ${MAX_WORKGROUP_TURNS} turnos.`, workgroupLogs: serverLogs };
 }

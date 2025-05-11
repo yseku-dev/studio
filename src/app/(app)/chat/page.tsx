@@ -10,7 +10,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Loader2, Send, User, Sparkles, AlertTriangle, Copy, Trash2, Settings2 } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { handleChatCompletion } from './actions';
+import { handleChatCompletion } from './actions'; // TODO: Add initiateWorkgroupChat
 import type { ChatMessage } from '@/services/groq';
 import {
   Select,
@@ -19,10 +19,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { AgentConfig, WorkgroupConfig } from '@/types/agent'; // Added WorkgroupConfig
+import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
-import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config'; // Added WORKGROUPS_KEY
+import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config';
+// import { initiateWorkgroupChat } from './actions'; // To be created
 
 export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
@@ -32,7 +33,7 @@ export default function ChatPage() {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
 
   const [agents, setAgents] = useState<AgentConfig[]>([]);
-  const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]); // Added workgroups state
+  const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
   const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global');
   const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null);
 
@@ -43,16 +44,16 @@ export default function ChatPage() {
     if (storedAgents) {
       try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing stored agents:", e); setAgents([]); }
     }
-    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY); // Load workgroups
+    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
     if (storedWorkgroups) {
       try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); }
     }
   }, []);
 
   useEffect(() => {
-    const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups); // Pass workgroups
+    const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups);
     setResolvedLlmOptions(options);
-  }, [selectedConfigSource, agents, workgroups]); // Add workgroups to dependency
+  }, [selectedConfigSource, agents, workgroups]);
 
   useEffect(() => {
     if (scrollAreaRef.current) {
@@ -63,25 +64,37 @@ export default function ChatPage() {
 
   const handleSendMessage = async () => {
     if (!currentMessage.trim()) return;
-    const options = resolvedLlmOptions;
-    if (!options) {
-         toast({
-            title: "Configuración LLM Incompleta",
-            description: `La configuración LLM seleccionada (${getSourceName(selectedConfigSource)}) está incompleta. Revisa Ajustes o Agentes.`,
-            variant: "destructive",
-            duration: 7000,
-        });
-        return;
-    }
-
+    
+    let result;
     const newUserMessage: ChatMessage = { role: 'user', content: currentMessage };
     setChatHistory(prev => [...prev, newUserMessage]);
+    const messagesForApi = [...chatHistory, newUserMessage]; // Use updated history
     setCurrentMessage('');
     setIsLoading(true);
     setChatError(null);
-    const messagesForApi = [...chatHistory, newUserMessage];
 
-    const result = await handleChatCompletion(messagesForApi, options.providerId, options.apiKey, options.modelName, options.apiUrl);
+    if (selectedConfigSource.startsWith('workgroup:')) {
+      const workgroupId = selectedConfigSource.split(':')[1];
+      toast({ title: "Chat con Grupo de Trabajo", description: "Funcionalidad pendiente de implementación para chat con grupos.", duration: 5000});
+      // TODO: Implement workgroup chat logic
+      // result = await initiateWorkgroupChat(messagesForApi, workgroupId, agents, workgroups);
+      setIsLoading(false); // Remove this
+      return; // Remove this
+    } else {
+        const options = resolvedLlmOptions;
+        if (!options) {
+             toast({
+                title: "Configuración LLM Incompleta",
+                description: `La configuración LLM seleccionada (${getSourceName(selectedConfigSource)}) está incompleta.`,
+                variant: "destructive",
+                duration: 7000,
+            });
+            setIsLoading(false);
+            return;
+        }
+        result = await handleChatCompletion(messagesForApi, options.providerId, options.apiKey, options.modelName, options.apiUrl);
+    }
+
 
     if (result.success && result.data) {
       const assistantMessage: ChatMessage = { role: 'assistant', content: result.data.content };
@@ -112,9 +125,15 @@ export default function ChatPage() {
       const agentId = sourceId.split(':')[1];
       return agents.find(a => a.id === agentId)?.name || `Agente ${agentId.substring(0,6)}...`;
     }
-    // Workgroups are not directly used for general chat, so not listed in getSourceName for chat page.
+    if (sourceId.startsWith('workgroup:')) {
+      const workgroupId = sourceId.split(':')[1];
+      return workgroups.find(wg => wg.id === workgroupId)?.name || `Grupo ${workgroupId.substring(0,6)}...`;
+    }
     return 'Desconocido';
   };
+  
+  const isWorkgroupSelected = selectedConfigSource.startsWith('workgroup:');
+  const canSend = isLoading || !currentMessage.trim() || (!resolvedLlmOptions && !isWorkgroupSelected) || (isWorkgroupSelected && workgroups.length === 0);
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] md:h-[calc(100vh-10rem)] gap-6">
@@ -125,10 +144,12 @@ export default function ChatPage() {
           </CardTitle>
           <CardDescription>
             Interactúa con el asistente IA usando la configuración LLM seleccionada.
-            {!resolvedLlmOptions && selectedConfigSource ? (
+            {!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource ? (
                  <span className="text-destructive block mt-1"> (Configuración para '{getSourceName(selectedConfigSource)}' incompleta)</span>
-             ) : resolvedLlmOptions ? (
+             ) : resolvedLlmOptions && !isWorkgroupSelected ? (
                 <span className="text-foreground block mt-1">(Usando: {getSourceName(selectedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
+             ) : isWorkgroupSelected ? (
+                <span className="text-foreground block mt-1">(Usando Grupo: {getSourceName(selectedConfigSource)})</span>
              ) : (
                  <span className="text-muted-foreground block mt-1">(Selecciona fuente de configuración)</span>
              )}
@@ -140,10 +161,10 @@ export default function ChatPage() {
                     <SelectContent>
                         <SelectItem value="global">Ajustes Globales</SelectItem>
                         {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
-                        {/* Workgroups are generally not for direct chat, but for orchestrated tasks. Excluded here. */}
+                        {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
                     </SelectContent>
                 </Select>
-                 {!resolvedLlmOptions && selectedConfigSource && (
+                 {!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource && (
                      <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(selectedConfigSource)}' incompleta. Revisa Ajustes o Agentes.</p>
                 )}
             </div>
@@ -186,11 +207,11 @@ export default function ChatPage() {
             <Textarea value={currentMessage} onChange={(e) => setCurrentMessage(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }}}
               placeholder="Escribe tu mensaje... (Shift+Enter para nueva línea)" rows={1}
-              className="flex-1 resize-none min-h-[40px] max-h-[120px] text-sm bg-card" disabled={isLoading || !resolvedLlmOptions} />
+              className="flex-1 resize-none min-h-[40px] max-h-[120px] text-sm bg-card" disabled={canSend} />
             <Button onClick={handleClearChat} variant="ghost" size="icon" disabled={isLoading || chatHistory.length === 0} title="Limpiar Chat">
               <Trash2 className="h-5 w-5 text-muted-foreground hover:text-destructive"/>
             </Button>
-            <Button onClick={handleSendMessage} disabled={isLoading || !currentMessage.trim() || !resolvedLlmOptions} className="h-10">
+            <Button onClick={handleSendMessage} disabled={canSend} className="h-10">
               {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
               <span className="sr-only">Enviar</span>
             </Button>

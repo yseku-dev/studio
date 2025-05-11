@@ -12,7 +12,7 @@ import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
 import { Loader2, FolderPlus, Wand2, AlertTriangle, DownloadCloud, CheckCircle, FileText, ListTree, Copy, Settings2 } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { handleGenerateProject } from './actions';
+import { handleGenerateProject } from './actions'; // TODO: Add initiateWorkgroupProjectGeneration
 import type { HandleGenerateProjectResult, ProjectFile } from './actions';
 import JSZip from 'jszip';
 import {
@@ -34,10 +34,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { AgentConfig, WorkgroupConfig } from '@/types/agent'; // Added WorkgroupConfig
+import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
-import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config'; // Added WORKGROUPS_KEY
+import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config';
+// import { initiateWorkgroupProjectGeneration } from './actions'; // To be created
 
 const formSchema = z.object({
   prompt: z.string().min(15, 'El prompt debe tener al menos 15 caracteres para describir un proyecto.'),
@@ -56,8 +57,7 @@ export default function GenerateProjectPage() {
   const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null);
 
   const [agents, setAgents] = useState<AgentConfig[]>([]);
-  const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]); // Added workgroups state
-  // const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global'); // Not strictly needed
+  const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
 
   const { toast } = useToast();
 
@@ -84,7 +84,7 @@ export default function GenerateProjectPage() {
     if (storedAgents) {
       try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing stored agents:", e); setAgents([]); }
     }
-    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY); // Load workgroups
+    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
     if (storedWorkgroups) {
       try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); }
     }
@@ -92,31 +92,34 @@ export default function GenerateProjectPage() {
   }, [setValue]);
 
   useEffect(() => {
-    const options = resolveLlmOptionsForSource(watchedConfigSource, agents, workgroups); // Pass workgroups
+    const options = resolveLlmOptionsForSource(watchedConfigSource, agents, workgroups);
     setResolvedLlmOptions(options);
-  }, [watchedConfigSource, agents, workgroups]); // Add workgroups to dependency
+  }, [watchedConfigSource, agents, workgroups]);
 
 
   const onSubmit: SubmitHandler<FormData> = async (data) => {
-     const options = resolveLlmOptionsForSource(data.configSource, agents, workgroups); // Pass workgroups
-     if (!options) {
-        toast({
-            title: "Configuración LLM Incompleta",
-            description: `La configuración LLM seleccionada (${getSourceName(data.configSource)}) está incompleta. Revisa los Ajustes, Agentes o Grupos.`,
-            variant: "destructive",
-            duration: 7000,
-        });
-        return;
-     }
-     setResolvedLlmOptions(options);
+    if (!data.configSource.startsWith('workgroup:')) {
+        const options = resolveLlmOptionsForSource(data.configSource, agents, workgroups);
+        if (!options) {
+            toast({
+                title: "Configuración LLM Incompleta",
+                description: `La configuración LLM seleccionada (${getSourceName(data.configSource)}) está incompleta.`,
+                variant: "destructive", duration: 7000,
+            });
+            return;
+        }
+        setResolvedLlmOptions(options);
+    } else {
+        setResolvedLlmOptions(null);
+    }
     setPromptToConfirm(data.prompt);
     setIsConfirming(true);
   };
 
   const proceedWithGeneration = async () => {
     setIsConfirming(false);
-    if (!promptToConfirm || !resolvedLlmOptions) {
-         toast({ title: "Error Interno", description: "Falta el prompt o las opciones LLM.", variant: "destructive" });
+    if (!promptToConfirm) {
+         toast({ title: "Error Interno", description: "Falta el prompt.", variant: "destructive" });
         return;
     }
 
@@ -124,13 +127,29 @@ export default function GenerateProjectPage() {
     setGenerationResult(null);
     setGenerationError(null);
 
-    const result = await handleGenerateProject(
-        promptToConfirm,
-        resolvedLlmOptions.providerId,
-        resolvedLlmOptions.apiKey,
-        resolvedLlmOptions.modelName,
-        resolvedLlmOptions.apiUrl
-    );
+    let result: HandleGenerateProjectResult;
+
+    if (watchedConfigSource.startsWith('workgroup:')) {
+      const workgroupId = watchedConfigSource.split(':')[1];
+       toast({ title: "Generación con Grupo de Trabajo", description: "Funcionalidad pendiente de implementación para generación de proyectos con grupos.", duration: 5000});
+      // TODO: Implement workgroup project generation
+      // result = await initiateWorkgroupProjectGeneration(promptToConfirm, workgroupId, agents, workgroups);
+      setIsLoading(false); // Remove this line when implemented
+      return; // Remove this line when implemented
+    } else {
+      if (!resolvedLlmOptions) {
+        toast({ title: "Error Interno", description: "Faltan opciones LLM para llamada directa.", variant: "destructive" });
+        setIsLoading(false);
+        return;
+      }
+      result = await handleGenerateProject(
+          promptToConfirm,
+          resolvedLlmOptions.providerId,
+          resolvedLlmOptions.apiKey,
+          resolvedLlmOptions.modelName,
+          resolvedLlmOptions.apiUrl
+      );
+    }
 
     if (result.success && result.data) {
       setGenerationResult(result.data);
@@ -185,12 +204,16 @@ export default function GenerateProjectPage() {
       const agentId = sourceId.split(':')[1];
       return agents.find(a => a.id === agentId)?.name || `Agente ${agentId.substring(0,6)}...`;
     }
-    if (sourceId.startsWith('workgroup:')) { // Handle workgroup source
+    if (sourceId.startsWith('workgroup:')) {
       const workgroupId = sourceId.split(':')[1];
       return workgroups.find(wg => wg.id === workgroupId)?.name || `Grupo ${workgroupId.substring(0,6)}...`;
     }
     return 'Desconocido';
   };
+  
+  const isWorkgroupSelected = watchedConfigSource.startsWith('workgroup:');
+  const canSubmit = isLoading || !currentPrompt || (!resolvedLlmOptions && !isWorkgroupSelected) || (isWorkgroupSelected && workgroups.length === 0);
+
 
   return (
     <div className="space-y-6">
@@ -201,10 +224,12 @@ export default function GenerateProjectPage() {
           </CardTitle>
           <CardDescription>
             Describe la estructura y tipo de proyecto, y la IA generará un borrador usando la configuración LLM seleccionada.
-            {!resolvedLlmOptions && watchedConfigSource ? (
+             {!resolvedLlmOptions && !isWorkgroupSelected && watchedConfigSource ? (
                  <span className="text-destructive block mt-1"> (Configuración para '{getSourceName(watchedConfigSource)}' incompleta)</span>
-             ) : resolvedLlmOptions ? (
+             ) : resolvedLlmOptions && !isWorkgroupSelected ? (
                 <span className="text-foreground block mt-1">(Usando: {getSourceName(watchedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
+             ) : isWorkgroupSelected ? (
+                <span className="text-foreground block mt-1">(Usando Grupo: {getSourceName(watchedConfigSource)})</span>
              ) : (
                  <span className="text-muted-foreground block mt-1">(Selecciona fuente de configuración)</span>
              )}
@@ -227,12 +252,12 @@ export default function GenerateProjectPage() {
                             <SelectContent>
                                 <SelectItem value="global">Ajustes Globales</SelectItem>
                                 {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
-                                {/* Removed workgroups from here as generate-project is typically a single LLM call */}
+                                {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
                             </SelectContent>
                         </Select>
                     )} />
                 {errors.configSource && <p className="text-sm text-destructive mt-1">{errors.configSource.message}</p>}
-                 {!resolvedLlmOptions && watchedConfigSource && (
+                 {!resolvedLlmOptions && !isWorkgroupSelected && watchedConfigSource && (
                      <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(watchedConfigSource)}' incompleta. Revisa Ajustes o Agentes.</p>
                 )}
             </div>
@@ -240,7 +265,7 @@ export default function GenerateProjectPage() {
           <CardFooter>
             <AlertDialog open={isConfirming} onOpenChange={setIsConfirming}>
               <AlertDialogTrigger asChild>
-                <Button type="submit" disabled={isLoading || !currentPrompt || !resolvedLlmOptions} className="w-full md:w-auto">
+                <Button type="submit" disabled={canSubmit} className="w-full md:w-auto">
                   {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wand2 className="mr-2 h-4 w-4" />} Generar Proyecto
                 </Button>
               </AlertDialogTrigger>
@@ -249,7 +274,12 @@ export default function GenerateProjectPage() {
                   <AlertDialogTitle>Confirmar Generación de Proyecto</AlertDialogTitle>
                    <AlertDialogDescription>
                     Generar estructura con '{getSourceName(watchedConfigSource)}'?
-                    <div className="mt-1 text-xs text-muted-foreground">(Proveedor: {resolvedLlmOptions?.providerId}, Modelo: {resolvedLlmOptions?.modelName})</div>
+                    {!isWorkgroupSelected && resolvedLlmOptions && (
+                        <div className="mt-1 text-xs text-muted-foreground">(Proveedor: {resolvedLlmOptions?.providerId}, Modelo: {resolvedLlmOptions?.modelName})</div>
+                    )}
+                    {isWorkgroupSelected && (
+                        <div className="mt-1 text-xs text-muted-foreground">(Grupo de Trabajo)</div>
+                    )}
                     <ScrollArea className="h-[150px] mt-2 p-2 border rounded bg-muted/30">
                         <pre className="text-xs text-foreground whitespace-pre-wrap">{promptToConfirm}</pre>
                     </ScrollArea>
