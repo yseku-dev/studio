@@ -1,10 +1,11 @@
+
 // src/app/(app)/workgroups/actions.ts
 'use server';
 
 import type { AgentConfig, AgentLLMConfig } from '@/types/agent';
 import { chatWithLLM, type LLMOptions, type ChatMessage, type ChatLLMPayload } from '@/services/groq';
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
-import { resolveLlmOptionsForSource } from '@/lib/llm-utils'; // Import the helper
+import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils'; 
 
 // --- Types for Server Action ---
 
@@ -28,6 +29,7 @@ export interface WorkgroupTurnPayload {
   participantAgentConfigs: Record<string, AgentTurnConfig>; // Configs for agents the orchestrator can choose from
   currentTurn: number; // The turn number *being processed*
   maxTurns: number;
+  localStorageSnapshot: LocalStorageSnapshot; // Added parameter
 }
 
 // Output response from the handleWorkgroupTurn action
@@ -116,14 +118,14 @@ JSON:`;
             messages: [{ role: 'system', content: orchestratorSystemPrompt }],
             options: orchestratorOptions,
         };
-        log('DEBUG', 'Llamando a LLM del Orquestrador...', { model: orchestratorOptions.modelName, promptStart: orchestratorSystemPrompt }); // Log full prompt
+        log('DEBUG', 'Llamando a LLM del Orquestrador...', { model: orchestratorOptions.modelName, promptStart: orchestratorSystemPrompt.substring(0,500) + "..." }); 
 
         let orchestratorRawResponse = '';
         let decisionJson: { next_agent_name: string; reason: string } | null = null;
         try {
             const decisionResult = await chatWithLLM(orchestratorPayload);
             orchestratorRawResponse = decisionResult.content;
-            log('DEBUG', `Respuesta cruda del Orquestrador recibida`, {raw: orchestratorRawResponse});
+            log('DEBUG', `Respuesta cruda del Orquestrador recibida`, {raw: orchestratorRawResponse.substring(0, 500) + "..."});
 
             let jsonString = orchestratorRawResponse;
             jsonString = jsonString.replace(/^```json\s*/, '').replace(/\s*```$/, '');
@@ -158,50 +160,50 @@ JSON:`;
                  };
                 log('INFO', `Orquestador determinó que la tarea está completa en el turno ${payload.currentTurn}.`);
             } else {
-                const nextAgent = Object.values(payload.participantAgentConfigs).find(a => a.name === decisionJson?.next_agent_name);
-                if (!nextAgent) {
+                const nextAgentConfig = Object.values(payload.participantAgentConfigs).find(a => a.name === decisionJson?.next_agent_name);
+                if (!nextAgentConfig) {
                     log('ERROR', `Orquestrador eligió un agente inválido o no disponible: ${decisionJson?.next_agent_name}. Agentes disponibles: ${availableAgentNames}`);
                     throw new Error(`Orquestrador eligió un agente inválido o no disponible: ${decisionJson?.next_agent_name}`);
                 }
                  orchestratorDecision = {
-                    nextAgentId: nextAgent.id,
+                    nextAgentId: nextAgentConfig.id,
                     reason: decisionJson.reason,
                     rawOutput: orchestratorRawResponse,
                 };
 
-                log('INFO', `Agente seleccionado (${nextAgent.name}) preparando respuesta.`);
+                log('INFO', `Agente seleccionado (${nextAgentConfig.name}) preparando respuesta.`);
                 const agentOptions: LLMOptions = {
-                    providerId: nextAgent.llmProviderId,
-                    apiKey: nextAgent.llmApiKey || '',
-                    modelName: nextAgent.llmModelName,
-                    apiUrl: nextAgent.llmApiUrl,
+                    providerId: nextAgentConfig.llmProviderId,
+                    apiKey: nextAgentConfig.llmApiKey || '',
+                    modelName: nextAgentConfig.llmModelName,
+                    apiUrl: nextAgentConfig.llmApiUrl,
                     timeoutMs: AGENT_RESPONSE_TIMEOUT_MS
                 };
 
                  const agentHistoryContext = formatHistoryForPrompt(currentHistory, 10);
-                 const agentSystemPrompt = `${nextAgent.systemMessage}\n\nCONTEXTO:\nTarea Principal: ${payload.task}\nHistorial de Conversación Reciente:\n${agentHistoryContext}\n\nTU TURNO (Turno ${payload.currentTurn}):\nEl Orquestrador te ha pasado el control porque: "${orchestratorDecision.reason}".\nConsidera el historial y la tarea. Realiza tu contribución o responde. Sé conciso y directo.`;
+                 const agentSystemPrompt = `${nextAgentConfig.systemMessage}\n\nCONTEXTO:\nTarea Principal: ${payload.task}\nHistorial de Conversación Reciente:\n${agentHistoryContext}\n\nTU TURNO (Turno ${payload.currentTurn}):\nEl Orquestrador te ha pasado el control porque: "${orchestratorDecision.reason}".\nConsidera el historial y la tarea. Realiza tu contribución o responde. Sé conciso y directo.`;
 
                 const agentPayload: ChatLLMPayload = {
                     messages: [{ role: 'system', content: agentSystemPrompt }],
                     options: agentOptions,
                 };
-                log('DEBUG', `Llamando a LLM del Agente (${nextAgent.name})...`, { model: agentOptions.modelName, promptStart: agentSystemPrompt }); // Log full prompt
+                log('DEBUG', `Llamando a LLM del Agente (${nextAgentConfig.name})...`, { model: agentOptions.modelName, promptStart: agentSystemPrompt.substring(0,500) + "..." });
 
                 const agentLLMResponse = await chatWithLLM(agentPayload);
                 const agentResponseContent = agentLLMResponse.content;
 
-                log('INFO', `Respuesta recibida del Agente (${nextAgent.name})`, { length: agentResponseContent.length, contentStart: agentResponseContent.substring(0, 200) + (agentResponseContent.length > 200 ? '...' : '') });
-                currentHistory.push({ role: 'assistant', content: agentResponseContent, name: nextAgent.name }); // Add agent name to assistant message
+                log('INFO', `Respuesta recibida del Agente (${nextAgentConfig.name})`, { length: agentResponseContent.length, contentStart: agentResponseContent.substring(0, 200) + (agentResponseContent.length > 200 ? '...' : '') });
+                currentHistory.push({ role: 'assistant', content: agentResponseContent, name: nextAgentConfig.name }); // Add agent name to assistant message
 
                 agentResponse = {
-                    agentId: nextAgent.id,
+                    agentId: nextAgentConfig.id,
                     content: agentResponseContent,
                     rawOutput: agentResponseContent,
                 };
             }
         } catch (err) {
             const error = err as Error;
-            log('ERROR', `Error durante la llamada LLM del Orquestrador o al procesar su respuesta: ${error.message}`, { rawResponse: orchestratorRawResponse, stack: error.stack });
+            log('ERROR', `Error durante la llamada LLM del Orquestrador o al procesar su respuesta: ${error.message}`, { rawResponse: orchestratorRawResponse.substring(0,500) + "...", stack: error.stack });
             currentHistory.push({ role: 'system', content: `[Error procesando decisión del Orquestrador (Turno ${payload.currentTurn}): ${error.message}]` });
             return { error: `Error del Orquestrador: ${error.message}`, isComplete: false, updatedHistory: currentHistory, serverLogs, orchestratorDecision: { nextAgentId: 'ERROR', reason: error.message, rawOutput: orchestratorRawResponse || undefined } };
         }
@@ -230,7 +232,7 @@ function formatHistoryForPrompt(history: ChatMessage[], maxMessages: number = 6)
         else if (msg.role === 'assistant') roleName = (msg as any).name || 'Agente'; // Try to get agent name if present
         else if (msg.role === 'system') roleName = 'Sistema';
         // Log full message content in prompt context
-        return `  [${roleName}]: ${contentString}`;
+        return `  [${roleName}]: ${contentString.substring(0, 1000) + (contentString.length > 1000 ? "..." : "")}`; // Truncate long messages in prompt
     }).join('\n');
 }
 
@@ -240,4 +242,3 @@ declare module '@/services/groq' {
         name?: string; // Optional agent name
     }
 }
-

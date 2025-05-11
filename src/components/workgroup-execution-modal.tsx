@@ -2,7 +2,7 @@
 // src/components/workgroup-execution-modal.tsx
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose } from "@/components/ui/dialog";
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -25,7 +25,7 @@ import {
     LOCALSTORAGE_PROVIDER_ID_KEY
 } from '@/config/llm-config';
 import { ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS } from '@/config/agent-config'; 
-import { resolveLlmOptionsForSource } from '@/lib/llm-utils'; 
+import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils'; 
 
 interface WorkgroupExecutionModalProps {
   isOpen: boolean;
@@ -88,7 +88,22 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
         return;
     }
 
-    const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, agents, workgroups);
+    const localStorageSnapshotForServer: LocalStorageSnapshot = {
+        [LOCALSTORAGE_PROVIDER_ID_KEY]: typeof window !== 'undefined' ? localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null : null,
+        apiKeys: {},
+        modelNames: {},
+        apiUrls: {},
+      };
+      if (typeof window !== 'undefined') {
+        LLM_PROVIDERS.forEach(provider => {
+            localStorageSnapshotForServer.apiKeys[provider.id] = localStorage.getItem(getLocalStorageApiKeyName(provider.id));
+            localStorageSnapshotForServer.modelNames[provider.id] = localStorage.getItem(getLocalStorageModelName(provider.id));
+            localStorageSnapshotForServer.apiUrls[provider.id] = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
+        });
+      }
+
+
+    const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, agents, workgroups, localStorageSnapshotForServer);
     if (!orchestratorLlmOptions) {
         logMessage({ type: 'error', message: `Configuración LLM inválida para el Orquestrador (${orchestrator.name})` });
         setExecutionError(`Configuración LLM inválida para el Orquestrador (${orchestrator.name})`);
@@ -98,7 +113,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
     }
 
     const participantAgentConfigs = participantAgents.reduce((acc, agent) => {
-        const llmOptions = resolveLlmOptionsForSource(`agent:${agent.id}`, agents, workgroups);
+        const llmOptions = resolveLlmOptionsForSource(`agent:${agent.id}`, agents, workgroups, localStorageSnapshotForServer);
         if (llmOptions) {
             acc[agent.id] = {
                 id: agent.id, name: agent.name, systemMessage: agent.systemMessage,
@@ -126,7 +141,8 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
             llmProviderId: orchestratorLlmOptions.providerId, llmModelName: orchestratorLlmOptions.modelName,
             llmApiKey: orchestratorLlmOptions.apiKey, llmApiUrl: orchestratorLlmOptions.apiUrl
         },
-        participantAgentConfigs, currentTurn: turn, maxTurns: MAX_WORKGROUP_TURNS
+        participantAgentConfigs, currentTurn: turn, maxTurns: MAX_WORKGROUP_TURNS,
+        localStorageSnapshot: localStorageSnapshotForServer, // Pass snapshot
     };
 
     logMessage({ type: 'debug', message: `Enviando payload al servidor para el turno ${turn}`, llmRequest: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
@@ -209,7 +225,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
         setIsExecuting(false);
         isExecutingRef.current = false;
     }
-  }, [orchestrator, participantAgents, workgroup.name, workgroup.task, logMessage, getAgentById, agents, workgroups, setExecutionError, setIsExecuting, setConversationHistory]);
+  }, [orchestrator, participantAgents, workgroup.name, workgroup.task, logMessage, getAgentById, agents, workgroups]);
 
   const startExecution = useCallback(() => {
     setIsExecuting(true);
@@ -398,4 +414,3 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
     </Dialog>
   );
 }
-

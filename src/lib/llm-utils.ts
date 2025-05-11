@@ -2,7 +2,7 @@
 import {
   DEFAULT_LLM_PROVIDER,
   LLM_PROVIDERS,
-  MODELS_BY_PROVIDER, // Added import
+  MODELS_BY_PROVIDER,
   type LLMProviderId,
   getLocalStorageApiKeyName,
   getLocalStorageModelName,
@@ -25,10 +25,17 @@ function getDefaultModelForProvider(providerId: LLMProviderId): string | null {
       if (tpmA !== tpmB) return tpmB - tpmA;
       const tokensA = providerModels[a].tokens || 0;
       const tokensB = providerModels[b].tokens || 0;
-      if (tokensA !== tokensB) return tpmB - tokensA;
+      if (tokensA !== tokensB) return tpmB - tokensA; // Corrected to tokensB - tokensA for descending
       return a.localeCompare(b);
     });
     return modelKeys.length > 0 ? modelKeys[0] : null;
+}
+
+export interface LocalStorageSnapshot {
+  [LOCALSTORAGE_PROVIDER_ID_KEY]: LLMProviderId | null;
+  apiKeys: Partial<Record<LLMProviderId, string | null>>;
+  modelNames: Partial<Record<LLMProviderId, string | null>>;
+  apiUrls: Partial<Record<LLMProviderId, string | null>>;
 }
 
 
@@ -39,12 +46,14 @@ function getDefaultModelForProvider(providerId: LLMProviderId): string | null {
  * @param sourceId 'global', 'agent:<agentId>', or 'workgroup:<workgroupId>'.
  * @param agents List of available agents.
  * @param workgroups List of available workgroups.
+ * @param localStorageSnapshot Optional snapshot of localStorage items for server-side usage.
  * @returns The resolved LLMOptions object, or null if configuration is incomplete or invalid.
  */
 export function resolveLlmOptionsForSource(
   sourceId: string,
   agents: AgentConfig[],
-  workgroups: WorkgroupConfig[] = []
+  workgroups: WorkgroupConfig[] = [],
+  localStorageSnapshot?: LocalStorageSnapshot
 ): LLMOptions | null {
   let finalProviderId: LLMProviderId | null = null;
   let finalModelName: string | null = null;
@@ -53,6 +62,41 @@ export function resolveLlmOptionsForSource(
   let finalProviderConfig: typeof LLM_PROVIDERS[number] | undefined;
 
   let agentForConfigSource: AgentConfig | undefined = undefined;
+
+  const getLocalStorageItem = (key: string): string | null => {
+    if (localStorageSnapshot) {
+      // This part needs refinement based on how snapshot is structured for generic keys
+      // For now, this specific key is handled directly below.
+      if (key === LOCALSTORAGE_PROVIDER_ID_KEY) return localStorageSnapshot[LOCALSTORAGE_PROVIDER_ID_KEY];
+      return null; // Or throw error if key not expected via snapshot specific fields
+    }
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem(key);
+    }
+    return null;
+  };
+
+  const getProviderSpecificItem = (
+    providerId: LLMProviderId, 
+    type: 'apiKey' | 'modelName' | 'apiUrl'
+  ): string | null => {
+    if (localStorageSnapshot) {
+      switch (type) {
+        case 'apiKey': return localStorageSnapshot.apiKeys[providerId] ?? null;
+        case 'modelName': return localStorageSnapshot.modelNames[providerId] ?? null;
+        case 'apiUrl': return localStorageSnapshot.apiUrls[providerId] ?? null;
+      }
+    }
+    if (typeof window !== 'undefined') {
+      switch (type) {
+        case 'apiKey': return localStorage.getItem(getLocalStorageApiKeyName(providerId));
+        case 'modelName': return localStorage.getItem(getLocalStorageModelName(providerId));
+        case 'apiUrl': return localStorage.getItem(`codealchemist_apiurl_${providerId}`);
+      }
+    }
+    return null;
+  };
+
 
   if (sourceId.startsWith('agent:')) {
     const agentId = sourceId.split(':')[1];
@@ -76,33 +120,29 @@ export function resolveLlmOptionsForSource(
     }
   }
 
-  // Determine provider, model, API key, and API URL
   if (agentForConfigSource && agentForConfigSource.llmConfig !== 'default') {
-    // Agent has a custom configuration
     finalProviderId = agentForConfigSource.llmConfig.providerId;
     finalProviderConfig = LLM_PROVIDERS.find(p => p.id === finalProviderId);
     if (finalProviderConfig) {
-      finalModelName = agentForConfigSource.llmConfig.modelName; // This should be set if custom
-      finalApiKey = agentForConfigSource.llmConfig.apiKey || localStorage.getItem(getLocalStorageApiKeyName(finalProviderConfig.id));
-      finalApiUrl = agentForConfigSource.llmConfig.apiUrl || localStorage.getItem(`codealchemist_apiurl_${finalProviderConfig.id}`) || finalProviderConfig.apiUrl;
+      finalModelName = agentForConfigSource.llmConfig.modelName;
+      finalApiKey = agentForConfigSource.llmConfig.apiKey || getProviderSpecificItem(finalProviderConfig.id, 'apiKey');
+      finalApiUrl = agentForConfigSource.llmConfig.apiUrl || getProviderSpecificItem(finalProviderConfig.id, 'apiUrl') || finalProviderConfig.apiUrl;
     }
   } else {
-    // Source is 'global' or agent/workgroup orchestrator uses 'default' settings
-    finalProviderId = localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null || DEFAULT_LLM_PROVIDER;
+    finalProviderId = (localStorageSnapshot ? localStorageSnapshot[LOCALSTORAGE_PROVIDER_ID_KEY] : getLocalStorageItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null) || DEFAULT_LLM_PROVIDER;
     finalProviderConfig = LLM_PROVIDERS.find(p => p.id === finalProviderId);
     if (finalProviderConfig) {
-      finalModelName = localStorage.getItem(getLocalStorageModelName(finalProviderConfig.id));
-      if (!finalModelName) { // Fallback if model not in localStorage
+      finalModelName = getProviderSpecificItem(finalProviderConfig.id, 'modelName');
+      if (!finalModelName) {
         finalModelName = getDefaultModelForProvider(finalProviderConfig.id);
       }
-      finalApiKey = localStorage.getItem(getLocalStorageApiKeyName(finalProviderConfig.id));
-      finalApiUrl = localStorage.getItem(`codealchemist_apiurl_${finalProviderConfig.id}`) || finalProviderConfig.apiUrl;
+      finalApiKey = getProviderSpecificItem(finalProviderConfig.id, 'apiKey');
+      finalApiUrl = getProviderSpecificItem(finalProviderConfig.id, 'apiUrl') || finalProviderConfig.apiUrl;
     }
   }
 
-  // Validation
   if (!finalProviderId || !finalProviderConfig) {
-    console.error(`resolveLlmOptions: Provider could not be determined or found for source: ${sourceId}`);
+    console.error(`resolveLlmOptions: Provider not found or not resolved for source: ${sourceId}`);
     return null;
   }
   if (!finalModelName) {

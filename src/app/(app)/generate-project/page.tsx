@@ -35,9 +35,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
-import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
+import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
 import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config';
+import { LLM_PROVIDERS, LOCALSTORAGE_PROVIDER_ID_KEY, getLocalStorageApiKeyName, getLocalStorageModelName, type LLMProviderId } from '@/config/llm-config';
 
 
 const formSchema = z.object({
@@ -136,7 +137,20 @@ export default function GenerateProjectPage() {
             setIsLoading(false);
             return;
         }
-      result = await initiateWorkgroupProjectGeneration(promptToConfirm, workgroupId, agents, workgroups);
+
+      const snapshot: LocalStorageSnapshot = {
+        [LOCALSTORAGE_PROVIDER_ID_KEY]: localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null,
+        apiKeys: {},
+        modelNames: {},
+        apiUrls: {},
+      };
+      LLM_PROVIDERS.forEach(provider => {
+        snapshot.apiKeys[provider.id] = localStorage.getItem(getLocalStorageApiKeyName(provider.id));
+        snapshot.modelNames[provider.id] = localStorage.getItem(getLocalStorageModelName(provider.id));
+        snapshot.apiUrls[provider.id] = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
+      });
+
+      result = await initiateWorkgroupProjectGeneration(promptToConfirm, workgroupId, agents, workgroups, snapshot);
     } else {
       if (!resolvedLlmOptions) {
         toast({ title: "Error Interno", description: "Faltan opciones LLM para llamada directa.", variant: "destructive" });
@@ -364,4 +378,3 @@ export default function GenerateProjectPage() {
     </div>
   );
 }
-

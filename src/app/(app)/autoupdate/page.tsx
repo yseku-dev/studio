@@ -36,13 +36,18 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
-import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
+import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
 import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS } from '@/config/agent-config';
 import {
+    LLM_PROVIDERS,
     LOCALSTORAGE_GIT_REPO_URL_KEY,
     LOCALSTORAGE_GIT_USERNAME_KEY,
     LOCALSTORAGE_GIT_EMAIL_KEY,
-    LOCALSTORAGE_GIT_PAT_KEY
+    LOCALSTORAGE_GIT_PAT_KEY,
+    LOCALSTORAGE_PROVIDER_ID_KEY,
+    getLocalStorageApiKeyName,
+    getLocalStorageModelName,
+    type LLMProviderId
 } from '@/config/llm-config';
 import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
 import type { ChatMessage } from '@/services/groq';
@@ -231,8 +236,22 @@ export default function AutoUpdatePage() {
         setStatus("error");
         return;
     }
+    
+    const localStorageSnapshotForServer: LocalStorageSnapshot = {
+        [LOCALSTORAGE_PROVIDER_ID_KEY]: typeof window !== 'undefined' ? localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null : null,
+        apiKeys: {},
+        modelNames: {},
+        apiUrls: {},
+    };
+    if (typeof window !== 'undefined') {
+        LLM_PROVIDERS.forEach(provider => {
+            localStorageSnapshotForServer.apiKeys[provider.id] = localStorage.getItem(getLocalStorageApiKeyName(provider.id));
+            localStorageSnapshotForServer.modelNames[provider.id] = localStorage.getItem(getLocalStorageModelName(provider.id));
+            localStorageSnapshotForServer.apiUrls[provider.id] = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
+        });
+    }
 
-    const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestratorAgent.id}`, agents, workgroups);
+    const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestratorAgent.id}`, agents, workgroups, localStorageSnapshotForServer);
     if (!orchestratorLlmOptions) {
         addWorkgroupLog({ type: 'error', message: `Configuración LLM inválida para Orquestrador (${orchestratorAgent.name})`});
         setCurrentAnalysisError(`Configuración LLM inválida para Orquestrador.`);
@@ -243,10 +262,10 @@ export default function AutoUpdatePage() {
     const participantAgentDetails = workgroup.agentIds
         .filter(id => id !== orchestratorAgent.id)
         .map(id => agents.find(a => a.id === id))
-        .filter(agent => agent !== undefined) as AgentConfig[];
+        .filter(agentItem => agentItem !== undefined) as AgentConfig[];
 
     const participantAgentConfigs = participantAgentDetails.reduce((acc, agent) => {
-        const llmOptions = resolveLlmOptionsForSource(`agent:${agent.id}`, agents, workgroups);
+        const llmOptions = resolveLlmOptionsForSource(`agent:${agent.id}`, agents, workgroups, localStorageSnapshotForServer);
         if (llmOptions) {
             acc[agent.id] = {
                 id: agent.id, name: agent.name, systemMessage: agent.systemMessage,
@@ -265,7 +284,8 @@ export default function AutoUpdatePage() {
             llmProviderId: orchestratorLlmOptions.providerId, llmModelName: orchestratorLlmOptions.modelName,
             llmApiKey: orchestratorLlmOptions.apiKey, llmApiUrl: orchestratorLlmOptions.apiUrl
         },
-        participantAgentConfigs, currentTurn: turn, maxTurns: MAX_WORKGROUP_TURNS
+        participantAgentConfigs, currentTurn: turn, maxTurns: MAX_WORKGROUP_TURNS,
+        localStorageSnapshot: localStorageSnapshotForServer, // Pass snapshot
     };
 
     addWorkgroupLog({ type: 'debug', message: `Enviando payload a handleWorkgroupTurn para el turno ${turn}. Tarea (inicio): ${task.substring(0,500)}...`, llmRequest: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
@@ -346,7 +366,7 @@ export default function AutoUpdatePage() {
         setCurrentAnalysisError(errorMsg);
         setStatus("error");
     }
-  }, [addWorkgroupLog, agents, workgroups, processAnalysisResult, status, setWorkgroupConversationHistory]); // Removed analysisResult from deps
+  }, [addWorkgroupLog, agents, workgroups, processAnalysisResult, status]); 
 
   const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
     const options = resolvedLlmOptions; // For direct LLM calls
@@ -416,7 +436,7 @@ export default function AutoUpdatePage() {
             return;
         }
         const taskForWorkgroup = `Analiza el siguiente código fuente completo de la aplicación CodeAlchemist. ${analysisPreferences ? `Preferencias de análisis: "${analysisPreferences}".` : ''} El código es:\n\n${bundleResult.concatenatedSource}`;
-        // Make sure setWorkgroupConversationHistory is defined and passed correctly
+        
         await runWorkgroupAnalysisTurn(1, [], workgroupExecutionControllerRef.current.signal, workgroupForAnalysis, taskForWorkgroup);
 
     } else if (options && bundleResult.files) { // Direct LLM call
@@ -630,6 +650,7 @@ export default function AutoUpdatePage() {
       addDetailedLog(`Error: No se encontraron archivos para ${format.toUpperCase()}.`, true);
     }
     setIsDownloading(false);
+    setDetailedLogs(currentLogsCopy);
   };
 
   const performGitUpload = async (isRetry: boolean = false) => {
@@ -760,7 +781,7 @@ export default function AutoUpdatePage() {
               <Label className="text-sm text-foreground">
                 {status === "loading_source" ? "Paso 1: Cargando código fuente..." :
                  status === "chunking_source" ? "Paso 1.5: Dividiendo código en fragmentos..." :
-                 status === "analyzing" ? (analysisProgress.total > 0 ? `Paso 2: Procesando fragmentos LLM... (${analysisProgress.processed}/${analysisProgress.total})` : "Paso 2: Calculando fragmentos para LLM...") :
+                 status === "analyzing" && analysisProgress.total > 0 ? `Paso 2: Procesando fragmentos LLM... (${analysisProgress.processed}/${analysisProgress.total})` : "Paso 2: Calculando fragmentos para LLM..." :
                  status === "processing_workgroup_turn" ? `Paso 2: Procesando con grupo de trabajo... (Turno ${currentWorkgroupTurn}/${MAX_WORKGROUP_TURNS})` :
                  status === "success" ? `Operación completada ${selectedConfigSource.startsWith("workgroup:") ? `(Grupo finalizado en turno ${currentWorkgroupTurn})` : `(${analysisProgress.processed}/${analysisProgress.total} fragmentos)`}.` :
                  status === "error" && (currentAnalysisError || currentGitError) ? `Operación interrumpida.` :
@@ -873,7 +894,7 @@ export default function AutoUpdatePage() {
                                   <AlertDialogContent className="max-w-3xl">
                                     <AlertDialogHeader>
                                       <AlertDialogTitle className="text-foreground flex items-center gap-2"><ShieldAlert className="text-destructive h-6 w-6" />¿Aplicar esta sugerencia?</AlertDialogTitle>
-                                      <AlertDialogDescription className="text-muted-foreground">
+                                      <AlertDialogDescription>
                                         Se intentará aplicar la sugerencia al archivo <strong className="text-foreground">{s.area}</strong>.
                                         <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[50vh] text-xs">
                                           <div><p className="font-semibold mb-1 text-foreground">Original (Fragmento):</p><ScrollArea className="h-60 border rounded p-2 bg-muted/30"><pre className="text-xs font-mono whitespace-pre-wrap text-foreground">{s.originalContent?.substring(0, 1500) || "No disponible"}</pre></ScrollArea></div>

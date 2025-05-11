@@ -8,7 +8,7 @@ import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
 import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
 import { ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS } from '@/config/agent-config';
-import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
+import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
 
 
 export type GeneratedCodeData = GeneratedCodeLLMResponse;
@@ -84,7 +84,8 @@ export async function initiateWorkgroupCodeGeneration(
   prompt: string,
   workgroupId: string,
   allAgents: AgentConfig[],
-  allWorkgroups: WorkgroupConfig[]
+  allWorkgroups: WorkgroupConfig[],
+  localStorageSnapshot: LocalStorageSnapshot // Added parameter
 ): Promise<HandleGenerateCodeResult> {
   const serverLogs: string[] = [];
   const log = (type: 'INFO' | 'ERROR' | 'DEBUG', message: string, data?: any) => {
@@ -107,7 +108,7 @@ export async function initiateWorkgroupCodeGeneration(
     return { success: false, error: `Orquestador no encontrado en el grupo.`, workgroupLogs: serverLogs };
   }
 
-  const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, allAgents, allWorkgroups);
+  const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, allAgents, allWorkgroups, localStorageSnapshot);
   if (!orchestratorLlmOptions) {
     log('ERROR', `Configuración LLM inválida para Orquestador (${orchestrator.name}) en grupo ${workgroup.name}.`);
     return { success: false, error: `Configuración LLM inválida para Orquestador.`, workgroupLogs: serverLogs };
@@ -118,7 +119,7 @@ export async function initiateWorkgroupCodeGeneration(
     .map(id => allAgents.find(a => a.id === id))
     .filter(agent => agent !== undefined)
     .reduce((acc, agent) => {
-      const llmOptions = resolveLlmOptionsForSource(`agent:${agent!.id}`, allAgents, allWorkgroups);
+      const llmOptions = resolveLlmOptionsForSource(`agent:${agent!.id}`, allAgents, allWorkgroups, localStorageSnapshot);
       if (llmOptions) {
         acc[agent!.id] = {
           id: agent!.id, name: agent!.name, systemMessage: agent!.systemMessage,
@@ -147,7 +148,8 @@ export async function initiateWorkgroupCodeGeneration(
       },
       participantAgentConfigs,
       currentTurn: turn,
-      maxTurns: MAX_WORKGROUP_TURNS
+      maxTurns: MAX_WORKGROUP_TURNS,
+      localStorageSnapshot, // Pass snapshot
     };
 
     const turnResult: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
