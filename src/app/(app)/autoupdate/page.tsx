@@ -1,13 +1,13 @@
 
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork, Trash2, Expand, Minimize } from "lucide-react"; // Added Settings2
+import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork, Trash2, Expand, Minimize, Workflow } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion, handleUploadToGit } from './actions';
-import type { ProjectAnalysisResponse } from '@/services/groq';
+import type { ProjectAnalysisResponse, LLMOptions } from '@/services/groq';
 import type { SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -33,32 +33,44 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"; // Import Select components
-import type { AgentConfig } from '@/types/agent';
-import { resolveLlmOptionsForSource } from '@/lib/llm-utils'; // Import the helper
-import type { LLMOptions } from '@/services/groq'; // Import LLMOptions type
-import { LOCALSTORAGE_AGENTS_KEY } from '@/config/agent-config'; // Import agents key
+} from "@/components/ui/select";
+import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
+import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
+import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS } from '@/config/agent-config';
 import {
     LOCALSTORAGE_GIT_REPO_URL_KEY,
     LOCALSTORAGE_GIT_USERNAME_KEY,
     LOCALSTORAGE_GIT_EMAIL_KEY,
     LOCALSTORAGE_GIT_PAT_KEY
 } from '@/config/llm-config';
+import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
+import type { ChatMessage } from '@/services/groq';
 
 
-type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "success" | "error" | "fixing_error" | "uploading_git" | "fixing_git_error";
-type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
+type AutoUpdateStatus = "idle" | "loading_source" | "analyzing" | "processing_workgroup_turn" | "success" | "error" | "fixing_error" | "uploading_git" | "fixing_git_error";
 
-interface SuggestionWithStatus extends Omit<ProjectAnalysisResponse['suggestions'][number], 'area' | 'suggestion' | 'priority' | 'suggestedFullFileContent'> {
-  id: string;
-  status: SuggestionStatus;
-  errorMessage?: string;
-  originalContent?: string;
+// Define the type for a single suggestion item from the response
+// Correctly extend the type of an element in the 'suggestions' array
+interface SingleSuggestion extends ProjectAnalysisResponse['suggestions'][number] {
+  id?: string; // id might not exist initially, make it optional
+  // Add other fields from the base type if needed, e.g.:
   area: string;
   suggestion: string;
   priority?: 'high' | 'medium' | 'low';
   suggestedFullFileContent?: string;
 }
+
+
+interface SuggestionWithStatus extends SingleSuggestion {
+  id: string; // Ensure id is always present after processing
+  status: SuggestionStatus;
+  errorMessage?: string;
+  originalContent?: string;
+}
+
+
+type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
+
 
 interface AnalysisProgress {
   processed: number;
@@ -72,12 +84,23 @@ interface GitConfig {
   pat: string | null;
 }
 
+// LogEntry for workgroup execution
+type LogEntry = {
+    timestamp: string;
+    type: 'info' | 'agent' | 'error' | 'orchestrator' | 'system' | 'debug';
+    agentName?: string;
+    message: string;
+    llmRequest?: any;
+    llmResponse?: any;
+};
+
+
 export default function AutoUpdatePage() {
   const [status, setStatus] = useState<AutoUpdateStatus>("idle");
   const [analysisResult, setAnalysisResult] = useState<ProjectAnalysisResponse | null>(null);
   const [currentAnalysisError, setCurrentAnalysisError] = useState<string | null>(null);
   const [suggestionsWithStatus, setSuggestionsWithStatus] = useState<SuggestionWithStatus[]>([]);
-  const [isDownloading, setIsDownloading] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false); // Initialize to false
   const [projectFiles, setProjectFiles] = useState<Awaited<ReturnType<typeof getApplicationSourceBundle>>['files']>([]);
   const [analysisPreferences, setAnalysisPreferences] = useState<string>("");
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ processed: 0, total: 0 });
@@ -86,85 +109,100 @@ export default function AutoUpdatePage() {
   const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
   const [logsExpanded, setLogsExpanded] = useState(false);
 
-  // Agent and config source state
   const [agents, setAgents] = useState<AgentConfig[]>([]);
-  const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global'); // Default to global
-  const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null); // State for resolved options
+  const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
+  const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global');
+  const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null);
 
   const [gitConfig, setGitConfig] = useState<GitConfig>({ repoUrl: null, username: null, email: null, pat: null });
-
   const [gitUploadRetryCount, setGitUploadRetryCount] = useState(0);
   const MAX_GIT_UPLOAD_RETRIES = 5;
-
   const [currentGitError, setCurrentGitError] = useState<string | null>(null);
+
+  // States for workgroup-based analysis
+  const [workgroupAnalysisLogs, setWorkgroupAnalysisLogs] = useState<LogEntry[]>([]);
+  const [workgroupConversationHistory, setWorkgroupConversationHistory] = useState<ChatMessage[]>([]);
+  const [currentWorkgroupTurn, setCurrentWorkgroupTurn] = useState(0);
+  const workgroupExecutionControllerRef = useRef<AbortController | null>(null);
+  const isMountedRef = useRef(false);
+
 
   const { toast } = useToast();
 
-
-   // Load agents from localStorage
   useEffect(() => {
+    isMountedRef.current = true;
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
     if (storedAgents) {
-      try {
-        setAgents(JSON.parse(storedAgents));
-      } catch (e) {
-        console.error("Error parsing stored agents:", e);
-        setAgents([]);
+      try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing stored agents:", e); setAgents([]); }
+    }
+    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
+    if (storedWorkgroups) {
+      try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); }
+    }
+    setGitConfig({
+      repoUrl: localStorage.getItem(LOCALSTORAGE_GIT_REPO_URL_KEY),
+      username: localStorage.getItem(LOCALSTORAGE_GIT_USERNAME_KEY),
+      email: localStorage.getItem(LOCALSTORAGE_GIT_EMAIL_KEY),
+      pat: localStorage.getItem(LOCALSTORAGE_GIT_PAT_KEY),
+    });
+    const initialLogs: string[] = [`[CLIENT ${new Date().toISOString()}] AutoUpdatePage montado. Cargando archivos de proyecto iniciales...`];
+    fetchProjectFiles(initialLogs).finally(() => {
+      initialLogs.push(`[CLIENT ${new Date().toISOString()}] Carga inicial de archivos de proyecto completada.`);
+      setDetailedLogs(prev => [...prev, ...initialLogs]);
+    });
+    return () => {
+      isMountedRef.current = false;
+      if (workgroupExecutionControllerRef.current) {
+        workgroupExecutionControllerRef.current.abort();
       }
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups);
+    setResolvedLlmOptions(options);
+  }, [selectedConfigSource, agents, workgroups]);
+
+  const addDetailedLog = useCallback((message: string) => {
+    if (isMountedRef.current) {
+      setDetailedLogs(prev => [...prev, `[CLIENT ${new Date().toISOString()}] ${message}`]);
     }
   }, []);
 
-  // Load Git settings and initial project files
-  useEffect(() => {
-    setGitConfig({
-        repoUrl: localStorage.getItem(LOCALSTORAGE_GIT_REPO_URL_KEY),
-        username: localStorage.getItem(LOCALSTORAGE_GIT_USERNAME_KEY),
-        email: localStorage.getItem(LOCALSTORAGE_GIT_EMAIL_KEY),
-        pat: localStorage.getItem(LOCALSTORAGE_GIT_PAT_KEY),
-    });
-
-     const initialLogs: string[] = [];
-    initialLogs.push(`[CLIENT ${new Date().toISOString()}] AutoUpdatePage montado. Cargando archivos de proyecto iniciales...`);
-    fetchProjectFiles(initialLogs).finally(() => {
-        initialLogs.push(`[CLIENT ${new Date().toISOString()}] Carga inicial de archivos de proyecto completada.`);
-        setDetailedLogs(initialLogs);
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run only on mount
-
-    // Update resolved LLM options when config source or agents change
-  useEffect(() => {
-    const options = resolveLlmOptionsForSource(selectedConfigSource, agents);
-    setResolvedLlmOptions(options);
-  }, [selectedConfigSource, agents]);
-
+  const addWorkgroupLog = useCallback((logEntry: Omit<LogEntry, 'timestamp'>) => {
+    if (isMountedRef.current) {
+      const timestamp = new Date().toLocaleTimeString('es-ES', { hour12: false });
+      setWorkgroupAnalysisLogs(prev => [...prev, { ...logEntry, timestamp }]);
+    }
+  }, []);
 
   const fetchProjectFiles = async (targetLogs?: string[]) => {
-     const bundleResult = await getApplicationSourceBundle(false, targetLogs);
-     if (bundleResult.success && bundleResult.files) {
-       setProjectFiles(bundleResult.files);
-       if (targetLogs) targetLogs.push(`[CLIENT] Archivos del proyecto cargados en el estado local: ${bundleResult.files.length} archivos.`);
-     } else {
-       toast({ title: "Error", description: "No se pudieron cargar los archivos del proyecto para la referencia de sugerencias.", variant: "destructive" });
-       setProjectFiles([]);
-       if (targetLogs) targetLogs.push(`[CLIENT ERROR] No se pudieron cargar los archivos del proyecto. Error: ${bundleResult.error}`);
-     }
+    const bundleResult = await getApplicationSourceBundle(false, targetLogs);
+    if (bundleResult.success && bundleResult.files) {
+      setProjectFiles(bundleResult.files);
+      if (targetLogs) targetLogs.push(`[CLIENT] Archivos del proyecto cargados en el estado local: ${bundleResult.files.length} archivos.`);
+    } else {
+      toast({ title: "Error", description: "No se pudieron cargar los archivos del proyecto.", variant: "destructive" });
+      setProjectFiles([]);
+      if (targetLogs) targetLogs.push(`[CLIENT ERROR] No se pudieron cargar los archivos del proyecto. Error: ${bundleResult.error}`);
+    }
   };
 
   const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
-      const options = resolvedLlmOptions; // Use the state which reflects the selected source
-     if (!options) {
-        toast({
-            title: "Configuración LLM Incompleta",
-            description: `La configuración LLM seleccionada (${getSourceName(selectedConfigSource)}) está incompleta o no se pudo resolver. Revisa los Ajustes o la configuración del Agente.`,
-            variant: "destructive",
-            duration: 7000,
-        });
-        return;
-     }
+    const options = resolvedLlmOptions;
+    if (!options) {
+      toast({
+        title: "Configuración LLM Incompleta",
+        description: `La configuración LLM seleccionada (${getSourceName(selectedConfigSource)}) está incompleta. Revisa los Ajustes o la configuración del Agente/Grupo.`,
+        variant: "destructive",
+        duration: 7000,
+      });
+      return;
+    }
 
     const initialLogs = isRetry ? [...detailedLogs] : [];
-    initialLogs.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? 'Reintentando' : 'Iniciando'} auto-análisis de la aplicación con ${options.providerId} (${options.modelName})...`);
+    addDetailedLog(`${isRetry ? 'Reintentando' : 'Iniciando'} auto-análisis...`);
     setStatus("loading_source");
     setAnalysisResult(null);
     setCurrentAnalysisError(null);
@@ -172,212 +210,301 @@ export default function AutoUpdatePage() {
     setSuggestionsWithStatus([]);
     setAnalysisProgress({ processed: 0, total: 0 });
     setAutoFixSuggestion(null);
-    setDetailedLogs(initialLogs);
+    setWorkgroupAnalysisLogs([]); // Clear workgroup logs
+    setWorkgroupConversationHistory([]); // Clear workgroup history
+    setCurrentWorkgroupTurn(0); // Reset workgroup turn
+    if (!isRetry) setDetailedLogs([]);
+
 
     toast({
       title: isRetry ? "Reintentando Auto-Análisis" : "Auto-Análisis Iniciado",
-      description: `Cargando y preparando el código fuente de CodeAlchemist con ${options.providerId}...`
+      description: `Cargando y preparando el código fuente...`
     });
 
     await fetchProjectFiles(initialLogs);
-    initialLogs.push(`[CLIENT ${new Date().toISOString()}] Estado cambiado a 'analyzing'. Llamando a handleAutoAnalyzeAppSource.`);
-    setStatus("analyzing");
 
-    // Pass the resolved LLM config to the server action
-    const result = await handleAutoAnalyzeAppSource(
-        options.providerId,
-        options.apiKey,
-        options.modelName,
-        options.apiUrl,
-        analysisPreferences
-    );
+    if (selectedConfigSource.startsWith("workgroup:")) {
+        const workgroupId = selectedConfigSource.split(":")[1];
+        const workgroup = workgroups.find(wg => wg.id === workgroupId);
+        if (workgroup) {
+            addDetailedLog(`Análisis iniciado usando el grupo de trabajo: ${workgroup.name}.`);
+            setStatus("processing_workgroup_turn");
+            workgroupExecutionControllerRef.current = new AbortController();
 
-    setDetailedLogs(prevLogs => [...prevLogs, ...(result.detailedExecutionLogs || [`[CLIENT ${new Date().toISOString()}] Llamada a handleAutoAnalyzeAppSource completada.`])]);
+            const sourceBundleResult = await getApplicationSourceBundle(true, initialLogs); // Get concatenated source for workgroup
+            if (!sourceBundleResult.success || !sourceBundleResult.concatenatedSource) {
+                 addDetailedLog(`Error: No se pudo obtener el código fuente concatenado para el grupo de trabajo. ${sourceBundleResult.error}`);
+                 setStatus("error");
+                 setCurrentAnalysisError(sourceBundleResult.error || "Error al obtener código fuente para el grupo.");
+                 return;
+            }
+            const taskForWorkgroup = `Analiza el siguiente código fuente completo de la aplicación CodeAlchemist. ${analysisPreferences ? `Preferencias de análisis: "${analysisPreferences}".` : ''} El código es:\n\n${sourceBundleResult.concatenatedSource.substring(0, 10000)}... (Se ha truncado para esta tarea de prompt, el análisis se debe basar en el código completo implícito que representa este mensaje.)`;
+            await runWorkgroupAnalysisTurn(1, [], workgroupExecutionControllerRef.current.signal, workgroup, taskForWorkgroup);
+        } else {
+            addDetailedLog(`Error: Grupo de trabajo con ID ${workgroupId} no encontrado.`);
+            setStatus("error");
+            setCurrentAnalysisError("Grupo de trabajo seleccionado no encontrado.");
+        }
+    } else {
+        addDetailedLog(`Estado cambiado a 'analyzing'. Llamando a handleAutoAnalyzeAppSource.`);
+        setStatus("analyzing");
 
-    setAnalysisProgress({
-        processed: result.chunksProcessed || 0,
-        total: result.totalChunks || 0
-    });
+        const result = await handleAutoAnalyzeAppSource(
+            options.providerId,
+            options.apiKey,
+            options.modelName,
+            options.apiUrl,
+            analysisPreferences
+        );
+        setDetailedLogs(prevLogs => [...prevLogs, ...(result.detailedExecutionLogs || [])]);
+        setAnalysisProgress({ processed: result.chunksProcessed || 0, total: result.totalChunks || 0 });
 
-    if (result.success && result.data) {
-      setAnalysisResult(result.data);
-      const initialSuggestions = result.data.suggestions.map((s, index) => {
-        const relatedFile = projectFiles?.find(f => {
-            if (!s.area) return false;
-            const normalizePath = (p: string) => p.replace(/^\.\//, '').replace(/^src\//, '');
-            const areaLower = normalizePath(s.area.toLowerCase());
-            const fileNameLower = normalizePath(f.fileName.toLowerCase());
-            // Match ignoring potential "(part X)" suffix added during chunking
-            const baseAreaLower = areaLower.split(' (parte ')[0];
-            return fileNameLower === baseAreaLower;
-        });
-        let currentStatus: SuggestionStatus = "pending";
-        // Check if the *required* data for application is present
-        if (!s.area || !s.suggestedFullFileContent || !relatedFile?.content) {
-            currentStatus = "not_applicable";
+        if (result.success && result.data) {
+            processAnalysisResult(result.data);
+        } else {
+            handleAnalysisError(result.error);
+        }
+    }
+  };
+  
+  const runWorkgroupAnalysisTurn = async (
+    turn: number,
+    history: ChatMessage[],
+    signal: AbortSignal,
+    workgroup: WorkgroupConfig,
+    task: string
+  ) => {
+    if (!isMountedRef.current || signal.aborted) {
+        addWorkgroupLog({ type: 'system', message: 'Ejecución de análisis de grupo detenida.' });
+        if (status === "processing_workgroup_turn") setStatus("idle"); // Or "error" if appropriate
+        return;
+    }
+    addWorkgroupLog({ type: 'system', message: `Iniciando turno de análisis ${turn}/${MAX_WORKGROUP_TURNS} para el grupo ${workgroup.name}...` });
+    setCurrentWorkgroupTurn(turn);
+    setStatus("processing_workgroup_turn");
+
+    const orchestratorAgent = agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME && workgroup.agentIds.includes(a.id));
+    if (!orchestratorAgent) {
+        addWorkgroupLog({ type: 'error', message: 'Error crítico: Agente Orquestador no encontrado en el grupo.' });
+        setCurrentAnalysisError("Orquestrador no encontrado en el grupo.");
+        setStatus("error");
+        return;
+    }
+
+    const orchestratorLlmOptions = resolveLlmOptionsForSource(orchestratorAgent.id, agents, workgroups);
+    if (!orchestratorLlmOptions) {
+        addWorkgroupLog({ type: 'error', message: `Configuración LLM inválida para Orquestrador (${orchestratorAgent.name})`});
+        setCurrentAnalysisError(`Configuración LLM inválida para Orquestrador.`);
+        setStatus("error");
+        return;
+    }
+    
+    const participantAgentDetails = workgroup.agentIds
+        .filter(id => id !== orchestratorAgent.id)
+        .map(id => agents.find(a => a.id === id))
+        .filter(agent => agent !== undefined) as AgentConfig[];
+
+    const participantAgentConfigs = participantAgentDetails.reduce((acc, agent) => {
+        const llmOptions = resolveLlmOptionsForSource(agent.id, agents, workgroups);
+        if (llmOptions) {
+            acc[agent.id] = {
+                id: agent.id, name: agent.name, systemMessage: agent.systemMessage,
+                llmProviderId: llmOptions.providerId, llmModelName: llmOptions.modelName,
+                llmApiKey: llmOptions.apiKey, llmApiUrl: llmOptions.apiUrl
+            };
+        }
+        return acc;
+    }, {} as WorkgroupTurnPayload['participantAgentConfigs']);
+
+
+    const payload: WorkgroupTurnPayload = {
+        workgroupName: workgroup.name, task, conversationHistory: history,
+        orchestrator: {
+            id: orchestratorAgent.id, name: orchestratorAgent.name, systemMessage: orchestratorAgent.systemMessage,
+            llmProviderId: orchestratorLlmOptions.providerId, llmModelName: orchestratorLlmOptions.modelName,
+            llmApiKey: orchestratorLlmOptions.apiKey, llmApiUrl: orchestratorLlmOptions.apiUrl
+        },
+        participantAgentConfigs, currentTurn: turn, maxTurns: MAX_WORKGROUP_TURNS
+    };
+
+    addWorkgroupLog({ type: 'debug', message: `Enviando payload a handleWorkgroupTurn para el turno ${turn}. Tarea (inicio): ${task.substring(0,100)}...`});
+
+    try {
+        const result: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
+        (result.serverLogs || []).forEach(log => addWorkgroupLog({ type: 'debug', message: `[SERVER] ${log}` }));
+
+        if (result.error) {
+            addWorkgroupLog({ type: 'error', message: `Error en servidor (turno ${turn}): ${result.error}` });
+            setCurrentAnalysisError(result.error);
+            setStatus("error");
+            return;
+        }
+        
+        setWorkgroupConversationHistory(result.updatedHistory || history);
+
+        if (result.orchestratorDecision) {
+            const nextAgentConfig = agents.find(a => a.id === result.orchestratorDecision?.nextAgentId);
+            addWorkgroupLog({ type: 'orchestrator', agentName: orchestratorAgent.name, message: `Decisión: ${result.orchestratorDecision.reason}. Próximo: ${nextAgentConfig?.name || result.orchestratorDecision.nextAgentId}` });
+        }
+        if (result.agentResponse) {
+            const respondingAgent = agents.find(a => a.id === result.agentResponse?.agentId);
+            addWorkgroupLog({ type: 'agent', agentName: respondingAgent?.name || result.agentResponse.agentId, message: `Respuesta (extracto): ${result.agentResponse.content.substring(0, 200)}...` });
+            // The "final" response for analysis is expected from an agent, likely the last one chosen by orchestrator or when task is "COMPLETADO"
+            // Attempt to parse this as ProjectAnalysisResponse
+            if (result.isComplete || result.orchestratorDecision?.nextAgentId === "COMPLETADO") {
+                try {
+                    const finalAnalysis = JSON.parse(result.agentResponse.content) as ProjectAnalysisResponse;
+                     // Validate finalAnalysis structure
+                    if (finalAnalysis && finalAnalysis.analysisTitle && Array.isArray(finalAnalysis.suggestions)) {
+                         processAnalysisResult(finalAnalysis);
+                         addWorkgroupLog({ type: 'system', message: `Análisis del grupo de trabajo completado y procesado.`});
+                         return; // End of workgroup analysis
+                    } else {
+                         throw new Error("La respuesta final del agente no tiene el formato ProjectAnalysisResponse esperado.");
+                    }
+                } catch (parseError) {
+                    addWorkgroupLog({ type: 'error', message: `Error al parsear la respuesta final del agente como JSON: ${(parseError as Error).message}. Contenido: ${result.agentResponse.content.substring(0,300)}...`});
+                    setCurrentAnalysisError("La respuesta final del grupo de trabajo no pudo ser interpretada.");
+                    setStatus("error");
+                    return;
+                }
+            }
         }
 
-        return {
-          ...s,
-          id: `suggestion-${index}-${Date.now()}`,
-          status: currentStatus,
-          originalContent: relatedFile?.content, // Store original content found
-		  area: s.area,
-		  suggestion: s.suggestion,
-		  priority: s.priority,
-		  suggestedFullFileContent: s.suggestedFullFileContent
-        };
-      });
-      setSuggestionsWithStatus(initialSuggestions);
-      setStatus("success");
-      toast({
-        title: "Auto-Análisis Completado",
-        description: `Se han generado sugerencias para CodeAlchemist. ${result.chunksProcessed || 0} de ${result.totalChunks || 0} fragmentos procesados.`
-      });
-      setDetailedLogs(prevLogs => [...prevLogs, `[CLIENT ${new Date().toISOString()}] Análisis completado y resultados procesados en UI.`]);
-    } else {
-      setStatus("error");
-      setCurrentAnalysisError(result.error || "Ocurrió un error desconocido durante el auto-análisis.");
-      setCurrentGitError(null);
-      toast({
-        title: "Error en Auto-Análisis",
-        description: result.error || "Ocurrió un error desconocido.",
-        variant: "destructive",
-        duration: 10000,
-      });
-       setDetailedLogs(prevLogs => [...prevLogs, `[CLIENT ERROR ${new Date().toISOString()}] Error en auto-análisis: ${result.error || "Desconocido"}`]);
+        if (result.isComplete || turn >= MAX_WORKGROUP_TURNS) {
+            addWorkgroupLog({ type: 'system', message: `Ejecución del análisis de grupo ${result.isComplete ? 'marcada como completada' : 'alcanzó el límite de turnos'}.` });
+             if (!analysisResult) { // If no specific analysis result was parsed yet
+                setCurrentAnalysisError("El grupo de trabajo finalizó pero no se obtuvo un resultado de análisis claro.");
+                setStatus("error");
+            } else {
+                 setStatus("success"); // If analysisResult was set by processAnalysisResult
+            }
+        } else if (!signal.aborted) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            if (!signal.aborted && isMountedRef.current) {
+                runWorkgroupAnalysisTurn(turn + 1, result.updatedHistory || history, signal, workgroup, task);
+            }
+        }
+    } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Error desconocido en cliente procesando turno de grupo.';
+        addWorkgroupLog({ type: 'error', message: `Error en cliente (turno ${turn}): ${errorMsg}` });
+        setCurrentAnalysisError(errorMsg);
+        setStatus("error");
     }
   };
 
+  const processAnalysisResult = (data: ProjectAnalysisResponse) => {
+    setAnalysisResult(data);
+    const initialSuggestions = data.suggestions.map((s, index) => {
+      const relatedFile = projectFiles?.find(f => {
+        if (!s.area) return false;
+        const normalizePath = (p: string) => p.replace(/^\.\//, '').replace(/^src\//, '');
+        const areaLower = normalizePath(s.area.toLowerCase());
+        const fileNameLower = normalizePath(f.fileName.toLowerCase());
+        const baseAreaLower = areaLower.split(' (parte ')[0];
+        return fileNameLower === baseAreaLower;
+      });
+      let currentStatus: SuggestionStatus = "pending";
+      if (!s.area || !s.suggestedFullFileContent || !relatedFile?.content) {
+        currentStatus = "not_applicable";
+      }
+      return { ...s, id: `suggestion-${index}-${Date.now()}`, status: currentStatus, originalContent: relatedFile?.content };
+    });
+    setSuggestionsWithStatus(initialSuggestions as SuggestionWithStatus[]);
+    setStatus("success");
+    toast({ title: "Análisis Completado", description: `Se han generado sugerencias.` });
+    addDetailedLog(`Análisis completado y resultados procesados en UI.`);
+  };
+
+  const handleAnalysisError = (errorMsg: string | undefined) => {
+    setStatus("error");
+    setCurrentAnalysisError(errorMsg || "Ocurrió un error desconocido durante el auto-análisis.");
+    setCurrentGitError(null);
+    toast({ title: "Error en Auto-Análisis", description: errorMsg || "Ocurrió un error desconocido.", variant: "destructive", duration: 10000 });
+    addDetailedLog(`Error en auto-análisis: ${errorMsg || "Desconocido"}`);
+  };
+
+
   const handleAttemptAutoFix = async (errorToFix?: string | null, errorContext?: string) => {
     const targetError = errorToFix || currentAnalysisError || currentGitError;
-     const options = resolvedLlmOptions; // Use the state reflecting the selected source
-     if (!options) {
-        toast({ title: "Configuración Faltante", description: "La configuración LLM seleccionada está incompleta o no se pudo resolver.", variant: "destructive"});
-        return;
-     }
-    if (!targetError) {
-      toast({ title: "Información Faltante", description: "No hay error actual para corregir.", variant: "destructive"});
+    const options = resolvedLlmOptions;
+    if (!options) {
+      toast({ title: "Configuración Faltante", description: "La configuración LLM seleccionada está incompleta.", variant: "destructive" });
       return;
     }
-
+    if (!targetError) {
+      toast({ title: "Información Faltante", description: "No hay error actual para corregir.", variant: "destructive" });
+      return;
+    }
     const newLogs = [...detailedLogs];
     newLogs.push(`[CLIENT ${new Date().toISOString()}] Intentando auto-corrección para el error: ${targetError.substring(0, 100)}... con ${options.providerId}`);
     const prevStatus = status;
-
-    let fixingStatus: AutoUpdateStatus = "fixing_error";
-    if (errorContext?.toLowerCase().includes("git") || currentGitError) {
-        fixingStatus = "fixing_git_error";
-    }
+    let fixingStatus: AutoUpdateStatus = currentGitError ? "fixing_git_error" : "fixing_error";
     setStatus(fixingStatus);
     setAutoFixSuggestion(null);
     setDetailedLogs(newLogs);
     toast({ title: "Intentando Auto-Corrección", description: `Consultando a ${options.providerId} para una posible solución...` });
 
-    // Pass resolved LLM options to the fix suggestion action
     const fixResult = await handleGetErrorFixSuggestion(
-        targetError,
-        options.providerId,
-        options.apiKey,
-        options.modelName,
-        options.apiUrl,
-        newLogs,
-        errorContext
+      targetError, options.providerId, options.apiKey, options.modelName, options.apiUrl, newLogs, errorContext
     );
-    setDetailedLogs(newLogs);
+    setDetailedLogs(prev => [...prev, ...newLogs.slice(detailedLogs.length)]);
+
 
     if (fixResult.success && fixResult.data) {
       setAutoFixSuggestion(fixResult.data);
       setIsAutoFixModalOpen(true);
       toast({ title: "Sugerencia de Corrección Recibida", description: `La IA (${options.providerId}) ha proporcionado una sugerencia.` });
-      newLogs.push(`[CLIENT ${new Date().toISOString()}] Sugerencia de corrección recibida de la IA.`);
+      addDetailedLog(`Sugerencia de corrección recibida de la IA.`);
     } else {
-      toast({
-        title: "Error en Auto-Corrección",
-        description: fixResult.error || `No se pudo obtener una sugerencia de ${options.providerId}.`,
-        variant: "destructive"
-      });
-      newLogs.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener sugerencia de corrección: ${fixResult.error || "Desconocido"}`);
+      toast({ title: "Error en Auto-Corrección", description: fixResult.error || `No se pudo obtener sugerencia.`, variant: "destructive" });
+      addDetailedLog(`Error al obtener sugerencia de corrección: ${fixResult.error || "Desconocido"}`);
     }
-     // Restore previous relevant status after attempting fix
-    setStatus(prevStatus === "fixing_error" || prevStatus === "fixing_git_error"
-                ? (currentGitError || currentAnalysisError ? "error" : (analysisResult ? "success" : "idle"))
-                : prevStatus );
-    setDetailedLogs(newLogs);
+    setStatus(prevStatus === "fixing_error" || prevStatus === "fixing_git_error" ? (currentAnalysisError || currentGitError ? "error" : (analysisResult ? "success" : "idle")) : prevStatus);
   };
 
   const handleApplySuggestion = async (suggestionId: string) => {
     const currentLogsCopy = [...detailedLogs];
     const suggestionIndex = suggestionsWithStatus.findIndex(s => s.id === suggestionId);
     if (suggestionIndex === -1) {
-        currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] No se encontró la sugerencia con ID: ${suggestionId}`);
-        setDetailedLogs(currentLogsCopy);
-        return;
+      currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] No se encontró la sugerencia con ID: ${suggestionId}`);
+      setDetailedLogs(currentLogsCopy);
+      return;
     }
-
     const suggestionToApply = suggestionsWithStatus[suggestionIndex];
-
     currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Iniciando aplicación de sugerencia a: ${suggestionToApply.area || 'área desconocida'}`);
 
-    if (!suggestionToApply.area) {
-        toast({ title: "Error de Aplicación", description: `El área (nombre de archivo) no está definida para esta sugerencia.`, variant: "destructive" });
-        setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: "Falta el nombre del archivo en la sugerencia."} : s));
-        currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Falta nombre de archivo para sugerencia ID: ${suggestionId}`);
-        setDetailedLogs(currentLogsCopy);
-        return;
-    }
-    if (!suggestionToApply.originalContent) {
-        toast({ title: "Error de Aplicación", description: `No se encontró el contenido original para ${suggestionToApply.area}. Esto puede ocurrir si el archivo es muy grande o no se pudo leer.`, variant: "destructive" });
-        setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: "Falta contenido original del archivo."} : s));
-        currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Falta contenido original para ${suggestionToApply.area} (ID: ${suggestionId})`);
-        setDetailedLogs(currentLogsCopy);
-        return;
-    }
-    if (!suggestionToApply.suggestedFullFileContent) {
-        toast({ title: "No Aplicable Directamente", description: `Esta sugerencia no incluye contenido de archivo modificado para aplicar directamente a ${suggestionToApply.area}. Revisa la descripción de la sugerencia.`, variant: "default" });
-        setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "not_applicable", errorMessage: "No hay contenido de archivo sugerido."} : s));
-        currentLogsCopy.push(`[CLIENT INFO ${new Date().toISOString()}] Sugerencia ID ${suggestionId} para ${suggestionToApply.area} no es aplicable directamente (sin contenido sugerido).`);
-        setDetailedLogs(currentLogsCopy);
-        return;
+    if (!suggestionToApply.area || !suggestionToApply.originalContent || !suggestionToApply.suggestedFullFileContent) {
+      const missingField = !suggestionToApply.area ? "nombre de archivo" : !suggestionToApply.originalContent ? "contenido original" : "contenido sugerido";
+      toast({ title: "Error de Aplicación", description: `Falta ${missingField} para ${suggestionToApply.area || 'esta sugerencia'}.`, variant: "destructive" });
+      setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? { ...s, status: "error_applying", errorMessage: `Falta ${missingField}.` } : s));
+      currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Falta ${missingField} para sugerencia ID: ${suggestionId}`);
+      setDetailedLogs(currentLogsCopy);
+      return;
     }
 
-    setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "applying"} : s));
+    setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? { ...s, status: "applying" } : s));
     toast({ title: "Aplicando Sugerencia...", description: `Aplicando cambio a ${suggestionToApply.area}` });
     currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Estado: 'applying'. Llamando a applySuggestedChange para ${suggestionToApply.area}.`);
 
     const baseFilePath = suggestionToApply.area.includes(" (parte ") ? suggestionToApply.area.split(" (parte ")[0] : suggestionToApply.area;
-
     const result = await applySuggestedChange(baseFilePath, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent, currentLogsCopy);
 
     if (result.success && result.newContent !== undefined) {
-      setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {
-          ...s,
-          status: "applied",
-          originalContent: result.newContent,
-		  area: s.area,
-		  suggestion: s.suggestion,
-		  priority: s.priority,
-		  suggestedFullFileContent: s.suggestedFullFileContent
-        } : s));
-      toast({ title: "Sugerencia Aplicada", description: `El cambio para ${baseFilePath} se ha aplicado. Revisa la consola y los logs.`});
-      currentLogsCopy.push(`[CLIENT SUCCESS ${new Date().toISOString()}] Sugerencia aplicada a ${baseFilePath}. El contenido del archivo ha sido actualizado.`);
-
+      setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? { ...s, status: "applied", originalContent: result.newContent! } : s));
+      toast({ title: "Sugerencia Aplicada", description: `El cambio para ${baseFilePath} se ha aplicado.` });
+      currentLogsCopy.push(`[CLIENT SUCCESS ${new Date().toISOString()}] Sugerencia aplicada a ${baseFilePath}.`);
       setProjectFiles(prevFiles => (prevFiles || []).map(pf => {
         const normalizePath = (p: string) => p.replace(/^\.\//, '').replace(/^src\//, '');
         if (normalizePath(pf.fileName.toLowerCase()) === normalizePath(baseFilePath.toLowerCase())) {
           currentLogsCopy.push(`[CLIENT DETAIL ${new Date().toISOString()}] Actualizando contenido en projectFiles para ${pf.fileName}.`);
-          return {...pf, content: result.newContent! };
+          return { ...pf, content: result.newContent! };
         }
         return pf;
       }));
-
     } else {
-      setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? {...s, status: "error_applying", errorMessage: result.error,
-		  area: s.area,
-		  suggestion: s.suggestion,
-		  priority: s.priority,
-		  suggestedFullFileContent: s.suggestedFullFileContent } : s));
-      toast({ title: "Error al Aplicar", description: result.error || `No se pudo aplicar el cambio a ${baseFilePath}.`, variant: "destructive"});
+      setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? { ...s, status: "error_applying", errorMessage: result.error } : s));
+      toast({ title: "Error al Aplicar", description: result.error || `No se pudo aplicar el cambio a ${baseFilePath}.`, variant: "destructive" });
       currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al aplicar sugerencia a ${baseFilePath}: ${result.error}`);
     }
     setDetailedLogs(currentLogsCopy);
@@ -387,68 +514,52 @@ export default function AutoUpdatePage() {
     if (!logContent) return;
     const textToCopy = Array.isArray(logContent) ? logContent.join('\n') : logContent;
     navigator.clipboard.writeText(textToCopy)
-      .then(() => {
-        toast({ title: 'Copiado', description: 'El contenido ha sido copiado al portapapeles.' });
-      })
+      .then(() => toast({ title: 'Copiado', description: 'El contenido ha sido copiado al portapapeles.' }))
       .catch(err => {
         console.error('Error al copiar:', err);
         toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el contenido.', variant: 'destructive' });
       });
   };
-
   const handleClearLogs = () => {
     setDetailedLogs(["[CLIENT INFO] Logs borrados por el usuario."]);
-    toast({title: "Logs Borrados", description: "Los logs de ejecución detallados han sido borrados."});
+    setWorkgroupAnalysisLogs([]);
+    toast({ title: "Logs Borrados", description: "Los logs de ejecución han sido borrados." });
   };
-
-  const handleToggleLogsExpansion = () => {
-    setLogsExpanded(prev => !prev);
-  }
+  const handleToggleLogsExpansion = () => setLogsExpanded(prev => !prev);
 
   const handleDownloadSource = async () => {
     setIsDownloading(true);
     const currentLogsCopy = [...detailedLogs];
     currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Iniciando preparación para descarga de código fuente.`);
-    toast({
-      title: "Preparando Descarga",
-      description: "Recopilando todos los archivos fuente de CodeAlchemist..."
-    });
+    toast({ title: "Preparando Descarga", description: "Recopilando archivos fuente..." });
 
     let filesToZip = projectFiles;
     if (!filesToZip || filesToZip.length === 0) {
-        currentLogsCopy.push(`[CLIENT WARN ${new Date().toISOString()}] projectFiles está vacío o nulo, intentando obtener de nuevo.`);
-        const bundleResult = await getApplicationSourceBundle(false, currentLogsCopy);
-        if (bundleResult.success && bundleResult.files) {
-            filesToZip = bundleResult.files;
-            setProjectFiles(filesToZip);
-        } else {
-            toast({
-                title: "Error al Obtener Código Fuente",
-                description: bundleResult.error || "No se pudo obtener el paquete de código fuente para la descarga.",
-                variant: "destructive",
-            });
-            setIsDownloading(false);
-            currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener código fuente para ZIP: ${bundleResult.error}`);
-            setDetailedLogs(currentLogsCopy);
-            return;
-        }
+      currentLogsCopy.push(`[CLIENT WARN ${new Date().toISOString()}] projectFiles está vacío, intentando obtener de nuevo.`);
+      const bundleResult = await getApplicationSourceBundle(false, currentLogsCopy);
+      if (bundleResult.success && bundleResult.files) {
+        filesToZip = bundleResult.files;
+        setProjectFiles(filesToZip);
+      } else {
+        toast({ title: "Error al Obtener Código", description: bundleResult.error || "No se pudo obtener el código fuente.", variant: "destructive" });
+        setIsDownloading(false);
+        currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al obtener código para ZIP: ${bundleResult.error}`);
+        setDetailedLogs(currentLogsCopy);
+        return;
+      }
     }
-
     currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Se empaquetarán ${filesToZip?.length || 0} archivos.`);
-
     if (filesToZip && filesToZip.length > 0) {
       try {
         const zip = new JSZip();
         filesToZip.forEach(file => {
           if (file.fileName && file.fileName.trim() !== "" && !file.content.startsWith("// Archivo binario") && !file.content.startsWith("// Error:")) {
             zip.file(file.fileName, file.content);
-            currentLogsCopy.push(`[CLIENT DETAIL ${new Date().toISOString()}] Añadido al ZIP: ${file.fileName} (${file.content.length} bytes)`);
+            currentLogsCopy.push(`[CLIENT DETAIL ${new Date().toISOString()}] Añadido al ZIP: ${file.fileName}`);
           } else {
-            console.warn("Archivo omitido en ZIP debido a nombre inválido, contenido binario no manejable o error:", file.fileName);
-            currentLogsCopy.push(`[CLIENT WARN ${new Date().toISOString()}] Omitido en ZIP: ${file.fileName} (razón: ${file.content.startsWith("// Archivo binario") ? "binario" : file.content.startsWith("// Error:") ? "error previo" : "nombre inválido"})`);
+            currentLogsCopy.push(`[CLIENT WARN ${new Date().toISOString()}] Omitido en ZIP: ${file.fileName}`);
           }
         });
-
         const zipBlob = await zip.generateAsync({ type: "blob" });
         const url = URL.createObjectURL(zipBlob);
         const a = document.createElement('a');
@@ -458,112 +569,78 @@ export default function AutoUpdatePage() {
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
-        toast({
-          title: "Descarga Iniciada",
-          description: "El paquete de código fuente (codealchemist-source.zip) se está descargando."
-        });
-        currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Descarga ZIP iniciada (codealchemist-source.zip).`);
+        toast({ title: "Descarga Iniciada", description: "El paquete de código fuente se está descargando." });
+        currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Descarga ZIP iniciada.`);
       } catch (e) {
-         const error = e instanceof Error ? e.message : "Error desconocido";
-         toast({
-          title: "Error al Crear Descarga ZIP",
-          description: `No se pudo crear el archivo ZIP en el navegador: ${error}`,
-          variant: "destructive",
-        });
-        console.error("Error al crear ZIP:", e);
+        const error = e instanceof Error ? e.message : "Error desconocido";
+        toast({ title: "Error al Crear Descarga ZIP", description: `No se pudo crear el ZIP: ${error}`, variant: "destructive" });
         currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al crear ZIP: ${error}`);
       }
     } else {
-      toast({
-        title: "Error al Obtener Código Fuente",
-        description: "No se encontraron archivos para empaquetar.",
-        variant: "destructive",
-      });
-      currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error: No se encontraron archivos para empaquetar en ZIP.`);
+      toast({ title: "Error al Obtener Código", description: "No se encontraron archivos para empaquetar.", variant: "destructive" });
+      currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error: No se encontraron archivos para ZIP.`);
     }
     setDetailedLogs(currentLogsCopy);
     setIsDownloading(false);
   };
 
-
   const performGitUpload = async (isRetry: boolean = false) => {
     const { repoUrl, username, email, pat } = gitConfig;
     if (!repoUrl || !username || !email || !pat) {
-        toast({
-            title: "Configuración de Git Incompleta",
-            description: "Por favor, completa la configuración de Git en Ajustes (URL, Usuario, Email y PAT).",
-            variant: "destructive",
-        });
-        setStatus(analysisResult ? "success" : "idle"); // Back to previous relevant status
-        return;
+      toast({ title: "Configuración Git Incompleta", description: "Completa la configuración en Ajustes.", variant: "destructive" });
+      setStatus(analysisResult ? "success" : "idle");
+      return;
     }
-
     setCurrentGitError(null);
     setCurrentAnalysisError(null);
     setStatus("uploading_git");
     const currentLogsCopy = [...detailedLogs];
-
-    const attemptNumber = isRetry ? gitUploadRetryCount + 1 : 1; // Increment retry count here
+    const attemptNumber = isRetry ? gitUploadRetryCount + 1 : 1;
     if (isRetry) setGitUploadRetryCount(attemptNumber);
-
     const commitMsg = `CodeAlchemist: AutoUpdate Sync (Attempt ${attemptNumber})`;
-
-    currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? `Retrying (${attemptNumber}/${MAX_GIT_UPLOAD_RETRIES})` : 'Initiating'} Git upload to: ${repoUrl.replace(pat, '********')}`);
+    currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] ${isRetry ? `Retrying (${attemptNumber}/${MAX_GIT_UPLOAD_RETRIES})` : 'Initiating'} Git upload...`);
     setDetailedLogs(currentLogsCopy);
-    toast({ title: `${isRetry ? `Retrying Git Upload (Attempt ${attemptNumber})` : "Subiendo a Git..."}` , description: `Intentando subir el código fuente a ${repoUrl.split('/').pop()?.replace('.git',' ')}`});
+    toast({ title: `${isRetry ? `Retrying Git Upload (${attemptNumber})` : "Subiendo a Git..."}`, description: `Intentando subir a ${repoUrl.split('/').pop()?.replace('.git', ' ')}` });
 
     const result = await handleUploadToGit({ repoUrl, username, email, pat }, commitMsg, currentLogsCopy);
-
-    setDetailedLogs(currentLogsCopy);
+    setDetailedLogs(prev => [...prev, ...(result.logs || [])]);
 
     if (result.success) {
-        toast({
-            title: "Subida a Git Exitosa",
-            description: result.message,
-            duration: 7000,
-        });
-        setGitUploadRetryCount(0); // Reset on success
-        setStatus(analysisResult ? "success" : "idle");
+      toast({ title: "Subida a Git Exitosa", description: result.message, duration: 7000 });
+      setGitUploadRetryCount(0);
+      setStatus(analysisResult ? "success" : "idle");
     } else {
-        setCurrentGitError(result.message);
-        toast({
-            title: `Error en Subida a Git${isRetry ? ` (Intento ${attemptNumber})` : ''}`,
-            description: result.message,
-            variant: "destructive",
-            duration: 10000,
-             action: (attemptNumber < MAX_GIT_UPLOAD_RETRIES) ? (
-                <Button
-                    variant="outline"
-                    size="sm"
-                    className="ml-auto border-destructive/50 text-destructive hover:bg-destructive/20 hover:text-destructive-foreground"
-                    onClick={() => handleAttemptAutoFix(result.message, "Error ocurrido durante la subida del código fuente a un repositorio Git.")}
-                >
-                    <Settings2 className="mr-2 h-4 w-4"/> Auto-Fix
-                </Button>
-            ) : undefined
-        });
-        setStatus("error");
+      setCurrentGitError(result.message);
+      toast({
+        title: `Error en Subida a Git${isRetry ? ` (Intento ${attemptNumber})` : ''}`,
+        description: result.message, variant: "destructive", duration: 10000,
+        action: (attemptNumber < MAX_GIT_UPLOAD_RETRIES) ? (
+          <Button variant="outline" size="sm" className="ml-auto border-destructive/50 text-destructive hover:bg-destructive/20 hover:text-destructive-foreground"
+            onClick={() => handleAttemptAutoFix(result.message, "Error durante subida a Git.")}>
+            <Settings2 className="mr-2 h-4 w-4" /> Auto-Fix
+          </Button>
+        ) : undefined
+      });
+      setStatus("error");
     }
   };
-
-  const handleInitialGitUpload = () => {
-    setGitUploadRetryCount(0); // Start count from 0 for the first attempt logic in performGitUpload
-    performGitUpload(false);
-  };
-
-   const handleRetryGitUploadFromModal = () => {
-    setIsAutoFixModalOpen(false); // Close the modal first
-    performGitUpload(true); // Call with retry flag
-   };
+  const handleInitialGitUpload = () => { setGitUploadRetryCount(0); performGitUpload(false); };
+  const handleRetryGitUploadFromModal = () => { setIsAutoFixModalOpen(false); performGitUpload(true); };
 
   const getSourceName = (sourceId: string): string => {
     if (sourceId === 'global') return 'Global';
-    return agents.find(a => a.id === sourceId)?.name || 'Desconocido';
-  }
-
-
+    if (sourceId.startsWith('agent:')) {
+      const agentId = sourceId.split(':')[1];
+      return agents.find(a => a.id === agentId)?.name || `Agente ${agentId.substring(0,6)}...`;
+    }
+    if (sourceId.startsWith('workgroup:')) {
+      const workgroupId = sourceId.split(':')[1];
+      return workgroups.find(wg => wg.id === workgroupId)?.name || `Grupo ${workgroupId.substring(0,6)}...`;
+    }
+    return 'Desconocido';
+  };
+  const isProcessing = ["analyzing", "loading_source", "fixing_error", "uploading_git", "fixing_git_error", "processing_workgroup_turn"].includes(status);
   const isGitConfigured = gitConfig.repoUrl && gitConfig.username && gitConfig.email && gitConfig.pat;
-  const isProcessing = status === "analyzing" || status === "loading_source" || status === "fixing_error" || status === "uploading_git" || status === "fixing_git_error";
 
 
   return (
@@ -575,416 +652,253 @@ export default function AutoUpdatePage() {
             AutoUpdate: Análisis de CodeAlchemist
           </CardTitle>
           <CardDescription className="text-lg text-foreground">
-            Esta sección permite a la IA analizar el propio código fuente completo de la aplicación CodeAlchemist para proponer mejoras y optimizaciones, usando la configuración LLM seleccionada.
-             {!resolvedLlmOptions && selectedConfigSource ? (
-                 <span className="text-destructive block mt-1"> (Configuración LLM para '{getSourceName(selectedConfigSource)}' incompleta o inválida)</span>
-             ) : resolvedLlmOptions ? (
-                <span className="text-foreground block mt-1">(Usando: {getSourceName(selectedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
-             ) : (
-                 <span className="text-muted-foreground block mt-1">(Selecciona una fuente de configuración)</span>
-             )}
+            Analiza el código fuente de CodeAlchemist usando la configuración LLM seleccionada.
+            {!resolvedLlmOptions && selectedConfigSource ? (
+              <span className="text-destructive block mt-1"> (Configuración LLM para '{getSourceName(selectedConfigSource)}' incompleta)</span>
+            ) : resolvedLlmOptions ? (
+              <span className="text-foreground block mt-1">(Usando: {getSourceName(selectedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
+            ) : (
+              <span className="text-muted-foreground block mt-1">(Selecciona fuente de configuración)</span>
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-           {/* LLM Configuration Source Selector */}
-            <div className="space-y-2">
-                <Label htmlFor="configSource" className="text-base flex items-center gap-1">
-                   <Settings2 className="h-4 w-4"/> Usar Configuración LLM De:
-                </Label>
-                <Select onValueChange={setSelectedConfigSource} value={selectedConfigSource}>
-                    <SelectTrigger id="configSource" className="w-full md:w-1/2">
-                        <SelectValue placeholder="Seleccionar fuente de configuración" />
-                    </SelectTrigger>
-                    <SelectContent>
-                        <SelectItem value="global">Ajustes Globales</SelectItem>
-                        {agents.map(agent => (
-                            <SelectItem key={agent.id} value={agent.id}>
-                                Agente: {agent.name}
-                            </SelectItem>
-                        ))}
-                    </SelectContent>
-                </Select>
-                 {!resolvedLlmOptions && selectedConfigSource && (
-                     <p className="text-xs text-destructive mt-1">La configuración para '{getSourceName(selectedConfigSource)}' parece incompleta. Revisa los <a href="/settings" className="underline">Ajustes Globales</a> o la configuración del agente en <a href="/agents" className="underline">Gestión de Agentes</a>.</p>
-                )}
-            </div>
-
-
-          <p className="text-muted-foreground">
-            Al hacer clic en &quot;Iniciar Auto-Análisis&quot;, CodeAlchemist recopilará su código fuente, lo dividirá en fragmentos si es necesario, y lo enviará
-            al modelo de IA configurado para obtener un resumen de posibles mejoras. También puedes descargar el código fuente completo o subirlo a un repositorio Git si está configurado.
-            Las llamadas a la API tienen un tiempo de espera para evitar bloqueos indefinidos.
-          </p>
-
           <div className="space-y-2">
-            <Label htmlFor="analysis-preferences" className="text-base flex items-center gap-2 text-foreground">
-                <Edit3 className="h-5 w-5"/> Preferencias de Análisis (Opcional)
-            </Label>
-            <Textarea
-                id="analysis-preferences"
-                value={analysisPreferences}
-                onChange={(e) => setAnalysisPreferences(e.target.value)}
-                placeholder="Ej: 'Enfócate en optimizar el rendimiento de los componentes React', 'Revisa la seguridad en las llamadas a API', 'Sugiere mejoras de accesibilidad'..."
-                rows={3}
-                className="bg-card text-foreground"
-            />
-            <p className="text-xs text-muted-foreground">Describe qué tipo de actualizaciones o áreas específicas te gustaría que la IA priorizara.</p>
+            <Label htmlFor="configSource" className="text-base flex items-center gap-1"><Settings2 className="h-4 w-4" /> Usar Configuración LLM De:</Label>
+            <Select onValueChange={setSelectedConfigSource} value={selectedConfigSource}>
+              <SelectTrigger id="configSource" className="w-full md:w-1/2"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="global">Ajustes Globales</SelectItem>
+                {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
+                {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            {!resolvedLlmOptions && selectedConfigSource && (
+              <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(selectedConfigSource)}' incompleta. Revisa Ajustes, Agentes o Grupos.</p>
+            )}
           </div>
-
+          <p className="text-muted-foreground">
+            Al hacer clic en &quot;Iniciar Auto-Análisis&quot;, CodeAlchemist recopilará su código fuente y lo enviará
+            al modelo/grupo configurado. También puedes descargar el código o subirlo a Git.
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="analysis-preferences" className="text-base flex items-center gap-2 text-foreground"><Edit3 className="h-5 w-5" /> Preferencias de Análisis (Opcional)</Label>
+            <Textarea id="analysis-preferences" value={analysisPreferences} onChange={(e) => setAnalysisPreferences(e.target.value)}
+              placeholder="Ej: 'Enfócate en optimizar el rendimiento...', 'Revisa la seguridad...'" rows={3} className="bg-card text-foreground" />
+            <p className="text-xs text-muted-foreground">Describe qué tipo de actualizaciones o áreas te gustaría que la IA priorizara.</p>
+          </div>
           <div className="flex flex-wrap gap-4">
-            <Button
-              onClick={() => handleStartAutoAnalysis(false)}
-              disabled={isProcessing || !resolvedLlmOptions}
-              className="text-base py-3 px-6"
-            >
-              {status === "analyzing" || status === "loading_source" ? (
-                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-              ) : (
-                <Sparkles className="mr-2 h-5 w-5" />
-              )}
+            <Button onClick={() => handleStartAutoAnalysis(false)} disabled={isProcessing || !resolvedLlmOptions} className="text-base py-3 px-6">
+              {status === "analyzing" || status === "loading_source" || status === "processing_workgroup_turn" ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Sparkles className="mr-2 h-5 w-5" />}
               Iniciar Auto-Análisis
             </Button>
-            <Button
-              onClick={handleDownloadSource}
-              disabled={isDownloading || projectFiles === null || projectFiles.length === 0 || isProcessing}
-              variant="outline"
-              className="text-base py-3 px-6 text-foreground"
-            >
-              {isDownloading ? (
-                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-              ) : (
-                <DownloadCloud className="mr-2 h-5 w-5" />
-              )}
-              Descargar Código Fuente (ZIP)
+            <Button onClick={handleDownloadSource} disabled={isDownloading || projectFiles.length === 0 || isProcessing} variant="outline" className="text-base py-3 px-6 text-foreground">
+              {isDownloading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <DownloadCloud className="mr-2 h-5 w-5" />} Descargar Código (ZIP)
             </Button>
-             <Button
-              onClick={handleInitialGitUpload}
-              disabled={!isGitConfigured || projectFiles === null || projectFiles.length === 0 || isProcessing}
-              variant="outline"
-              className="text-base py-3 px-6 text-foreground"
-              title={!isGitConfigured ? "Configura los detalles de Git en Ajustes para habilitar esta opción." : "Subir código fuente a Git"}
-            >
-              {status === "uploading_git" ? (
-                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-              ) : (
-                <GitFork className="mr-2 h-5 w-5" />
-              )}
-              Subir a Git
+            <Button onClick={handleInitialGitUpload} disabled={!isGitConfigured || projectFiles.length === 0 || isProcessing} variant="outline" className="text-base py-3 px-6 text-foreground"
+              title={!isGitConfigured ? "Configura Git en Ajustes." : "Subir código a Git"}>
+              {status === "uploading_git" ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <GitFork className="mr-2 h-5 w-5" />} Subir a Git
             </Button>
           </div>
 
-          {(status === "analyzing" || status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error" || status === "loading_source") && (
+          {(isProcessing || status === "success" || status === "error") && (
             <div className="mt-4 space-y-2">
-                <Label className="text-sm text-foreground">
-                    {status === "loading_source" ? "Cargando código fuente..." :
-                     status === "analyzing" ?
-                        (analysisProgress.total > 0 ? `Procesando fragmentos... (${analysisProgress.processed}/${analysisProgress.total})` : "Iniciando análisis, calculando total de fragmentos...") :
-                     status === "success" ? `Análisis completado (${analysisProgress.processed}/${analysisProgress.total} fragmentos).` :
-                     status === "error" && currentAnalysisError ? `Análisis interrumpido (${analysisProgress.processed > 0 ? `${analysisProgress.processed}/` : ''}${analysisProgress.total > 0 ? analysisProgress.total : 'desconocido'} fragmentos).` :
-                     status === "error" && currentGitError ? "Error durante operación Git." :
-                     status === "uploading_git" ? `Subiendo a Git (Intento ${gitUploadRetryCount+1}/${MAX_GIT_UPLOAD_RETRIES})...` : // Use count+1 for display
-                     status === "fixing_error" ? "Intentando auto-corrección de error de análisis..." :
-                     status === "fixing_git_error" ? "Intentando auto-corrección de error de Git..." : ""}
-                </Label>
-                <Progress
-                    value={
-                        status === "loading_source" ? 5 :
-                        status === "analyzing" && analysisProgress.total === 0 ? 10 :
-                        analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 :
-                        (status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error" ? 100 : 0)
-                    }
-                    className="w-full h-3"
-                />
-                {(analysisProgress.total > 0 || (status === "error" && analysisProgress.processed > 0 && currentAnalysisError)) && (
-                    <p className="text-xs text-muted-foreground">
-                        {analysisProgress.processed} de {analysisProgress.total > 0 ? analysisProgress.total : (analysisProgress.processed > 0 ? analysisProgress.processed : '?')} fragmentos procesados.
-                    </p>
-                )}
+              <Label className="text-sm text-foreground">
+                {status === "loading_source" ? "Cargando código fuente..." :
+                 status === "analyzing" ? (analysisProgress.total > 0 ? `Procesando fragmentos... (${analysisProgress.processed}/${analysisProgress.total})` : "Calculando fragmentos...") :
+                 status === "processing_workgroup_turn" ? `Procesando con grupo de trabajo... (Turno ${currentWorkgroupTurn}/${MAX_WORKGROUP_TURNS})` :
+                 status === "success" ? `Análisis completado ${selectedConfigSource.startsWith("workgroup:") ? `(Grupo finalizado en turno ${currentWorkgroupTurn})` : `(${analysisProgress.processed}/${analysisProgress.total} fragmentos)`}.` :
+                 status === "error" && (currentAnalysisError || currentGitError) ? `Operación interrumpida.` :
+                 status === "uploading_git" ? `Subiendo a Git (Intento ${gitUploadRetryCount + 1}/${MAX_GIT_UPLOAD_RETRIES})...` :
+                 status === "fixing_error" ? "Intentando auto-corrección..." :
+                 status === "fixing_git_error" ? "Intentando auto-corrección de error Git..." : ""}
+              </Label>
+              <Progress value={
+                status === "loading_source" ? 5 :
+                status === "analyzing" && analysisProgress.total === 0 ? 10 :
+                status === "analyzing" && analysisProgress.total > 0 ? (analysisProgress.processed / analysisProgress.total) * 100 :
+                status === "processing_workgroup_turn" && MAX_WORKGROUP_TURNS > 0 ? (currentWorkgroupTurn / MAX_WORKGROUP_TURNS) * 100 :
+                (status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error" ? 100 : 0)
+              } className="w-full h-3" />
             </div>
-           )}
-
-           {detailedLogs.length > 0 && (
+          )}
+           {(detailedLogs.length > 0 || workgroupAnalysisLogs.length > 0) && (
              <Card className="mt-6 border-primary/30">
                 <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                    <CardTitle className="text-lg flex items-center gap-2 text-primary">
-                        <ListOrdered className="h-5 w-5"/> Logs de Ejecución Detallados
-                    </CardTitle>
-                    <div className="flex items-center gap-2">
-                        <Button variant="ghost" size="icon" onClick={handleToggleLogsExpansion} title={logsExpanded ? "Contraer Logs" : "Expandir Logs"}>
-                            {logsExpanded ? <Minimize className="h-4 w-4" /> : <Expand className="h-4 w-4" />}
-                        </Button>
-                         <Button variant="ghost" size="icon" onClick={handleClearLogs} title="Borrar Logs">
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                    </div>
+                  <CardTitle className="text-lg flex items-center gap-2 text-primary"><ListOrdered className="h-5 w-5" /> Logs de Ejecución</CardTitle>
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" size="icon" onClick={handleToggleLogsExpansion} title={logsExpanded ? "Contraer" : "Expandir"}><Minimize className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="icon" onClick={handleClearLogs} title="Borrar Logs"><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                  </div>
                 </CardHeader>
-               <CardContent>
-                 <ScrollArea className={cn("p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out", logsExpanded ? "h-[500px]" : "h-[250px]")}>
-                   <pre className="text-xs text-foreground whitespace-pre-wrap">
-                     {detailedLogs.map((log, index) => (
-                        <span key={index} className={log.includes("[ERROR") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-600 dark:text-yellow-400" : ""}>
-                            {log}\n
-                        </span>
-                     ))}
-                   </pre>
-                 </ScrollArea>
-                  <Button variant="outline" size="sm" onClick={() => handleCopyLogsToClipboard(detailedLogs)} className="mt-2 text-foreground">
-                    <Copy className="mr-2 h-4 w-4"/> Copiar Logs
+                <CardContent>
+                  <ScrollArea className={cn("p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out", logsExpanded ? "h-[500px]" : "h-[250px]")}>
+                    <pre className="text-xs text-foreground whitespace-pre-wrap">
+                      {detailedLogs.map((log, index) => (
+                        <span key={`detail-${index}`} className={log.includes("[ERROR") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-600 dark:text-yellow-400" : ""}>{log}\n</span>
+                      ))}
+                      {workgroupAnalysisLogs.length > 0 && <Separator className="my-2" />}
+                      {workgroupAnalysisLogs.map((log, index) => (
+                        <div key={`wg-${index}`} className={cn("mb-1 p-0.5 rounded-sm", log.type === 'orchestrator' && "bg-accent/10", log.type === 'agent' && "bg-primary/5", log.type === 'error' && "bg-destructive/10 text-destructive", log.type === 'system' && "bg-muted/50 italic", log.type === 'debug' && "opacity-60")}>
+                          <span className="font-mono text-muted-foreground mr-1">{log.timestamp}</span>
+                          <span className={cn("font-semibold", log.type === 'orchestrator' && "text-accent", log.type === 'agent' && "text-primary", log.type === 'error' && "text-destructive", log.type === 'system' && "text-muted-foreground")}>
+                            {log.type.toUpperCase()}{log.agentName ? ` (${log.agentName})` : ''}:
+                          </span>
+                          <span className="ml-1">{log.message}</span>
+                        </div>
+                      ))}
+                    </pre>
+                  </ScrollArea>
+                  <Button variant="outline" size="sm" onClick={() => handleCopyLogsToClipboard([...detailedLogs, ...workgroupAnalysisLogs.map(l => `[${l.timestamp}] [WG-${l.type.toUpperCase()}] ${l.agentName ? `(${l.agentName}) ` : ''}${l.message}`)].join('\n'))} className="mt-2 text-foreground">
+                    <Copy className="mr-2 h-4 w-4" /> Copiar Logs
                   </Button>
-               </CardContent>
+                </CardContent>
              </Card>
            )}
 
           {analysisResult && status === "success" && (
             <Card className="mt-6 border-accent bg-accent/5">
               <CardHeader className="pb-3">
-                <CardTitle className="text-xl flex items-center gap-2 text-accent">
-                  <FileCode className="h-6 w-6" />
-                  {analysisResult.analysisTitle}
-                </CardTitle>
-                 <CardDescription>Analizado usando la configuración de '{getSourceName(selectedConfigSource)}'.</CardDescription>
+                <CardTitle className="text-xl flex items-center gap-2 text-accent"><FileCode className="h-6 w-6" /> {analysisResult.analysisTitle}</CardTitle>
+                <CardDescription>Analizado usando la configuración de '{getSourceName(selectedConfigSource)}'.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
-                  <h4 className="font-semibold text-foreground mb-1">Evaluación General (Agregada):</h4>
-                  <ScrollArea className="h-[100px] p-2 border rounded bg-background/50">
-                    <pre className="text-xs text-foreground/80 whitespace-pre-wrap">{analysisResult.overallAssessment}</pre>
-                  </ScrollArea>
+                  <h4 className="font-semibold text-foreground mb-1">Evaluación General:</h4>
+                  <ScrollArea className="h-[100px] p-2 border rounded bg-background/50"><pre className="text-xs text-foreground/80 whitespace-pre-wrap">{analysisResult.overallAssessment}</pre></ScrollArea>
                 </div>
                 <Separator />
                 {analysisResult.identifiedAreas.length > 0 && (
                   <div>
-                    <h4 className="font-semibold text-foreground mb-2">Áreas Identificadas (Agregado):</h4>
-                    <div className="flex flex-wrap gap-2">
-                      {analysisResult.identifiedAreas.map((area, index) => (
-                        <Badge key={index} variant="secondary" className="text-foreground">{area}</Badge>
-                      ))}
-                    </div>
+                    <h4 className="font-semibold text-foreground mb-2">Áreas Identificadas:</h4>
+                    <div className="flex flex-wrap gap-2">{analysisResult.identifiedAreas.map((area, index) => <Badge key={index} variant="secondary" className="text-foreground">{area}</Badge>)}</div>
                   </div>
                 )}
                 {suggestionsWithStatus.length > 0 && <Separator />}
                 {suggestionsWithStatus.length > 0 && (
-                    <div>
+                  <div>
                     <h4 className="font-semibold text-foreground mb-2">Sugerencias Detalladas ({suggestionsWithStatus.length}):</h4>
                     <div className="p-3 my-2 bg-yellow-100 dark:bg-yellow-900/30 border border-yellow-400 dark:border-yellow-600 rounded-md flex items-start gap-2">
-                        <ShieldAlert className="h-5 w-5 text-yellow-700 dark:text-yellow-300 shrink-0 mt-0.5" />
-                        <p className="text-xs text-yellow-800 dark:text-yellow-200">
-                        <strong>¡Atención!</strong> Aplicar estas sugerencias modificará directamente los archivos del código fuente de esta aplicación.
-                        Asegúrate de entender los cambios y de tener una copia de seguridad si es necesario. Los cambios incorrectos podrían afectar la funcionalidad de la aplicación.
-                        </p>
+                      <ShieldAlert className="h-5 w-5 text-yellow-700 dark:text-yellow-300 shrink-0 mt-0.5" />
+                      <p className="text-xs text-yellow-800 dark:text-yellow-200"><strong>¡Atención!</strong> Aplicar estas sugerencias modificará directamente los archivos del código fuente. Asegúrate de entender los cambios.</p>
                     </div>
                     <ScrollArea className="h-[400px] pr-3">
-                        <ul className="space-y-3">
+                      <ul className="space-y-3">
                         {suggestionsWithStatus.map((s) => (
-                            <li key={s.id} className="p-3 rounded-md border bg-background/80 shadow-sm">
+                          <li key={s.id} className="p-3 rounded-md border bg-background/80 shadow-sm">
                             <div className="flex justify-between items-start mb-1">
-                                <span className="font-medium text-sm text-foreground break-all">{s.area || "Sugerencia General"}</span>
-                                {s.priority && (
-                                <Badge variant={s.priority === 'high' ? 'destructive' : s.priority === 'medium' ? 'default' : 'outline'} className="capitalize text-xs shrink-0 ml-2">
-                                    {s.priority}
-                                </Badge>
-                                )}
+                              <span className="font-medium text-sm text-foreground break-all">{s.area || "Sugerencia General"}</span>
+                              {s.priority && <Badge variant={s.priority === 'high' ? 'destructive' : s.priority === 'medium' ? 'default' : 'outline'} className="capitalize text-xs shrink-0 ml-2">{s.priority}</Badge>}
                             </div>
                             <p className="text-xs text-muted-foreground mb-2">{s.suggestion}</p>
-
                             {s.status === "error_applying" && s.errorMessage && (
-                                <div className="p-2 my-1 bg-destructive/10 border border-destructive/30 rounded-md">
-                                    <p className="text-xs text-destructive ">Error al aplicar: {s.errorMessage}</p>
-                                    <Button variant="ghost" size="sm" onClick={() => handleCopyLogsToClipboard(s.errorMessage)} className="mt-1 h-6 px-1.5 text-xs text-destructive hover:bg-destructive/20">
-                                        <Copy className="mr-1 h-3 w-3"/> Copiar Error
-                                    </Button>
-                                </div>
+                              <div className="p-2 my-1 bg-destructive/10 border border-destructive/30 rounded-md">
+                                <p className="text-xs text-destructive ">Error al aplicar: {s.errorMessage}</p>
+                                <Button variant="ghost" size="sm" onClick={() => handleCopyLogsToClipboard(s.errorMessage)} className="mt-1 h-6 px-1.5 text-xs text-destructive hover:bg-destructive/20"><Copy className="mr-1 h-3 w-3" /> Copiar Error</Button>
+                              </div>
                             )}
-                            {s.status === "not_applicable" && (
-                                <p className="text-xs text-muted-foreground mt-1 mb-1">
-                                  No aplicable directamente. {s.suggestedFullFileContent === undefined ? 'No se proporcionó contenido de archivo modificado.' : !s.originalContent ? 'Falta contenido original del archivo.' : ''}
-                                </p>
-                            )}
-
+                            {s.status === "not_applicable" && <p className="text-xs text-muted-foreground mt-1 mb-1">No aplicable directamente. {s.suggestedFullFileContent === undefined ? 'No se proporcionó contenido modificado.' : !s.originalContent ? 'Falta contenido original.' : ''}</p>}
                             <div className="flex items-center gap-2 mt-2">
-                                <AlertDialog>
-                                    <AlertDialogTrigger asChild>
-                                        <Button
-                                            size="sm"
-                                            variant="outline"
-                                            disabled={s.status === "applying" || s.status === "applied" || s.status === "not_applicable"}
-                                            className={cn(s.status === "applied" ? "border-green-500 text-green-700 dark:text-green-400 hover:border-green-600 hover:bg-green-50 dark:hover:bg-green-900/50" :
-                                                       s.status === "error_applying" ? "border-destructive text-destructive hover:border-destructive hover:bg-destructive/10" :
-                                                       "text-foreground")}
-                                        >
-                                        {s.status === "applying" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                                        {s.status === "applied" && <CheckCircle className="mr-2 h-4 w-4 text-green-600 dark:text-green-500" />}
-                                        {s.status === "error_applying" && <XCircle className="mr-2 h-4 w-4 text-destructive" />}
-                                        {s.status === "pending" && <Wand2 className="mr-2 h-4 w-4" />}
-                                        {s.status === "not_applicable" && <Info className="mr-2 h-4 w-4 text-muted-foreground" />}
-
-                                        {s.status === "applied" ? "Aplicada"
-                                            : s.status === "applying" ? "Aplicando..."
-                                            : s.status === "error_applying" ? "Reintentar Aplicar"
-                                            : s.status === "not_applicable" ? "No Aplicable"
-                                            : "Aplicar Sugerencia"}
-                                        </Button>
-                                    </AlertDialogTrigger>
-                                     {s.status !== "not_applicable" && s.status !== "applied" && ( // Only show confirmation if applicable and not already applied
-                                        <AlertDialogContent className="max-w-3xl">
-                                            <AlertDialogHeader>
-                                            <AlertDialogTitle className="text-foreground flex items-center gap-2"><ShieldAlert className="text-destructive h-6 w-6"/>¿Aplicar esta sugerencia?</AlertDialogTitle>
-                                            <AlertDialogDescription className="text-muted-foreground">
-                                                Se intentará aplicar la siguiente sugerencia al archivo <strong className="text-foreground">{s.area}</strong>:
-                                                <blockquote className="mt-2 pl-3 border-l-2 italic text-xs text-muted-foreground">
-                                                {s.suggestion}
-                                                </blockquote>
-                                                <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[50vh] text-xs">
-                                                    <div>
-                                                        <p className="font-semibold mb-1 text-foreground">Contenido Original (Fragmento):</p>
-                                                        <ScrollArea className="h-60 border rounded p-2 bg-muted/30">
-                                                            <pre className="text-xs font-mono whitespace-pre-wrap text-foreground">{s.originalContent?.substring(0,1500) + (s.originalContent && s.originalContent.length > 1500 ? "..." : "") || "No disponible"}</pre>
-                                                        </ScrollArea>
-                                                    </div>
-                                                    <div>
-                                                        <p className="font-semibold mb-1 text-foreground">Contenido Sugerido por IA (Fragmento):</p>
-                                                        <ScrollArea className="h-60 border rounded p-2 bg-muted/30">
-                                                          <pre className="text-xs font-mono whitespace-pre-wrap text-foreground">{s.suggestedFullFileContent?.substring(0,1500) + (s.suggestedFullFileContent && s.suggestedFullFileContent.length > 1500 ? "..." : "") || "No disponible"}</pre>
-                                                        </ScrollArea>
-                                                    </div>
-                                                </div>
-                                                <strong className="block mt-3 text-destructive">¡Importante!</strong> Esta acción modificará el archivo en el sistema. Asegúrate de que es lo que deseas.
-                                            </AlertDialogDescription>
-                                            </AlertDialogHeader>
-                                            <AlertDialogFooter>
-                                            <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                            <AlertDialogAction onClick={() => handleApplySuggestion(s.id)} className="bg-destructive hover:bg-destructive/90">
-                                                Sí, aplicar cambio
-                                            </AlertDialogAction>
-                                            </AlertDialogFooter>
-                                        </AlertDialogContent>
-                                    )}
-                                </AlertDialog>
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button size="sm" variant="outline" disabled={s.status === "applying" || s.status === "applied" || s.status === "not_applicable"}
+                                    className={cn(s.status === "applied" && "border-green-500 text-green-700 dark:text-green-400", s.status === "error_applying" && "border-destructive text-destructive", "text-foreground")}>
+                                    {s.status === "applying" && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                    {s.status === "applied" && <CheckCircle className="mr-2 h-4 w-4 text-green-600 dark:text-green-500" />}
+                                    {s.status === "error_applying" && <XCircle className="mr-2 h-4 w-4 text-destructive" />}
+                                    {s.status === "pending" && <Wand2 className="mr-2 h-4 w-4" />}
+                                    {s.status === "not_applicable" && <Info className="mr-2 h-4 w-4 text-muted-foreground" />}
+                                    {s.status === "applied" ? "Aplicada" : s.status === "applying" ? "Aplicando..." : s.status === "error_applying" ? "Reintentar" : s.status === "not_applicable" ? "No Aplicable" : "Aplicar Sugerencia"}
+                                  </Button>
+                                </AlertDialogTrigger>
+                                {s.status !== "not_applicable" && s.status !== "applied" && (
+                                  <AlertDialogContent className="max-w-3xl">
+                                    <AlertDialogHeader>
+                                      <AlertDialogTitle className="text-foreground flex items-center gap-2"><ShieldAlert className="text-destructive h-6 w-6" />¿Aplicar esta sugerencia?</AlertDialogTitle>
+                                      <AlertDialogDescription className="text-muted-foreground">
+                                        Se intentará aplicar la sugerencia al archivo <strong className="text-foreground">{s.area}</strong>.
+                                        <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[50vh] text-xs">
+                                          <div><p className="font-semibold mb-1 text-foreground">Original (Fragmento):</p><ScrollArea className="h-60 border rounded p-2 bg-muted/30"><pre className="text-xs font-mono whitespace-pre-wrap text-foreground">{s.originalContent?.substring(0, 1500) || "No disponible"}</pre></ScrollArea></div>
+                                          <div><p className="font-semibold mb-1 text-foreground">Sugerido (Fragmento):</p><ScrollArea className="h-60 border rounded p-2 bg-muted/30"><pre className="text-xs font-mono whitespace-pre-wrap text-foreground">{s.suggestedFullFileContent?.substring(0, 1500) || "No disponible"}</pre></ScrollArea></div>
+                                        </div>
+                                        <strong className="block mt-3 text-destructive">¡Importante!</strong> Esta acción modificará el archivo.
+                                      </AlertDialogDescription>
+                                    </AlertDialogHeader>
+                                    <AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction onClick={() => handleApplySuggestion(s.id)} className="bg-destructive hover:bg-destructive/90">Sí, aplicar</AlertDialogAction></AlertDialogFooter>
+                                  </AlertDialogContent>
+                                )}
+                              </AlertDialog>
                             </div>
-                            </li>
+                          </li>
                         ))}
-                        </ul>
+                      </ul>
                     </ScrollArea>
-                    </div>
+                  </div>
                 )}
               </CardContent>
             </Card>
           )}
-           {(status === "loading_source" || (status === "analyzing" && (!analysisProgress || analysisProgress.total === 0))) && (
-            <div
-              data-ai-hint="code processing animation"
-              className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6"
-            >
+          {(status === "loading_source" || (status === "analyzing" && (!analysisProgress || analysisProgress.total === 0))) && (
+            <div data-ai-hint="code processing animation" className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6">
               <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
-              <p className="text-lg text-foreground">
-                {status === "loading_source" ? "Cargando código fuente..." : "Preparando análisis del código fuente de CodeAlchemist..."}
-              </p>
-              <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos, especialmente si el código es extenso.</p>
+              <p className="text-lg text-foreground">{status === "loading_source" ? "Cargando código..." : "Preparando análisis..."}</p>
+              <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos.</p>
             </div>
           )}
           {status === "error" && (currentAnalysisError || currentGitError) && (
-             <Card className="mt-6 border-destructive bg-destructive/10">
-               <CardHeader className="pb-2">
-                <CardTitle className="text-lg flex items-center gap-2 text-destructive">
-                  <AlertTriangle className="h-6 w-6" />
-                  Error en Operación
-                </CardTitle>
-              </CardHeader>
+            <Card className="mt-6 border-destructive bg-destructive/10">
+              <CardHeader className="pb-2"><CardTitle className="text-lg flex items-center gap-2 text-destructive"><AlertTriangle className="h-6 w-6" />Error en Operación</CardTitle></CardHeader>
               <CardContent className="space-y-2">
                 <p className="text-destructive font-medium">Ocurrió un error:</p>
-                <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50">
-                    <pre className="text-xs text-foreground whitespace-pre-wrap">{currentAnalysisError || currentGitError}</pre>
-                </ScrollArea>
+                <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50"><pre className="text-xs text-foreground whitespace-pre-wrap">{currentAnalysisError || currentGitError}</pre></ScrollArea>
                 <div className="flex gap-2 mt-2">
-                    <Button variant="outline" size="sm" onClick={() => handleCopyLogsToClipboard(currentAnalysisError || currentGitError)} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground">
-                        <Copy className="mr-2 h-4 w-4"/> Copiar Mensaje de Error
-                    </Button>
-                    <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleAttemptAutoFix(currentAnalysisError || currentGitError, currentGitError ? "Error ocurrido durante la subida del código fuente a un repositorio Git." : "Error ocurrido durante el auto-análisis del código fuente.")}
-                        disabled={status === "fixing_error" || status === "fixing_git_error" || !resolvedLlmOptions}
-                        className="text-accent border-accent/50 hover:bg-accent/20 hover:text-accent-foreground"
-                    >
-                        {(status === "fixing_error" || status === "fixing_git_error") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Settings2 className="mr-2 h-4 w-4"/>}
-                         Auto-Fix (Experimental)
-                    </Button>
+                  <Button variant="outline" size="sm" onClick={() => handleCopyLogsToClipboard(currentAnalysisError || currentGitError)} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground"><Copy className="mr-2 h-4 w-4" /> Copiar Error</Button>
+                  <Button variant="outline" size="sm" onClick={() => handleAttemptAutoFix(currentAnalysisError || currentGitError, currentGitError ? "Error en subida Git." : "Error en auto-análisis.")}
+                    disabled={status === "fixing_error" || status === "fixing_git_error" || !resolvedLlmOptions} className="text-accent border-accent/50 hover:bg-accent/20 hover:text-accent-foreground">
+                    {(status === "fixing_error" || status === "fixing_git_error") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Settings2 className="mr-2 h-4 w-4" />} Auto-Fix
+                  </Button>
                 </div>
               </CardContent>
             </Card>
           )}
           {(status === "fixing_error" || status === "fixing_git_error") && (
-             <div className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[150px] mt-6">
-              <Loader2 className="h-10 w-10 animate-spin text-accent mb-4" />
-              <p className="text-lg text-foreground">Intentando obtener sugerencia de Auto-Corrección...</p>
-             </div>
+            <div className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[150px] mt-6">
+              <Loader2 className="h-10 w-10 animate-spin text-accent mb-4" /><p className="text-lg text-foreground">Intentando obtener sugerencia de Auto-Corrección...</p>
+            </div>
           )}
-
         </CardContent>
-        <CardFooter>
-          <p className="text-xs text-muted-foreground">
-            <strong>Nota Importante:</strong> El análisis se realiza sobre el código fuente completo de CodeAlchemist, potencialmente dividido en fragmentos para manejar límites de tokens y timeouts.
-            La descarga de código fuente proporciona un archivo ZIP. La subida a Git también utiliza el estado actual del código.
-            Las sugerencias de IA y su aplicación siempre deben ser revisadas cuidadosamente por un desarrollador.
-          </p>
-        </CardFooter>
+        <CardFooter><p className="text-xs text-muted-foreground"><strong>Nota:</strong> El análisis se realiza sobre el código completo. La descarga proporciona un ZIP. La subida a Git usa el estado actual. Revisa cuidadosamente las sugerencias de IA.</p></CardFooter>
       </Card>
-
       <AlertDialog open={isAutoFixModalOpen} onOpenChange={setIsAutoFixModalOpen}>
-          <AlertDialogContent className="max-w-2xl">
-              <AlertDialogHeader>
-                  <AlertDialogTitle className="flex items-center gap-2 text-accent">
-                      <Settings2 className="h-6 w-6 text-accent"/>
-                      Sugerencia de Auto-Corrección de Error
-                  </AlertDialogTitle>
-                  <AlertDialogDescription className="text-muted-foreground">
-                      La IA ha analizado el error y propone lo siguiente. Revisa cuidadosamente antes de considerar cualquier acción.
-                  </AlertDialogDescription>
-              </AlertDialogHeader>
-              {autoFixSuggestion && (
-                  <ScrollArea className="max-h-[60vh] p-1 -mx-1">
-                      <div className="space-y-3 p-3 border rounded-md bg-card">
-                          <div>
-                              <h4 className="font-semibold text-sm mb-1 text-foreground">Posible Causa Raíz:</h4>
-                              <p className="text-xs text-foreground whitespace-pre-wrap">{autoFixSuggestion.root_cause_analysis}</p>
-                          </div>
-                          <Separator />
-                          <div>
-                              <h4 className="font-semibold text-sm mb-1 text-foreground">Sugerencias de Solución:</h4>
-                              <p className="text-xs text-foreground whitespace-pre-wrap">{autoFixSuggestion.solution_suggestions}</p>
-                          </div>
-                      </div>
-                  </ScrollArea>
-              )}
-              <AlertDialogFooter className="mt-4">
-                  <AlertDialogCancel onClick={() => setIsAutoFixModalOpen(false)}>Cerrar</AlertDialogCancel>
-                  {(status === "error" && currentGitError && gitUploadRetryCount < MAX_GIT_UPLOAD_RETRIES) && (
-                    <AlertDialogAction
-                      onClick={handleRetryGitUploadFromModal}
-                      className="bg-primary hover:bg-primary/90"
-                      disabled={isProcessing}
-                    >
-                      {isProcessing && status === "uploading_git" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <GitFork className="mr-2 h-4 w-4"/>}
-                      Reintentar Subida a Git ({gitUploadRetryCount+1}/{MAX_GIT_UPLOAD_RETRIES}) {/* Display next attempt number */}
-                    </AlertDialogAction>
-                  )}
-                  {(status === "error" && currentAnalysisError) && (
-                     <AlertDialogAction
-                      onClick={() => {
-                        setIsAutoFixModalOpen(false);
-                        handleStartAutoAnalysis(true); // true for retry
-                      }}
-                      className="bg-primary hover:bg-primary/90"
-                      disabled={isProcessing}
-                    >
-                      {isProcessing && (status === "loading_source" || status === "analyzing") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4"/>}
-                       Reintentar Análisis
-                    </AlertDialogAction>
-                  )}
-              </AlertDialogFooter>
-          </AlertDialogContent>
+        <AlertDialogContent className="max-w-2xl">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-accent"><Settings2 className="h-6 w-6 text-accent" />Sugerencia de Auto-Corrección</AlertDialogTitle>
+            <AlertDialogDescription className="text-muted-foreground">La IA ha analizado el error. Revisa antes de actuar.</AlertDialogDescription>
+          </AlertDialogHeader>
+          {autoFixSuggestion && (
+            <ScrollArea className="max-h-[60vh] p-1 -mx-1">
+              <div className="space-y-3 p-3 border rounded-md bg-card">
+                <div><h4 className="font-semibold text-sm mb-1 text-foreground">Posible Causa Raíz:</h4><p className="text-xs text-foreground whitespace-pre-wrap">{autoFixSuggestion.root_cause_analysis}</p></div>
+                <Separator />
+                <div><h4 className="font-semibold text-sm mb-1 text-foreground">Sugerencias de Solución:</h4><p className="text-xs text-foreground whitespace-pre-wrap">{autoFixSuggestion.solution_suggestions}</p></div>
+              </div>
+            </ScrollArea>
+          )}
+          <AlertDialogFooter className="mt-4">
+            <AlertDialogCancel onClick={() => setIsAutoFixModalOpen(false)}>Cerrar</AlertDialogCancel>
+            {(status === "error" && currentGitError && gitUploadRetryCount < MAX_GIT_UPLOAD_RETRIES) && (
+              <AlertDialogAction onClick={handleRetryGitUploadFromModal} className="bg-primary hover:bg-primary/90" disabled={isProcessing}>
+                {isProcessing && status === "uploading_git" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <GitFork className="mr-2 h-4 w-4" />} Reintentar Subida Git ({gitUploadRetryCount + 1}/{MAX_GIT_UPLOAD_RETRIES})
+              </AlertDialogAction>
+            )}
+            {(status === "error" && currentAnalysisError) && (
+              <AlertDialogAction onClick={() => { setIsAutoFixModalOpen(false); handleStartAutoAnalysis(true); }} className="bg-primary hover:bg-primary/90" disabled={isProcessing}>
+                {isProcessing && (status === "loading_source" || status === "analyzing") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Sparkles className="mr-2 h-4 w-4" />} Reintentar Análisis
+              </AlertDialogAction>
+            )}
+          </AlertDialogFooter>
+        </AlertDialogContent>
       </AlertDialog>
-
     </div>
   );
 }

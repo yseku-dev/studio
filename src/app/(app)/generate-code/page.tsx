@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useForm, SubmitHandler, Controller } from 'react-hook-form'; // Import Controller
+import { useForm, SubmitHandler, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Button } from '@/components/ui/button';
@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, CodeXml, Wand2, AlertTriangle, Copy, CheckCircle, Settings2 } from 'lucide-react'; // Added Settings2
+import { Loader2, CodeXml, Wand2, AlertTriangle, Copy, CheckCircle, Settings2 } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { handleGenerateCode } from './actions';
 import type { HandleGenerateCodeResult } from './actions';
@@ -31,15 +31,15 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"; // Import Select components
-import type { AgentConfig } from '@/types/agent';
-import { resolveLlmOptionsForSource } from '@/lib/llm-utils'; // Import the helper
-import type { LLMOptions } from '@/services/groq'; // Import LLMOptions type
-import { LOCALSTORAGE_AGENTS_KEY } from '@/config/agent-config'; // Import agents key
+} from "@/components/ui/select";
+import type { AgentConfig, WorkgroupConfig } from '@/types/agent'; // Added WorkgroupConfig
+import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
+import type { LLMOptions } from '@/services/groq';
+import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config'; // Added WORKGROUPS_KEY
 
 const formSchema = z.object({
   prompt: z.string().min(10, 'El prompt debe tener al menos 10 caracteres.'),
-  configSource: z.string().min(1, 'Debes seleccionar una fuente de configuración LLM.'), // Add config source validation
+  configSource: z.string().min(1, 'Debes seleccionar una fuente de configuración LLM.'),
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -50,11 +50,11 @@ export default function GenerateCodePage() {
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [isConfirming, setIsConfirming] = useState(false);
   const [promptToConfirm, setPromptToConfirm] = useState<string>("");
-  const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null); // State for resolved options
+  const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null);
 
-  // Agent and config source state
   const [agents, setAgents] = useState<AgentConfig[]>([]);
-  const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global'); // Default to global
+  const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]); // Added workgroups state
+  // const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global'); // Not strictly needed if watching form value
 
   const { toast } = useToast();
 
@@ -63,53 +63,49 @@ export default function GenerateCodePage() {
     handleSubmit,
     formState: { errors },
     watch,
-    control, // Need control for Select
+    control,
     setValue,
   } = useForm<FormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       prompt: '',
-      configSource: 'global', // Set default value
+      configSource: 'global',
     }
   });
 
   const currentPrompt = watch('prompt');
   const watchedConfigSource = watch('configSource');
 
-  // Load agents from localStorage
   useEffect(() => {
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
     if (storedAgents) {
-      try {
-        setAgents(JSON.parse(storedAgents));
-      } catch (e) {
-        console.error("Error parsing stored agents:", e);
-        setAgents([]);
-      }
+      try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing stored agents:", e); setAgents([]); }
     }
-    // Set default value for the form after agents are potentially loaded
+    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY); // Load workgroups
+    if (storedWorkgroups) {
+      try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); }
+    }
     setValue('configSource', 'global');
   }, [setValue]);
 
-  // Update resolved LLM options when config source or agents change
   useEffect(() => {
-    const options = resolveLlmOptionsForSource(watchedConfigSource, agents);
+    const options = resolveLlmOptionsForSource(watchedConfigSource, agents, workgroups); // Pass workgroups
     setResolvedLlmOptions(options);
-  }, [watchedConfigSource, agents]);
+  }, [watchedConfigSource, agents, workgroups]); // Add workgroups to dependency array
 
 
   const onSubmit: SubmitHandler<FormData> = async (data) => {
-     const options = resolveLlmOptionsForSource(data.configSource, agents);
+     const options = resolveLlmOptionsForSource(data.configSource, agents, workgroups); // Pass workgroups
      if (!options) {
         toast({
             title: "Configuración LLM Incompleta",
-            description: `La configuración LLM seleccionada (${data.configSource === 'global' ? 'Global' : agents.find(a => a.id === data.configSource)?.name || 'Agente Desconocido'}) está incompleta o no se pudo resolver. Revisa los Ajustes o la configuración del Agente.`,
+            description: `La configuración LLM seleccionada (${getSourceName(data.configSource)}) está incompleta. Revisa los Ajustes, Agentes o Grupos.`,
             variant: "destructive",
             duration: 7000,
         });
         return;
      }
-     setResolvedLlmOptions(options); // Store resolved options for confirmation/generation
+     setResolvedLlmOptions(options);
     setPromptToConfirm(data.prompt);
     setIsConfirming(true);
   };
@@ -117,11 +113,7 @@ export default function GenerateCodePage() {
   const proceedWithGeneration = async () => {
     setIsConfirming(false);
     if (!promptToConfirm || !resolvedLlmOptions) {
-        toast({
-            title: "Error Interno",
-            description: "Falta el prompt o las opciones LLM resueltas.",
-            variant: "destructive",
-        });
+        toast({ title: "Error Interno", description: "Falta el prompt o las opciones LLM.", variant: "destructive" });
         return;
     };
 
@@ -129,7 +121,6 @@ export default function GenerateCodePage() {
     setGenerationResult(null);
     setGenerationError(null);
 
-    // Use the resolved LLM options
     const result = await handleGenerateCode(
         promptToConfirm,
         resolvedLlmOptions.providerId,
@@ -140,18 +131,10 @@ export default function GenerateCodePage() {
 
     if (result.success && result.data) {
       setGenerationResult(result.data);
-      toast({
-        title: 'Generación Completa',
-        description: 'Código generado exitosamente.',
-        action: <CheckCircle className="text-green-500" />
-      });
+      toast({ title: 'Generación Completa', description: 'Código generado.', action: <CheckCircle className="text-green-500" /> });
     } else {
-      setGenerationError(result.error || 'Ocurrió un error desconocido durante la generación.');
-      toast({
-        title: 'Generación Fallida',
-        description: result.error || `No se pudo generar el código con ${resolvedLlmOptions.providerId}. Revisa el mensaje de error.`,
-        variant: 'destructive',
-      });
+      setGenerationError(result.error || 'Ocurrió un error desconocido.');
+      toast({ title: 'Generación Fallida', description: result.error || `No se pudo generar código.`, variant: 'destructive' });
     }
     setIsLoading(false);
   };
@@ -159,49 +142,45 @@ export default function GenerateCodePage() {
   const handleCopyCode = (code: string | undefined) => {
     if (!code) return;
     navigator.clipboard.writeText(code)
-      .then(() => {
-        toast({ title: 'Código Copiado', description: 'El código generado ha sido copiado al portapapeles.' });
-      })
-      .catch(err => {
-        console.error('Error al copiar el código:', err);
-        toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el código.', variant: 'destructive' });
-      });
+      .then(() => toast({ title: 'Código Copiado', description: 'El código ha sido copiado.' }))
+      .catch(err => toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el código.', variant: 'destructive' }));
   };
 
   const handleCopyError = (errorText: string | undefined) => {
     if (!errorText) return;
     navigator.clipboard.writeText(errorText)
-      .then(() => {
-        toast({ title: 'Error Copiado', description: 'El mensaje de error ha sido copiado al portapapeles.' });
-      })
-      .catch(err => {
-        console.error('Error al copiar el error:', err);
-        toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el error al portapapeles.', variant: 'destructive' });
-      });
+      .then(() => toast({ title: 'Error Copiado', description: 'El error ha sido copiado.' }))
+      .catch(err => toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el error.', variant: 'destructive' }));
   };
 
   const getSourceName = (sourceId: string): string => {
     if (sourceId === 'global') return 'Global';
-    return agents.find(a => a.id === sourceId)?.name || 'Desconocido';
-  }
-
+    if (sourceId.startsWith('agent:')) {
+      const agentId = sourceId.split(':')[1];
+      return agents.find(a => a.id === agentId)?.name || `Agente ${agentId.substring(0,6)}...`;
+    }
+    if (sourceId.startsWith('workgroup:')) { // Handle workgroup source
+      const workgroupId = sourceId.split(':')[1];
+      return workgroups.find(wg => wg.id === workgroupId)?.name || `Grupo ${workgroupId.substring(0,6)}...`;
+    }
+    return 'Desconocido';
+  };
 
   return (
     <div className="space-y-6">
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle className="text-2xl flex items-center gap-2">
-            <CodeXml className="h-6 w-6 text-primary" />
-            Generar Código
+            <CodeXml className="h-6 w-6 text-primary" /> Generar Código
           </CardTitle>
           <CardDescription>
-            Describe el código que necesitas y la IA lo generará por ti usando la configuración LLM seleccionada.
+            Describe el código que necesitas y la IA lo generará usando la configuración LLM seleccionada.
             {!resolvedLlmOptions && watchedConfigSource ? (
-                 <span className="text-destructive block mt-1"> (Configuración LLM para '{getSourceName(watchedConfigSource)}' incompleta o inválida)</span>
+                 <span className="text-destructive block mt-1"> (Configuración para '{getSourceName(watchedConfigSource)}' incompleta)</span>
              ) : resolvedLlmOptions ? (
                 <span className="text-foreground block mt-1">(Usando: {getSourceName(watchedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
              ) : (
-                 <span className="text-muted-foreground block mt-1">(Selecciona una fuente de configuración)</span>
+                 <span className="text-muted-foreground block mt-1">(Selecciona fuente de configuración)</span>
              )}
           </CardDescription>
         </CardHeader>
@@ -209,69 +188,42 @@ export default function GenerateCodePage() {
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="prompt" className="text-base">Describe tu necesidad:</Label>
-              <Textarea
-                id="prompt"
-                {...register('prompt')}
-                rows={8}
-                className="font-mono text-sm bg-card"
-                placeholder="Ej: 'Una función en Python que reciba una lista de números y devuelva la suma de los pares.'"
-              />
-              {errors.prompt && (
-                <p className="text-sm text-destructive mt-1">{errors.prompt.message}</p>
-              )}
+              <Textarea id="prompt" {...register('prompt')} rows={8} className="font-mono text-sm bg-card"
+                placeholder="Ej: 'Una función en Python que reciba una lista de números y devuelva la suma de los pares.'" />
+              {errors.prompt && <p className="text-sm text-destructive mt-1">{errors.prompt.message}</p>}
             </div>
-
-            {/* LLM Configuration Source Selector */}
             <div className="space-y-2">
-                <Label htmlFor="configSource" className="text-base flex items-center gap-1">
-                   <Settings2 className="h-4 w-4"/> Usar Configuración LLM De:
-                </Label>
-                <Controller
-                    name="configSource"
-                    control={control}
+                <Label htmlFor="configSource" className="text-base flex items-center gap-1"><Settings2 className="h-4 w-4"/> Usar Configuración LLM De:</Label>
+                <Controller name="configSource" control={control}
                     render={({ field }) => (
                         <Select onValueChange={field.onChange} value={field.value}>
-                            <SelectTrigger id="configSource">
-                                <SelectValue placeholder="Seleccionar fuente de configuración" />
-                            </SelectTrigger>
+                            <SelectTrigger id="configSource"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="global">Ajustes Globales</SelectItem>
-                                {agents.map(agent => (
-                                    <SelectItem key={agent.id} value={agent.id}>
-                                        Agente: {agent.name}
-                                    </SelectItem>
-                                ))}
+                                {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
+                                {/* Removed workgroups from here as generate-code is typically a single LLM call, not a multi-agent task */}
                             </SelectContent>
                         </Select>
-                    )}
-                />
+                    )} />
                 {errors.configSource && <p className="text-sm text-destructive mt-1">{errors.configSource.message}</p>}
                  {!resolvedLlmOptions && watchedConfigSource && (
-                     <p className="text-xs text-destructive mt-1">La configuración para '{getSourceName(watchedConfigSource)}' parece incompleta. Revisa los <a href="/settings" className="underline">Ajustes Globales</a> o la configuración del agente en <a href="/agents" className="underline">Gestión de Agentes</a>.</p>
+                     <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(watchedConfigSource)}' incompleta. Revisa Ajustes o Agentes.</p>
                 )}
             </div>
-
           </CardContent>
           <CardFooter>
             <AlertDialog open={isConfirming} onOpenChange={setIsConfirming}>
               <AlertDialogTrigger asChild>
                  <Button type="submit" disabled={isLoading || !currentPrompt || !resolvedLlmOptions} className="w-full md:w-auto">
-                  {isLoading ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Wand2 className="mr-2 h-4 w-4" />
-                  )}
-                  Generar Código
+                  {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wand2 className="mr-2 h-4 w-4" />} Generar Código
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
                   <AlertDialogTitle>Confirmar Generación</AlertDialogTitle>
                   <AlertDialogDescription>
-                    ¿Estás seguro de que deseas generar código basado en el siguiente prompt usando la configuración de '{getSourceName(watchedConfigSource)}'?
-                    <div className="mt-1 text-xs text-muted-foreground">
-                        (Proveedor: {resolvedLlmOptions?.providerId}, Modelo: {resolvedLlmOptions?.modelName})
-                    </div>
+                    Generar código con '{getSourceName(watchedConfigSource)}'?
+                    <div className="mt-1 text-xs text-muted-foreground">(Proveedor: {resolvedLlmOptions?.providerId}, Modelo: {resolvedLlmOptions?.modelName})</div>
                     <ScrollArea className="h-[150px] mt-2 p-2 border rounded bg-muted/30">
                         <pre className="text-xs text-foreground whitespace-pre-wrap">{promptToConfirm}</pre>
                     </ScrollArea>
@@ -279,9 +231,7 @@ export default function GenerateCodePage() {
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel onClick={() => setPromptToConfirm("")}>Cancelar</AlertDialogCancel>
-                  <AlertDialogAction onClick={proceedWithGeneration}>
-                    Sí, Generar
-                  </AlertDialogAction>
+                  <AlertDialogAction onClick={proceedWithGeneration}>Sí, Generar</AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
@@ -290,10 +240,7 @@ export default function GenerateCodePage() {
       </Card>
 
       {isLoading && (
-        <div
-          data-ai-hint="code generation loading"
-          className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6"
-        >
+        <div data-ai-hint="code generation loading" className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6">
           <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
           <p className="text-lg text-foreground">Generando código...</p>
           <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos.</p>
@@ -302,19 +249,12 @@ export default function GenerateCodePage() {
 
       {generationError && !isLoading && (
         <Card className="shadow-lg border-destructive bg-destructive/10 mt-6">
-          <CardHeader>
-            <CardTitle className="text-xl flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-6 w-6" />
-              Error en la Generación
-            </CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle className="text-xl flex items-center gap-2 text-destructive"><AlertTriangle className="h-6 w-6" /> Error en Generación</CardTitle></CardHeader>
           <CardContent className="space-y-2">
-            <p className="text-destructive">No se pudo completar la generación del código:</p>
-            <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50">
-                <pre className="text-xs text-foreground whitespace-pre-wrap">{generationError}</pre>
-            </ScrollArea>
-             <Button variant="outline" size="sm" onClick={() => handleCopyError(generationError)} className="mt-2 text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground">
-                <Copy className="mr-2 h-4 w-4"/> Copiar Mensaje de Error
+            <p className="text-destructive">No se pudo generar el código:</p>
+            <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50"><pre className="text-xs text-foreground whitespace-pre-wrap">{generationError}</pre></ScrollArea>
+            <Button variant="outline" size="sm" onClick={() => handleCopyError(generationError)} className="mt-2 text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground">
+                <Copy className="mr-2 h-4 w-4"/> Copiar Error
             </Button>
           </CardContent>
         </Card>
@@ -324,23 +264,19 @@ export default function GenerateCodePage() {
         <Card className="shadow-lg mt-6">
           <CardHeader>
             <CardTitle className="text-2xl">Código Generado</CardTitle>
-            <CardDescription>Generado usando la configuración de '{getSourceName(watchedConfigSource)}'.</CardDescription>
+            <CardDescription>Generado usando '{getSourceName(watchedConfigSource)}'.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             {generationResult.explanation && (
               <div>
                 <h3 className="text-lg font-semibold mb-1">Explicación:</h3>
-                <Card className="bg-muted/50 p-3">
-                  <p className="text-sm text-foreground">{generationResult.explanation}</p>
-                </Card>
+                <Card className="bg-muted/50 p-3"><p className="text-sm text-foreground">{generationResult.explanation}</p></Card>
               </div>
             )}
             <div>
               <div className="flex justify-between items-center mb-2">
                 <h3 className="text-lg font-semibold">Fragmento de Código:</h3>
-                <Button variant="outline" size="sm" onClick={() => handleCopyCode(generationResult.generatedCode)}>
-                  <Copy className="mr-2 h-4 w-4" /> Copiar Código
-                </Button>
+                <Button variant="outline" size="sm" onClick={() => handleCopyCode(generationResult.generatedCode)}><Copy className="mr-2 h-4 w-4" /> Copiar Código</Button>
               </div>
               <ScrollArea className="h-[400px] rounded-md border bg-card p-1">
                 <pre className="p-3 text-sm font-mono whitespace-pre-wrap break-all text-foreground">{generationResult.generatedCode}</pre>

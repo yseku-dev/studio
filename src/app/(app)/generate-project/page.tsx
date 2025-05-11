@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useForm, SubmitHandler, Controller } from 'react-hook-form'; // Import Controller
+import { useForm, SubmitHandler, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Button } from '@/components/ui/button';
@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, FolderPlus, Wand2, AlertTriangle, DownloadCloud, CheckCircle, FileText, ListTree, Copy, Settings2 } from 'lucide-react'; // Added Settings2
+import { Loader2, FolderPlus, Wand2, AlertTriangle, DownloadCloud, CheckCircle, FileText, ListTree, Copy, Settings2 } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { handleGenerateProject } from './actions';
 import type { HandleGenerateProjectResult, ProjectFile } from './actions';
@@ -33,16 +33,15 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select"; // Import Select components
-import type { AgentConfig } from '@/types/agent';
-import { resolveLlmOptionsForSource } from '@/lib/llm-utils'; // Import the helper
-import type { LLMOptions } from '@/services/groq'; // Import LLMOptions type
-import { LOCALSTORAGE_AGENTS_KEY } from '@/config/agent-config'; // Import agents key
-
+} from "@/components/ui/select";
+import type { AgentConfig, WorkgroupConfig } from '@/types/agent'; // Added WorkgroupConfig
+import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
+import type { LLMOptions } from '@/services/groq';
+import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config'; // Added WORKGROUPS_KEY
 
 const formSchema = z.object({
   prompt: z.string().min(15, 'El prompt debe tener al menos 15 caracteres para describir un proyecto.'),
-  configSource: z.string().min(1, 'Debes seleccionar una fuente de configuración LLM.'), // Add config source validation
+  configSource: z.string().min(1, 'Debes seleccionar una fuente de configuración LLM.'),
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -54,11 +53,11 @@ export default function GenerateProjectPage() {
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [isConfirming, setIsConfirming] = useState(false);
   const [promptToConfirm, setPromptToConfirm] = useState<string>("");
-  const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null); // State for resolved options
+  const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null);
 
-  // Agent and config source state
   const [agents, setAgents] = useState<AgentConfig[]>([]);
-  const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global'); // Default to global
+  const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]); // Added workgroups state
+  // const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global'); // Not strictly needed
 
   const { toast } = useToast();
 
@@ -67,53 +66,49 @@ export default function GenerateProjectPage() {
     handleSubmit,
     formState: { errors },
     watch,
-    control, // Need control for Select
+    control,
     setValue,
   } = useForm<FormData>({
     resolver: zodResolver(formSchema),
     defaultValues: {
       prompt: '',
-      configSource: 'global', // Set default value
+      configSource: 'global',
     }
   });
 
   const currentPrompt = watch('prompt');
   const watchedConfigSource = watch('configSource');
 
-   // Load agents from localStorage
   useEffect(() => {
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
     if (storedAgents) {
-      try {
-        setAgents(JSON.parse(storedAgents));
-      } catch (e) {
-        console.error("Error parsing stored agents:", e);
-        setAgents([]);
-      }
+      try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing stored agents:", e); setAgents([]); }
     }
-     // Set default value for the form after agents are potentially loaded
+    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY); // Load workgroups
+    if (storedWorkgroups) {
+      try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); }
+    }
     setValue('configSource', 'global');
   }, [setValue]);
 
-  // Update resolved LLM options when config source or agents change
   useEffect(() => {
-    const options = resolveLlmOptionsForSource(watchedConfigSource, agents);
+    const options = resolveLlmOptionsForSource(watchedConfigSource, agents, workgroups); // Pass workgroups
     setResolvedLlmOptions(options);
-  }, [watchedConfigSource, agents]);
+  }, [watchedConfigSource, agents, workgroups]); // Add workgroups to dependency
 
 
   const onSubmit: SubmitHandler<FormData> = async (data) => {
-     const options = resolveLlmOptionsForSource(data.configSource, agents);
+     const options = resolveLlmOptionsForSource(data.configSource, agents, workgroups); // Pass workgroups
      if (!options) {
         toast({
             title: "Configuración LLM Incompleta",
-            description: `La configuración LLM seleccionada (${data.configSource === 'global' ? 'Global' : agents.find(a => a.id === data.configSource)?.name || 'Agente Desconocido'}) está incompleta o no se pudo resolver. Revisa los Ajustes o la configuración del Agente.`,
+            description: `La configuración LLM seleccionada (${getSourceName(data.configSource)}) está incompleta. Revisa los Ajustes, Agentes o Grupos.`,
             variant: "destructive",
             duration: 7000,
         });
         return;
      }
-     setResolvedLlmOptions(options); // Store resolved options for confirmation/generation
+     setResolvedLlmOptions(options);
     setPromptToConfirm(data.prompt);
     setIsConfirming(true);
   };
@@ -121,11 +116,7 @@ export default function GenerateProjectPage() {
   const proceedWithGeneration = async () => {
     setIsConfirming(false);
     if (!promptToConfirm || !resolvedLlmOptions) {
-         toast({
-            title: "Error Interno",
-            description: "Falta el prompt o las opciones LLM resueltas.",
-            variant: "destructive",
-        });
+         toast({ title: "Error Interno", description: "Falta el prompt o las opciones LLM.", variant: "destructive" });
         return;
     }
 
@@ -133,7 +124,6 @@ export default function GenerateProjectPage() {
     setGenerationResult(null);
     setGenerationError(null);
 
-    // Use the resolved LLM options
     const result = await handleGenerateProject(
         promptToConfirm,
         resolvedLlmOptions.providerId,
@@ -142,43 +132,29 @@ export default function GenerateProjectPage() {
         resolvedLlmOptions.apiUrl
     );
 
-
     if (result.success && result.data) {
       setGenerationResult(result.data);
-      toast({
-        title: 'Generación de Proyecto Completa',
-        description: 'Estructura de proyecto generada exitosamente.',
-        action: <CheckCircle className="text-green-500" />
-      });
+      toast({ title: 'Generación de Proyecto Completa', description: 'Estructura generada.', action: <CheckCircle className="text-green-500" /> });
     } else {
-      setGenerationError(result.error || 'Ocurrió un error desconocido durante la generación del proyecto.');
-      toast({
-        title: 'Generación de Proyecto Fallida',
-        description: result.error || `No se pudo generar la estructura del proyecto con ${resolvedLlmOptions.providerId}. Revisa el mensaje de error.`,
-        variant: 'destructive',
-      });
+      setGenerationError(result.error || 'Ocurrió un error desconocido.');
+      toast({ title: 'Generación de Proyecto Fallida', description: result.error || `No se pudo generar estructura.`, variant: 'destructive' });
     }
     setIsLoading(false);
   };
 
   const handleDownloadProject = async () => {
     if (!generationResult || !generationResult.projectStructure || generationResult.projectStructure.files.length === 0) {
-      toast({
-        title: 'Nada que Descargar',
-        description: 'No hay archivos de proyecto generados para descargar.',
-        variant: 'destructive',
-      });
+      toast({ title: 'Nada que Descargar', description: 'No hay archivos para descargar.', variant: 'destructive' });
       return;
     }
     setIsDownloading(true);
-    toast({ title: 'Preparando Descarga', description: 'Creando archivo ZIP del proyecto...' });
+    toast({ title: 'Preparando Descarga', description: 'Creando ZIP del proyecto...' });
 
     try {
       const zip = new JSZip();
       generationResult.projectStructure.files.forEach((file: ProjectFile) => {
         zip.file(file.path, file.content);
       });
-
       const zipBlob = await zip.generateAsync({ type: "blob" });
       const url = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
@@ -188,18 +164,10 @@ export default function GenerateProjectPage() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      toast({
-        title: "Descarga Iniciada",
-        description: `El proyecto ${a.download} se está descargando.`
-      });
+      toast({ title: "Descarga Iniciada", description: `El proyecto ${a.download} se está descargando.` });
     } catch (e) {
       const error = e instanceof Error ? e.message : "Error desconocido";
-      toast({
-        title: "Error al Crear ZIP",
-        description: `No se pudo crear el archivo ZIP: ${error}`,
-        variant: "destructive",
-      });
-      console.error("Error al crear ZIP:", e);
+      toast({ title: "Error al Crear ZIP", description: `No se pudo crear ZIP: ${error}`, variant: "destructive" });
     }
     setIsDownloading(false);
   };
@@ -207,37 +175,38 @@ export default function GenerateProjectPage() {
   const handleCopyError = (errorText: string | undefined) => {
     if (!errorText) return;
     navigator.clipboard.writeText(errorText)
-      .then(() => {
-        toast({ title: 'Error Copiado', description: 'El mensaje de error ha sido copiado al portapapeles.' });
-      })
-      .catch(err => {
-        console.error('Error al copiar el error:', err);
-        toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el error al portapapeles.', variant: 'destructive' });
-      });
+      .then(() => toast({ title: 'Error Copiado', description: 'El error ha sido copiado.' }))
+      .catch(err => toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el error.', variant: 'destructive' }));
   };
 
    const getSourceName = (sourceId: string): string => {
     if (sourceId === 'global') return 'Global';
-    return agents.find(a => a.id === sourceId)?.name || 'Desconocido';
-  }
-
+    if (sourceId.startsWith('agent:')) {
+      const agentId = sourceId.split(':')[1];
+      return agents.find(a => a.id === agentId)?.name || `Agente ${agentId.substring(0,6)}...`;
+    }
+    if (sourceId.startsWith('workgroup:')) { // Handle workgroup source
+      const workgroupId = sourceId.split(':')[1];
+      return workgroups.find(wg => wg.id === workgroupId)?.name || `Grupo ${workgroupId.substring(0,6)}...`;
+    }
+    return 'Desconocido';
+  };
 
   return (
     <div className="space-y-6">
       <Card className="shadow-lg">
         <CardHeader>
           <CardTitle className="text-2xl flex items-center gap-2">
-            <FolderPlus className="h-6 w-6 text-primary" />
-            Generar Proyecto
+            <FolderPlus className="h-6 w-6 text-primary" /> Generar Proyecto
           </CardTitle>
           <CardDescription>
-            Describe la estructura y el tipo de proyecto que necesitas, y la IA generará un borrador usando la configuración LLM seleccionada.
+            Describe la estructura y tipo de proyecto, y la IA generará un borrador usando la configuración LLM seleccionada.
             {!resolvedLlmOptions && watchedConfigSource ? (
-                 <span className="text-destructive block mt-1"> (Configuración LLM para '{getSourceName(watchedConfigSource)}' incompleta o inválida)</span>
+                 <span className="text-destructive block mt-1"> (Configuración para '{getSourceName(watchedConfigSource)}' incompleta)</span>
              ) : resolvedLlmOptions ? (
                 <span className="text-foreground block mt-1">(Usando: {getSourceName(watchedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
              ) : (
-                 <span className="text-muted-foreground block mt-1">(Selecciona una fuente de configuración)</span>
+                 <span className="text-muted-foreground block mt-1">(Selecciona fuente de configuración)</span>
              )}
           </CardDescription>
         </CardHeader>
@@ -245,69 +214,42 @@ export default function GenerateProjectPage() {
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="prompt" className="text-base">Describe tu proyecto:</Label>
-              <Textarea
-                id="prompt"
-                {...register('prompt')}
-                rows={10}
-                className="font-mono text-sm bg-card"
-                placeholder="Ej: 'Un proyecto simple de API REST con Express.js y TypeScript. Incluir una ruta GET /health y una ruta POST /users. Configuración básica de ESLint y Prettier.'"
-              />
-              {errors.prompt && (
-                <p className="text-sm text-destructive mt-1">{errors.prompt.message}</p>
-              )}
+              <Textarea id="prompt" {...register('prompt')} rows={10} className="font-mono text-sm bg-card"
+                placeholder="Ej: 'Un proyecto API REST con Express.js y TypeScript. Incluir ruta GET /health y POST /users. Configuración ESLint y Prettier.'" />
+              {errors.prompt && <p className="text-sm text-destructive mt-1">{errors.prompt.message}</p>}
             </div>
-
-             {/* LLM Configuration Source Selector */}
-            <div className="space-y-2">
-                <Label htmlFor="configSource" className="text-base flex items-center gap-1">
-                   <Settings2 className="h-4 w-4"/> Usar Configuración LLM De:
-                </Label>
-                <Controller
-                    name="configSource"
-                    control={control}
+             <div className="space-y-2">
+                <Label htmlFor="configSource" className="text-base flex items-center gap-1"><Settings2 className="h-4 w-4"/> Usar Configuración LLM De:</Label>
+                <Controller name="configSource" control={control}
                     render={({ field }) => (
                         <Select onValueChange={field.onChange} value={field.value}>
-                            <SelectTrigger id="configSource">
-                                <SelectValue placeholder="Seleccionar fuente de configuración" />
-                            </SelectTrigger>
+                            <SelectTrigger id="configSource"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
                             <SelectContent>
                                 <SelectItem value="global">Ajustes Globales</SelectItem>
-                                {agents.map(agent => (
-                                    <SelectItem key={agent.id} value={agent.id}>
-                                        Agente: {agent.name}
-                                    </SelectItem>
-                                ))}
+                                {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
+                                {/* Removed workgroups from here as generate-project is typically a single LLM call */}
                             </SelectContent>
                         </Select>
-                    )}
-                />
+                    )} />
                 {errors.configSource && <p className="text-sm text-destructive mt-1">{errors.configSource.message}</p>}
                  {!resolvedLlmOptions && watchedConfigSource && (
-                     <p className="text-xs text-destructive mt-1">La configuración para '{getSourceName(watchedConfigSource)}' parece incompleta. Revisa los <a href="/settings" className="underline">Ajustes Globales</a> o la configuración del agente en <a href="/agents" className="underline">Gestión de Agentes</a>.</p>
+                     <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(watchedConfigSource)}' incompleta. Revisa Ajustes o Agentes.</p>
                 )}
             </div>
-
           </CardContent>
           <CardFooter>
             <AlertDialog open={isConfirming} onOpenChange={setIsConfirming}>
               <AlertDialogTrigger asChild>
                 <Button type="submit" disabled={isLoading || !currentPrompt || !resolvedLlmOptions} className="w-full md:w-auto">
-                  {isLoading ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Wand2 className="mr-2 h-4 w-4" />
-                  )}
-                  Generar Proyecto
+                  {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wand2 className="mr-2 h-4 w-4" />} Generar Proyecto
                 </Button>
               </AlertDialogTrigger>
               <AlertDialogContent>
                 <AlertDialogHeader>
                   <AlertDialogTitle>Confirmar Generación de Proyecto</AlertDialogTitle>
                    <AlertDialogDescription>
-                    ¿Estás seguro de que deseas generar la estructura de un proyecto basado en el siguiente prompt usando la configuración de '{getSourceName(watchedConfigSource)}'?
-                    <div className="mt-1 text-xs text-muted-foreground">
-                        (Proveedor: {resolvedLlmOptions?.providerId}, Modelo: {resolvedLlmOptions?.modelName})
-                    </div>
+                    Generar estructura con '{getSourceName(watchedConfigSource)}'?
+                    <div className="mt-1 text-xs text-muted-foreground">(Proveedor: {resolvedLlmOptions?.providerId}, Modelo: {resolvedLlmOptions?.modelName})</div>
                     <ScrollArea className="h-[150px] mt-2 p-2 border rounded bg-muted/30">
                         <pre className="text-xs text-foreground whitespace-pre-wrap">{promptToConfirm}</pre>
                     </ScrollArea>
@@ -315,9 +257,7 @@ export default function GenerateProjectPage() {
                 </AlertDialogHeader>
                 <AlertDialogFooter>
                   <AlertDialogCancel onClick={() => setPromptToConfirm("")}>Cancelar</AlertDialogCancel>
-                  <AlertDialogAction onClick={proceedWithGeneration}>
-                    Sí, Generar Proyecto
-                  </AlertDialogAction>
+                  <AlertDialogAction onClick={proceedWithGeneration}>Sí, Generar Proyecto</AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
@@ -326,31 +266,21 @@ export default function GenerateProjectPage() {
       </Card>
 
       {isLoading && (
-        <div
-          data-ai-hint="project generation loading"
-          className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6"
-        >
+        <div data-ai-hint="project generation loading" className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6">
           <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
           <p className="text-lg text-foreground">Generando estructura de proyecto...</p>
-          <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos, especialmente para descripciones complejas.</p>
+          <p className="text-sm text-muted-foreground">Esto podría tomar unos momentos.</p>
         </div>
       )}
 
       {generationError && !isLoading && (
         <Card className="shadow-lg border-destructive bg-destructive/10 mt-6">
-          <CardHeader>
-            <CardTitle className="text-xl flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-6 w-6" />
-              Error en la Generación del Proyecto
-            </CardTitle>
-          </CardHeader>
+          <CardHeader><CardTitle className="text-xl flex items-center gap-2 text-destructive"><AlertTriangle className="h-6 w-6" /> Error en Generación</CardTitle></CardHeader>
           <CardContent className="space-y-2">
-            <p className="text-destructive">No se pudo completar la generación de la estructura del proyecto:</p>
-             <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50">
-                <pre className="text-xs text-foreground whitespace-pre-wrap">{generationError}</pre>
-            </ScrollArea>
+            <p className="text-destructive">No se pudo generar la estructura:</p>
+             <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50"><pre className="text-xs text-foreground whitespace-pre-wrap">{generationError}</pre></ScrollArea>
             <Button variant="outline" size="sm" onClick={() => handleCopyError(generationError)} className="mt-2 text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground">
-                <Copy className="mr-2 h-4 w-4"/> Copiar Mensaje de Error
+                <Copy className="mr-2 h-4 w-4"/> Copiar Error
             </Button>
           </CardContent>
         </Card>
@@ -360,17 +290,12 @@ export default function GenerateProjectPage() {
         <Card className="shadow-lg mt-6">
           <CardHeader>
             <div className="flex justify-between items-center">
-                <CardTitle className="text-2xl">Proyecto Generado: {generationResult.projectStructure.projectName || "Sin Nombre"}</CardTitle>
-                <Button
-                    onClick={handleDownloadProject}
-                    disabled={isDownloading || !generationResult.projectStructure.files?.length}
-                    variant="outline"
-                >
-                    {isDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <DownloadCloud className="mr-2 h-4 w-4" />}
-                    Descargar Proyecto (ZIP)
+                <CardTitle className="text-2xl">Proyecto: {generationResult.projectStructure.projectName || "Sin Nombre"}</CardTitle>
+                <Button onClick={handleDownloadProject} disabled={isDownloading || !generationResult.projectStructure.files?.length} variant="outline">
+                    {isDownloading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <DownloadCloud className="mr-2 h-4 w-4" />} Descargar (ZIP)
                 </Button>
             </div>
-            <CardDescription>Generado usando la configuración de '{getSourceName(watchedConfigSource)}'.</CardDescription>
+            <CardDescription>Generado usando '{getSourceName(watchedConfigSource)}'.</CardDescription>
             {generationResult.notes && (
                  <div className="pt-2 text-sm text-foreground flex items-start gap-2">
                     <Badge variant="secondary" className="shrink-0 mt-0.5">Notas IA:</Badge> <span className='text-muted-foreground'>{generationResult.notes}</span>
@@ -400,7 +325,7 @@ export default function GenerateProjectPage() {
                     </ScrollArea>
                 </div>
              ) : (
-                <p className="text-muted-foreground">La IA no generó ningún archivo para este proyecto.</p>
+                <p className="text-muted-foreground">La IA no generó archivos para este proyecto.</p>
              )}
           </CardContent>
         </Card>
