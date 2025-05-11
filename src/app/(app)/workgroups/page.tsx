@@ -35,8 +35,28 @@ import { LOCALSTORAGE_WORKGROUPS_KEY, LOCALSTORAGE_AGENTS_KEY, ORCHESTRATOR_AGEN
 // Default workgroup using default agent names (IDs will be resolved dynamically)
 const defaultWorkgroup: Omit<WorkgroupConfig, 'id' | 'agentIds'> & { agentNames: string[] } = {
   name: "EquipoDesarrolloSoftware",
-  description: "Un equipo multidisciplinario para desarrollar una aplicación de lista de tareas.",
-  task: "Este grupo de trabajo es capaz de gestionar el ciclo de vida completo del desarrollo de software. Sus capacidades incluyen: definición de requisitos de producto, diseño de arquitectura de software, desarrollo y codificación de aplicaciones, pruebas de calidad (QA), gestión de infraestructura (DevOps), despliegues, y la incorporación de feedback del usuario. Puede abordar una amplia gama de tareas de desarrollo de software, desde aplicaciones simples hasta sistemas más complejos.",
+  description: "Un equipo multidisciplinario capaz de abordar diversas tareas de desarrollo de software, gestionado por un Orquestador.",
+  task: `Creación de agentes individuales:
+Los agentes necesarios para el proyecto se crean con permisos específicos , incluyendo:
+Lectura/escritura de archivos y datos.
+Creación y gestión de entornos virtuales (ej: Python Virtualenv, Docker).
+Ejecución de comandos en sistemas operativos o entornos de desarrollo.
+Acceso a su propio código fuente para modificaciones o auditorías.
+Configuración de modelos LLM:
+Cada agente puede usar un servidor LLM por defecto o elegir entre otros disponibles en la infraestructura (ej: OpenAI, Anthropic, modelos locales).
+Grupo inicial y rol del Orquestador :
+Al crear el grupo inicial , se incluyen automáticamente todos los agentes mencionados, junto con el Orquestador como componente central.
+Funciones del Orquestador en el grupo:
+Recepción de prompts: El Orquestador actúa como punto único de entrada para los inputs del usuario, gestionando todas las interacciones.
+Coordinación interna: Evalúa los resultados de los agentes, decide la acción siguiente y garantiza una ejecución óptima del flujo de trabajo .
+Configuración de LLM:
+Puede usar un servidor LLM por defecto o seleccionar otro disponible, independientemente de las configuraciones individuales de los agentes.
+Integra todas las entradas del usuario directamente en el próximo flujo de trabajo gestionado.
+Modos de operación:
+En grupos:
+Los agentes reciben instrucciones desde el Orquestador , procesan tareas según sus funciones y devuelven resultados al Orquestador , que los evalúa y decide la siguiente acción.
+Interacciones directas con el usuario:
+Si un agente actúa fuera de un grupo, responde directamente a través de la interfaz de usuario, sin pasar por el Orquestador , operando de forma autónoma.`,
   agentNames: [
     "JefeDeProducto",
     "ArquitectoSoftware",
@@ -117,7 +137,7 @@ export default function WorkgroupsPage() {
 
       const orchestrator = agentsList.find(a => a.name === ORCHESTRATOR_AGENT_NAME);
 
-      if (orchestrator && defaultAgentIds.length === defaultWorkgroup.agentNames.length) { // Ensure all default agents were found
+      if (orchestrator && defaultAgentIds.length > 0) { 
         const initialWorkgroup: WorkgroupConfig = {
           id: crypto.randomUUID(),
           name: defaultWorkgroup.name,
@@ -254,7 +274,7 @@ export default function WorkgroupsPage() {
                 Primero debes crear agentes (además del Orquestador) en la página de <a href="/agents" className="underline hover:text-destructive/80">Gestión de Agentes</a> para poder crear grupos de trabajo.
               </p>
             )}
-            {workgroups.length === 0 && availableAgents.length > 1 && (
+            {workgroups.length === 0 && availableAgents.length > 1 && orchestratorAgent && (
               <p className="text-muted-foreground text-center py-8">No hay grupos de trabajo creados. ¡Empieza creando uno!</p>
             )}
             {workgroups.length > 0 && (
