@@ -27,7 +27,8 @@ import type { LLMOptions } from '@/services/groq';
 import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGENT_NAME, REFACTOR_AGENT_NAME } from '@/config/agent-config';
 import { LLM_PROVIDERS, LOCALSTORAGE_PROVIDER_ID_KEY, getLocalStorageApiKeyName, getLocalStorageModelName, type LLMProviderId } from '@/config/llm-config';
 import { handleGetRefactoringSuggestions, handleApplyRefactoringSuggestion, type HandleGetRefactoringSuggestionsPayload } from './actions';
-import { cn } from '@/lib/utils'; // Added import for cn
+import { cn } from '@/lib/utils';
+import { Badge } from '@/components/ui/badge'; // Added import for Badge
 
 const refactorParamsSchema = z.object({
   goals: z.string().optional(),
@@ -497,7 +498,7 @@ export default function RefactorProjectPage() {
             <ScrollArea className={cn("p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out", logsExpanded ? "h-[300px]" : "h-[100px]")}>
               <pre className="text-xs text-foreground whitespace-pre-wrap">
                 {detailedLogs.map((log, index) => (
-                  <span key={`log-${index}`} className={log.includes("[ERROR") || log.includes("Error:") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-600 dark:text-yellow-400" : ""}>{log}\n</span>
+                  <span key={`log-${index}`} className={log.includes("[ERROR") || log.includes("Error:") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-500" : ""}>{log}\n</span>
                 ))}
               </pre>
             </ScrollArea>
