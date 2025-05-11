@@ -6,16 +6,17 @@ CodeAlchemist es una plataforma de desarrollo asistido por inteligencia artifici
 
 *   **Generación de Código**: Crea fragmentos de código a partir de descripciones en lenguaje natural.
 *   **Generación de Proyectos**: Define una estructura base para nuevos proyectos según tus especificaciones.
+*   **Refactorizar Proyecto**: Sube un proyecto (ZIP, JSON, archivo de texto) o proporciona una URL de Git (simulada) para obtener sugerencias de refactorización generadas por la IA. Utiliza un agente "RefactorizadorCodigoExperto" o un grupo de trabajo que lo incluya. Permite especificar metas y prioridades de refactorización.
 *   **Análisis de Código Inteligente**: Pega fragmentos de código o sube archivos para recibir análisis detallados y sugerencias de mejora generadas por IA.
 *   **Análisis de Proyecto Completo**: Sube un proyecto en formato ZIP/JSON o proporciona una URL de Git para un análisis holístico (funcionalidad Git actualmente simulada).
-*   **AutoUpdate (Análisis del Propio Código)**: Permite que CodeAlchemist analice su propio código fuente. Ofrece sugerencias, permite aplicarlas directamente (modificando los archivos), descargar el código fuente completo en ZIP, o subirlo a un repositorio Git. Las comunicaciones con la IA están optimizadas para manejar grandes cantidades de código mediante fragmentación y timeouts.
+*   **AutoUpdate (Análisis del Propio Código)**: Permite que CodeAlchemist analice su propio código fuente (obtenido al momento). Ofrece sugerencias, permite aplicarlas directamente (modificando los archivos), descargar el código fuente completo en ZIP o JSON, o subirlo a un repositorio Git. Las comunicaciones con la IA están optimizadas para manejar grandes cantidades de código mediante fragmentación y timeouts.
 *   **Versiones Guardadas (Snapshots)**: Guarda diferentes versiones de tu código (original y sugerido) para una fácil revisión, comparación y seguimiento.
 *   **Chat con IA**: Interactúa con un asistente IA para obtener ayuda, resolver dudas o generar ideas.
 *   **Gestión de Agentes IA**: Crea y configura agentes IA individuales, cada uno con su propio mensaje de sistema, configuración LLM (global o personalizada) y capacidades (acceso a código propio, ejecución, entorno virtual, lectura/escritura de archivos).
-*   **Gestión de Grupos de Trabajo IA**: Define grupos de agentes para colaborar en tareas complejas. Un agente "Orquestador" dirige el flujo de trabajo. Observa la ejecución en un log detallado.
+*   **Gestión de Grupos de Trabajo IA**: Define grupos de agentes para colaborar en tareas complejas. Un agente "OrquestadorFlujoAgentes" dirige el flujo de trabajo. Observa la ejecución en un log detallado.
 *   **Interfaz de Usuario Intuitiva**: Construida con Next.js y ShadCN UI para una experiencia de usuario moderna, responsiva y agradable. La barra lateral es colapsable para maximizar el espacio de trabajo.
 *   **Configuración Personalizada**:
-    *   **LLM**: Selecciona el proveedor (Groq, OpenAI, Anthropic, LM Studio, Ollama), introduce tu clave API (si es necesaria), elige el modelo y, para proveedores locales, especifica la URL de la API. Incluye un test de conexión.
+    *   **LLM**: Selecciona el proveedor (Groq, Google Gemini, OpenAI, Anthropic, LM Studio, Ollama), introduce tu clave API (si es necesaria), elige el modelo y, para proveedores locales, especifica la URL de la API. Incluye un test de conexión.
     *   **Git**: Configura la URL del repositorio, nombre de usuario, email y Token de Acceso Personal (PAT) para la funcionalidad de subida a Git en AutoUpdate. Incluye un test de conexión.
 *   **Manejo de Errores Mejorado**: Los errores, especialmente durante las interacciones con la IA o Git, se muestran claramente. Se pueden copiar para depuración y, en algunos casos (AutoUpdate, Subida a Git), se ofrece un botón "Auto-Fix" para que la IA intente proponer una solución al error. CodeAlchemist intenta gestionar errores comunes de API LLM (límites de tokens/TPM, timeouts) con reintentos y fragmentación.
 
@@ -23,7 +24,7 @@ CodeAlchemist es una plataforma de desarrollo asistido por inteligencia artifici
 
 CodeAlchemist está construido con Next.js (utilizando el App Router) y React para el frontend. El backend se basa en Server Actions de Next.js para manejar la lógica de negocio y las interacciones con servicios externos.
 
-*   **Frontend**: Next.js, React, TypeScript, Tailwind CSS, ShadCN UI.
+*   **Frontend**: Next.js (App Router), React, TypeScript, Tailwind CSS, ShadCN UI.
 *   **Backend (Server Actions)**: Lógica para interactuar con APIs LLM, gestión de archivos (para AutoUpdate), operaciones Git.
 *   **Capa de Servicios LLM**: Un módulo (`src/services/groq.ts`, aunque el nombre es histórico y ahora es genérico) abstrae las llamadas a diferentes proveedores de LLM, manejando la construcción de la solicitud, autenticación y reintentos.
 *   **Configuración LLM**: Los usuarios pueden configurar un proveedor LLM global o especificar configuraciones personalizadas para cada Agente IA.
@@ -32,7 +33,7 @@ CodeAlchemist está construido con Next.js (utilizando el App Router) y React pa
 ## Tecnologías Utilizadas
 
 *   **Frontend**: Next.js (App Router), React, TypeScript, Tailwind CSS, ShadCN UI
-*   **IA y Modelos de Lenguaje**: APIs de Groq, OpenAI, Anthropic; soporte para endpoints locales de LM Studio y Ollama.
+*   **IA y Modelos de Lenguaje**: APIs de Groq, Google Gemini, OpenAI, Anthropic; soporte para endpoints locales de LM Studio y Ollama.
 *   **Empaquetado (Descarga de Fuente)**: JSZip
 *   **Operaciones Git (Cliente)**: Simple-git (para subidas desde AutoUpdate)
 
@@ -84,199 +85,219 @@ CodeAlchemist está construido con Next.js (utilizando el App Router) y React pa
 
 ### 2. Configuración Inicial (Sección "Configuración")
 
-Es crucial configurar correctamente la aplicación antes de usar las funcionalidades de IA.
+Es crucial configurar correctamente la aplicación antes de usar las funcionalidades de IA y Git.
 
 *   **Configuración del Proveedor LLM**:
-    *   **Proveedor LLM**: Selecciona el servicio que deseas utilizar (Groq, OpenAI, Anthropic, LM Studio, Ollama).
-    *   **URL del Endpoint de API**: Para proveedores como LM Studio u Ollama, o si usas un proxy para OpenAI/Anthropic, introduce la URL base del endpoint (ej. `http://localhost:1234/v1` para LM Studio). Para Groq, OpenAI, Anthropic, este campo se rellena automáticamente con el valor por defecto, pero puedes sobrescribirlo.
-    *   **Clave API**: Si el proveedor seleccionado la requiere (ej. Groq, OpenAI, Anthropic), introduce tu clave API.
-    *   **Nombre del Modelo**: Selecciona uno de los modelos disponibles para el proveedor elegido. La lista se actualiza según el proveedor. Algunos modelos pueden requerir una clave API válida para ser listados o para funcionar.
-    *   Haz clic en **"Probar Conexión (Proveedor LLM)"** para verificar que tu configuración es correcta. Recibirás una notificación de éxito o un mensaje de error.
+    *   **Proveedor LLM**: Selecciona el servicio que deseas utilizar (Groq, Google Gemini, OpenAI, Anthropic, LM Studio, Ollama).
+    *   **URL del Endpoint de API**: Para proveedores como LM Studio u Ollama, o si usas un proxy, introduce la URL base del endpoint (ej. `http://localhost:1234/v1` para LM Studio). Para los demás, este campo se rellena automáticamente, pero puedes sobrescribirlo.
+    *   **Clave API**: Si el proveedor seleccionado la requiere, introduce tu clave API.
+    *   **Nombre del Modelo**: Selecciona uno de los modelos disponibles para el proveedor elegido. La lista se actualiza según el proveedor y la clave API.
+    *   Haz clic en **"Probar Conexión (Proveedor LLM)"** para verificar tu configuración.
 *   **Configuración de Git (Opcional, para AutoUpdate)**:
     *   **URL del Repositorio Git**: La URL HTTPS de tu repositorio (ej. `https://github.com/tu-usuario/tu-repo.git`).
-    *   **Nombre de Usuario Git**: Tu nombre de usuario de la plataforma Git (ej. GitHub, GitLab).
-    *   **Email de Git**: El email asociado a tus commits de Git.
-    *   **Token de Acceso Personal (PAT)**: Un PAT con permisos para escribir en el repositorio. NO uses tu contraseña.
-    *   Haz clic en **"Probar Conexión Git"** para verificar la autenticación y el acceso al repositorio.
-*   Haz clic en **"Guardar Configuración"**. Tus ajustes se guardarán en el `localStorage` de tu navegador.
+    *   **Nombre de Usuario Git**: Tu nombre de usuario de la plataforma Git.
+    *   **Email de Git**: El email asociado a tus commits.
+    *   **Token de Acceso Personal (PAT)**: Un PAT con permisos para escribir en el repositorio.
+    *   Haz clic en **"Probar Conexión Git"** para verificar la autenticación.
+*   Haz clic en **"Guardar Configuración"**.
 
 ### 3. Generar Código (Sección "Generar Código")
 
 Crea fragmentos de código a partir de descripciones.
 
-*   **Usar Configuración LLM De**: Elige si usar la configuración "Global" (definida en Ajustes) o la configuración de un "Agente IA" específico.
-*   **Describe tu necesidad**: Escribe un prompt detallado describiendo la función, clase o fragmento de código que necesitas (ej. "Una función en Python que reciba una lista de números y devuelva la suma de los pares.").
-*   Haz clic en **"Generar Código"**. Se te pedirá confirmación.
-*   Una vez confirmado, la IA procesará tu solicitud.
-*   **Resultados**:
-    *   **Explicación**: Una descripción del código generado.
-    *   **Fragmento de Código**: El código generado por la IA. Puedes copiarlo usando el botón respectivo.
+*   **Usar Configuración LLM De**: Elige si usar la configuración "Global", de un "Agente IA" específico, o de un "Grupo de Trabajo IA".
+*   **Describe tu necesidad**: Escribe un prompt detallado.
+*   Haz clic en **"Generar Código"** y confirma.
+*   **Resultados**: Verás una explicación y el fragmento de código generado, que puedes copiar.
 
 ### 4. Generar Proyecto (Sección "Generar Proyecto")
 
 Crea una estructura base para un nuevo proyecto.
 
 *   **Usar Configuración LLM De**: Selecciona la fuente de configuración LLM.
-*   **Describe tu proyecto**: Proporciona un prompt detallado sobre el tipo de proyecto, tecnologías, estructura de carpetas deseada y archivos iniciales (ej. "Un proyecto simple de API REST con Express.js y TypeScript. Incluir una ruta GET /health y una ruta POST /users. Configuración básica de ESLint y Prettier.").
+*   **Describe tu proyecto**: Proporciona un prompt detallado.
 *   Haz clic en **"Generar Proyecto"** y confirma.
-*   **Resultados**:
-    *   **Nombre del Proyecto (sugerido)**.
-    *   **Notas de la IA**: Comentarios o próximos pasos.
-    *   **Archivos Generados**: Una lista de archivos con sus rutas y contenido. Puedes expandir cada archivo para ver su contenido.
-    *   Haz clic en **"Descargar Proyecto (ZIP)"** para obtener la estructura generada.
+*   **Resultados**: Nombre sugerido, notas de la IA y una lista de archivos con su contenido. Puedes descargar el proyecto en ZIP.
 
-### 5. Analizar Código (Sección "Analizar Código")
+### 5. Refactorizar Proyecto (Sección "Refactorizar Proyecto")
 
-Obtén análisis y sugerencias para fragmentos o archivos.
+Obtén sugerencias de refactorización para un proyecto completo.
+
+*   **Usar Configuración LLM De**: Selecciona la fuente de configuración (Global, Agente especializado como "RefactorizadorCodigoExperto", o un Grupo que incluya al Refactorizador y al Orquestador).
+*   **Pestañas para Fuente del Proyecto**:
+    *   **Subir Archivo**: Sube un archivo `.zip`, `.json` o de texto plano (ej: `.py`, `.js`) que contenga el código del proyecto.
+    *   **Desde Repositorio Git**: Ingresa la URL de un repositorio Git (esta función para obtener el código de Git es actualmente simulada; se espera que el usuario suba el código).
+*   **Parámetros de Refactorización**:
+    *   **Metas (opcional)**: Describe los objetivos específicos de la refactorización (ej. "Mejorar el rendimiento de los componentes de UI", "Simplificar la lógica de negocio en los servicios").
+    *   **Prioridad General (opcional)**: Selecciona un enfoque general para las sugerencias (ej. "Priorizar Seguridad", "Priorizar Legibilidad").
+*   Haz clic en **"Analizar para Refactorizar"**.
+*   **Resultados y Sugerencias**:
+    *   Se mostrará una lista de sugerencias, cada una con:
+        *   **Área**: El archivo o componente afectado.
+        *   **Descripción**: La mejora propuesta.
+        *   **Prioridad**: Alta, Media o Baja.
+        *   **Snippet Sugerido (opcional)**: Un fragmento del código modificado.
+    *   **Acciones por Sugerencia**:
+        *   **Aplicar (Simulado)**: Marca la sugerencia como aplicada (la modificación real del archivo no está implementada en esta sección).
+        *   **Ver Diff (Simulado)**: Muestra una comparación simulada.
+        *   **Descartar**: Omite la sugerencia.
+    *   **Acción Masiva**:
+        *   **Aplicar Todas las Sugerencias (Simulado)**.
+*   **Logs de Ejecución**: Una ventana muestra logs detallados del proceso de análisis del grupo de trabajo si se seleccionó uno.
+
+### 6. Analizar Código (Sección "Analizar Código")
+
+Obtén análisis y sugerencias para fragmentos o archivos individuales.
 
 *   **Usar Configuración LLM De**: Selecciona la fuente de configuración LLM.
-*   **Sube un archivo de código (opcional)**: Haz clic para seleccionar un archivo de tu sistema. Su contenido se cargará en el área de texto.
-*   **Entrada de Código**: Pega tu código directamente o edita el contenido del archivo subido.
+*   **Sube un archivo de código (opcional)** o pega tu código directamente.
 *   Haz clic en **"Analizar Código"**.
-*   **Resultados**:
-    *   **Explicación**: Descripción de las mejoras sugeridas por la IA.
-    *   **Código Original**: Tu código de entrada.
-    *   **Código Sugerido**: La versión refactorizada propuesta por la IA.
-*   **Guardar Versiones**: Puedes guardar el "Código Original" y/o el "Código Sugerido" como snapshots haciendo clic en los botones **"Guardar Versión"**.
+*   **Resultados**: Verás una explicación, tu código original y el código sugerido.
+*   **Guardar Versiones**: Guarda el código original y/o sugerido como snapshots.
 
-### 6. Analizar Proyecto Completo (Sección "Analizar Proyecto")
+### 7. Analizar Proyecto Completo (Sección "Analizar Proyecto")
 
-Analiza proyectos enteros (actualmente, la parte de análisis de Git es simulada).
+Analiza proyectos enteros.
 
 *   **Usar Configuración LLM De**: Selecciona la fuente de configuración LLM.
-*   **Pestañas**:
-    *   **Subir Archivo (ZIP/JSON)**: Sube un archivo `.zip` o `.json` de tu proyecto.
-    *   **Desde Repositorio Git**: Ingresa la URL de un repositorio Git.
+*   **Pestañas**: "Subir Archivo (ZIP/JSON)" o "Desde Repositorio Git".
 *   Haz clic en **"Analizar Proyecto"**.
-*   *Nota: El análisis de Git es simulado y mostrará resultados de ejemplo. El análisis de ZIP también está en desarrollo y proveerá resultados basados en la capacidad actual del modelo.*
+*   *Nota: El análisis de Git es simulado. El análisis de ZIP/JSON proveerá resultados basados en la capacidad actual del modelo.*
 
-### 7. AutoUpdate (Sección "AutoUpdate")
+### 8. AutoUpdate (Sección "AutoUpdate")
 
 Permite que CodeAlchemist analice su propio código fuente.
 
-*   **Usar Configuración LLM De**: Selecciona la fuente de configuración LLM.
-*   **Preferencias de Análisis (Opcional)**: Introduce texto para guiar a la IA (ej. "mejorar rendimiento de componentes de UI", "revisar manejo de errores"). Si se selecciona un "Grupo", este texto se usará como la tarea principal para el grupo.
+*   **Usar Configuración LLM De**: Selecciona la fuente de configuración LLM (Global, Agente específico o Grupo de Trabajo).
+*   **Preferencias de Análisis (Opcional)**: Guía a la IA (ej. "mejorar rendimiento", "revisar manejo de errores"). Si se usa un Grupo, este es el input principal.
 *   Haz clic en **"Iniciar Auto-Análisis"**.
-    *   La aplicación recopila su código fuente (excluyendo `node_modules`, `.next`, etc.).
-    *   Si no se usa un grupo, el código se divide en fragmentos para respetar límites de tokens/TPM y evitar timeouts. Se muestra una barra de progreso.
-    *   Si se usa un grupo, la tarea (junto con las preferencias) se pasa al Orquestador del grupo.
-*   **Resultados**:
-    *   **Título del Análisis**.
-    *   **Áreas Identificadas**: Archivos o componentes clave.
-    *   **Sugerencias Detalladas**: Lista de sugerencias (área, descripción, prioridad, y a veces contenido de archivo sugerido).
-    *   **Evaluación General**.
-*   **Aplicar Sugerencias**: Para sugerencias con contenido de archivo completo:
-    *   Haz clic en **"Aplicar Sugerencia"** (o "Reintentar Aplicar" si falló).
-    *   Se mostrará un diálogo de confirmación con el contenido original y el sugerido.
-    *   Al confirmar, el archivo correspondiente en el sistema de CodeAlchemist **será modificado**. ¡Usa con precaución!
-*   **Descargar Código Fuente Completo**: Descarga un ZIP con el estado actual del código fuente de la aplicación (incluyendo cambios aplicados).
-*   **Subir a Git**: Si la configuración de Git está completa en "Ajustes", este botón subirá el estado actual del código fuente al repositorio configurado, creando un nuevo commit.
+    *   Recopila su código fuente (excluyendo `node_modules`, etc.).
+    *   Si no se usa un grupo, el código se divide en fragmentos. Se muestra una barra de progreso.
+    *   Si se usa un grupo, la tarea se pasa al Orquestador.
+*   **Resultados**: Título, áreas identificadas, sugerencias detalladas y evaluación general.
+*   **Aplicar Sugerencias**: Para sugerencias con contenido de archivo:
+    *   Haz clic en **"Aplicar Sugerencia"**. Confirma en el diálogo. El archivo **será modificado**.
+*   **Descargar Código Fuente Completo**: Descarga un ZIP o JSON con el estado actual del código.
+*   **Subir a Git**: Si configurado, sube el estado actual al repositorio Git.
 *   **Manejo de Errores y Auto-Fix**:
-    *   Si ocurre un error (ej. límite de API, error de Git), se mostrará.
-    *   Puedes copiar el mensaje de error.
-    *   Un botón **"Auto-Fix (Experimental)"** aparecerá, permitiendo que la IA intente analizar el error y proponer una solución. Se abrirá un diálogo con la propuesta de la IA. Para errores de Git, si la propuesta es aceptada, puede reintentar la subida. Para errores de análisis, puede reintentar el análisis.
-*   **Logs de Ejecución Detallados**:
-    *   Una ventana muestra logs detallados del proceso (cliente y servidor).
-    *   Botones para **Copiar Logs**, **Borrar Logs** y **Expandir/Contraer** la ventana de logs.
+    *   Errores se muestran y pueden copiarse.
+    *   Botón **"Auto-Fix (Experimental)"** para que la IA proponga soluciones.
+*   **Logs de Ejecución Detallados**: Ventana con logs, opciones para copiar, borrar y expandir/contraer.
 
-### 8. Versiones Guardadas (Sección "Versiones Guardadas")
+### 9. Versiones Guardadas (Sección "Versiones Guardadas")
 
 Gestiona snapshots de tu código.
 
-*   Muestra una lista de todas las versiones guardadas.
-*   **Acciones por versión**:
-    *   **Ver (👁️)**: Abre un diálogo para ver el código de la versión.
-    *   **Descargar (📥)**: Descarga el código de esa versión.
-    *   **Eliminar (🗑️)**: Elimina la versión.
-*   **Comparar Versiones**:
-    *   Selecciona una versión como **"A"** y otra como **"B"** usando los botones respectivos.
-    *   Se abrirá un diálogo mostrando las diferencias resaltadas entre los dos códigos.
-*   **Eliminar Todas**: Botón para borrar todas las versiones guardadas.
+*   Lista de versiones guardadas.
+*   **Acciones**: Ver, Descargar, Eliminar.
+*   **Comparar Versiones**: Selecciona A y B para ver diferencias.
+*   **Eliminar Todas**.
 
-### 9. Chat con IA (Sección "Chat con IA")
+### 10. Chat con IA (Sección "Chat con IA")
 
-Conversa directamente con un asistente IA.
+Conversa con un asistente IA.
 
 *   **Usar Configuración LLM De**: Selecciona la fuente de configuración LLM.
-*   Escribe tu mensaje en el área de texto y presiona Enter o el botón de enviar.
-*   El historial de chat se muestra arriba.
-*   Puedes borrar el chat actual.
+*   Escribe tu mensaje y envía. Historial visible. Opción de borrar chat.
 
-### 10. Gestión de Agentes IA (Sección "Agentes IA")
+### 11. Gestión de Agentes IA (Sección "Agentes IA")
 
 Crea y administra agentes IA personalizados.
 
-*   Muestra una lista de agentes creados.
-*   **Crear Agente**:
-    *   **Nombre, Descripción, Mensaje de Sistema (Prompt)**.
-    *   **Capacidades del Agente**:
-        *   **Acceso a Código Propio**: Permite leer el código fuente de la aplicación.
-        *   **Capacidad de Ejecución**: Permite ejecutar código (¡Peligroso!).
-        *   **Capacidad de Entorno Virtual**: Permite gestionar entornos virtuales.
-        *   **Capacidad Lectura/Escritura**: Permite leer/escribir archivos (¡Peligroso!).
-    *   **Configuración LLM del Agente**:
-        *   **Usar Configuración Global**: El agente usará los ajustes de la sección "Configuración".
-        *   **Configuración Personalizada**: Define un Proveedor, Modelo, Clave API (opcional, sobrescribe la global) y URL de API (opcional) específicos para este agente.
-*   **Acciones por Agente**:
-    *   **Probar (💬)**: Abre un chat modal para interactuar directamente con el agente usando su configuración.
-    *   **Exportar (📥)**: Descarga la configuración del agente en JSON.
-    *   **Editar (✏️)**.
-    *   **Eliminar (🗑️)**.
-*   **Importar/Exportar Todos**: Botones para importar un archivo JSON de agentes o exportar todos los agentes actuales.
+*   Lista de agentes. Exportar/Importar todos.
+*   **Crear Agente**: Nombre, descripción, mensaje de sistema, capacidades (acceso a código propio, ejecución, entorno virtual, lectura/escritura) y configuración LLM (global o personalizada).
+*   **Acciones por Agente**: Probar (chat modal), Exportar (JSON), Editar, Eliminar.
 
-### 11. Gestión de Grupos de Trabajo IA (Sección "Grupos de Trabajo IA")
+### 12. Gestión de Grupos de Trabajo IA (Sección "Grupos de Trabajo IA")
 
 Define equipos de agentes para tareas colaborativas.
 
-*   Muestra una lista de grupos creados.
-*   **Crear Grupo**:
-    *   **Nombre, Descripción, Tarea Principal del Grupo**.
-    *   **Agentes en el Grupo**: Selecciona los agentes participantes. El agente **`OrquestadorFlujoAgentes`** (o "Orquestador del Grupo") se añade automáticamente y no se puede quitar; es responsable de dirigir el flujo de trabajo.
-*   **Acciones por Grupo**:
-    *   **Ejecutar (▶️)**: Abre un modal de ejecución donde el Orquestador del Grupo comienza a procesar la tarea con los agentes seleccionados. Se muestra un log detallado de las interacciones, decisiones del orquestador y respuestas de los agentes. La ejecución tiene un número máximo de turnos.
-    *   **Editar (✏️)**.
-    *   **Eliminar (🗑️)**.
+*   Lista de grupos.
+*   **Crear Grupo**: Nombre, descripción, tarea principal. Selecciona agentes participantes (el `OrquestadorFlujoAgentes` es automático y obligatorio).
+*   **Acciones por Grupo**: Ejecutar (abre modal con log detallado de la ejecución del grupo), Editar, Eliminar.
 
 ## Flujo de Trabajo con IA
 
 ### Selección de Fuente de Configuración LLM
 
-En la mayoría de las secciones que interactúan con un LLM (Generar Código, Analizar Código, AutoUpdate, Chat, etc.), encontrarás un selector llamado **"Usar Configuración LLM De:"**. Este te permite elegir:
+En la mayoría de las secciones que interactúan con un LLM, encontrarás el selector **"Usar Configuración LLM De:"**. Opciones:
 
-1.  **Ajustes Globales**: Utiliza la configuración (proveedor, modelo, API key, URL) definida en la sección "Configuración".
-2.  **Agente: [Nombre del Agente]**: Utiliza la configuración LLM específica definida para ese agente en "Gestión de Agentes IA". Si el agente está configurado para usar "default", se recurrirá a los Ajustes Globales.
-3.  **Grupo: [Nombre del Grupo]** (En AutoUpdate, Generar Código, Generar Proyecto, Analizar Código, Analizar Proyecto): La tarea o prompt principal se pasa como objetivo al agente Orquestador del Grupo seleccionado. El Orquestador utilizará su propia configuración LLM para tomar decisiones y luego invocará a otros agentes del grupo, cada uno usando su respectiva configuración LLM.
+1.  **Ajustes Globales**: Usa la configuración de la sección "Configuración".
+2.  **Agente: [Nombre del Agente]**: Usa la configuración LLM del agente.
+3.  **Grupo: [Nombre del Grupo]**: La tarea/prompt principal se pasa al Orquestador del Grupo. Este usa su configuración LLM y coordina a los demás agentes, cada uno con su propia configuración.
 
 ### Agentes y Grupos de Trabajo
 
-*   **Agentes**: Son entidades IA con un rol (definido por su mensaje de sistema), capacidades y una configuración LLM. Actúan individualmente o como parte de un grupo.
-*   **Grupos de Trabajo**: Son equipos de agentes colaborando en una tarea común.
-    *   El **Orquestador del Grupo** (agente `OrquestadorFlujoAgentes`) es una pieza obligatoria y fundamental. Se encarga de recibir y gestionar todas las respuestas generadas dentro del grupo. En caso de que el usuario no haya realizado una propuesta explícita sobre el siguiente paso, el Orquestador decidirá a qué agente o subgrupo derivar la interacción. Todas las respuestas deben pasar obligatoriamente por el Orquestador para garantizar un flujo coordinado y la toma de decisiones centralizada.
-    *   La ejecución de un grupo es una secuencia de turnos. En cada turno, el Orquestador toma una decisión, y luego el agente seleccionado (si lo hay) responde. Esto continúa hasta que la tarea se considera completa o se alcanza el número máximo de turnos.
+*   **Agentes**: Entidades IA con rol, capacidades y configuración LLM.
+*   **Grupos de Trabajo**: Equipos de agentes.
+    *   El **OrquestadorFlujoAgentes** (Orquestador del Grupo) es obligatorio y central. Recibe y gestiona todas las respuestas. Decide el siguiente paso para un flujo coordinado.
+
+## Estructura de Carpetas y Archivos Clave
+
+*   `README.md`: Este archivo.
+*   `package.json`: Define las dependencias del proyecto y los scripts (ej. `npm run dev`).
+*   `next.config.ts`: Configuración específica de Next.js (ej. rutas de imágenes, manejo de errores de build).
+*   `tsconfig.json`: Configuración del compilador de TypeScript.
+*   `tailwind.config.ts`: Configuración de Tailwind CSS para los estilos.
+*   `src/app/globals.css`: Estilos globales y variables de tema para ShadCN UI (colores, fuentes).
+*   `src/app/layout.tsx`: El layout raíz de la aplicación, donde se define la estructura HTML base.
+*   `src/app/(app)/layout.tsx`: Layout para las páginas autenticadas o principales de la aplicación, incluye la `AppSidebar`.
+*   `src/app/(app)/[nombre_seccion]/page.tsx`: Componentes React que definen la interfaz de usuario para cada sección principal (ej. `dashboard`, `analyze`, `autoupdate`).
+*   `src/app/(app)/[nombre_seccion]/actions.ts`: Server Actions de Next.js que contienen la lógica del lado del servidor para las funcionalidades de cada sección (ej. llamadas a APIs LLM, manejo de archivos).
+*   `src/components/ui/`: Componentes de UI reutilizables de ShadCN (Button, Card, Input, etc.).
+*   `src/components/layout/`: Componentes estructurales de la UI (ej. `app-sidebar.tsx`).
+*   `src/components/[nombre_componente_especifico].tsx`: Componentes React personalizados y reutilizables para funcionalidades específicas (ej. `settings-form.tsx`, `version-snapshots.tsx`).
+*   `src/services/groq.ts`: Módulo central para interactuar con las APIs de los LLM. Aunque el nombre es "groq", ahora es genérico y maneja diferentes proveedores. Contiene funciones para `analyzeCode`, `generateCodeFromPrompt`, `analyzeProjectSourceChunk`, etc.
+*   `src/config/llm-config.ts`: Define los proveedores LLM soportados (Groq, OpenAI, Anthropic, LM Studio, Ollama, Google Gemini), sus URLs base, si requieren API Key, y los modelos disponibles para cada uno con sus características (TPM, tokens). También define claves para `localStorage`.
+*   `src/config/agent-config.ts`: Define constantes relacionadas con agentes y grupos, como las claves de `localStorage` y nombres de agentes especiales como `ORCHESTRATOR_AGENT_NAME`.
+*   `src/types/`: Contiene definiciones de tipos TypeScript (ej. `agent.ts` para `AgentConfig` y `WorkgroupConfig`, `snapshot.ts` para `CodeSnapshot`).
+*   `src/lib/llm-utils.ts`: Funciones de utilidad relacionadas con la configuración LLM, como `resolveLlmOptionsForSource` que determina qué configuración LLM usar basado en la selección del usuario (global, agente, o grupo).
+*   `src/hooks/`: Hooks personalizados de React (ej. `use-toast.ts` para notificaciones, `use-mobile.ts` para detectar dispositivos móviles).
 
 ## Manejo de Errores
 
 *   **Errores de API LLM**:
-    *   **Límites de Tokens/TPM (ej. 429 Too Many Requests, 413 Payload Too Large)**: CodeAlchemist implementa reintentos con backoff exponencial para errores 429. Para errores 413 (payload demasiado grande), especialmente en AutoUpdate, el código fuente se divide en fragmentos más pequeños antes de enviarlo a la IA.
-    *   **Timeouts**: Las llamadas a las APIs tienen timeouts configurados para evitar bloqueos indefinidos.
-*   **Copia de Errores**: Cuando se muestra un mensaje de error en la UI (ej. en AutoUpdate o Chat), generalmente hay un botón o la opción de copiar el mensaje de error para facilitar la depuración.
+    *   Límites de Tokens/TPM (ej. 429, 413): Reintentos con backoff exponencial para 429. Fragmentación de código en AutoUpdate para 413.
+    *   Timeouts: Configurados para evitar bloqueos.
+*   **Copia de Errores**: Botón para copiar mensajes de error.
 *   **Auto-Fix (Experimental)**:
-    *   En la sección **AutoUpdate**, si ocurre un error durante el análisis del código o durante una subida a Git, aparecerá un botón **"Auto-Fix"**.
-    *   Al hacer clic, la IA analizará el mensaje de error y el contexto, y propondrá una posible causa raíz y sugerencias de solución en un diálogo.
-    *   Para errores de Git, si la propuesta es aceptada (y tiene sentido), puede permitir reintentar la operación Git. Para errores de análisis, puede permitir reintentar el análisis.
-    *   Esta función es experimental y las soluciones propuestas deben ser revisadas cuidadosamente.
+    *   En AutoUpdate y Subida a Git, si ocurre un error, el botón "Auto-Fix" permite a la IA analizar el error y proponer una solución.
 
 ## Notas Importantes y Consideraciones
 
-*   **Sugerencias de IA**: El código y las sugerencias generadas por la IA son herramientas para asistir en el desarrollo. **Siempre revisa, comprende y prueba exhaustivamente los cambios propuestos antes de integrarlos en tu trabajo o aplicarlos directamente (como en AutoUpdate).**
-*   **API Limits & Timeouts**: Aunque CodeAlchemist intenta gestionar los límites, el uso intensivo puede llevar a errores temporales de las APIs LLM.
-    *   **Fragmentación en AutoUpdate**: Para el análisis del propio código, si el código fuente completo es demasiado grande, se divide en fragmentos de aproximadamente `MAX_CHARS_PER_CHUNK` (actualmente ~3500 caracteres). Cada fragmento se envía por separado, con un retraso (`INTER_CHUNK_PROCESSING_DELAY_MS`, actualmente 5 segundos) entre ellos para ayudar a gestionar los límites de TPM.
+*   **Sugerencias de IA**: Siempre revisa, comprende y prueba exhaustivamente los cambios propuestos por la IA.
+*   **API Limits & Timeouts**: El uso intensivo puede llevar a errores temporales.
+    *   **Fragmentación en AutoUpdate**: Para análisis del propio código, se divide en fragmentos (`MAX_CHARS_PER_CHUNK` ~3500 chars) con retraso entre ellos (`INTER_CHUNK_PROCESSING_DELAY_MS` ~5 segs).
 *   **Seguridad**:
-    *   **Aplicación de Cambios en AutoUpdate**: La función "Aplicar Sugerencia" **modifica directamente los archivos** en el sistema donde se ejecuta CodeAlchemist. Ten extrema precaución.
-    *   **Capacidades de Agente**: Habilitar "Capacidad de Ejecución" o "Capacidad Lectura/Escritura" para agentes IA es **potencialmente peligroso** y solo debe hacerse en entornos controlados y seguros, entendiendo los riesgos.
-*   **Costes de API**: El uso de APIs LLM (Groq, OpenAI, Anthropic) puede incurrir en costes según tu plan y volumen de uso. Monitoriza tu consumo en los paneles de control de los respectivos proveedores.
-*   **Privacidad**: El código que envías para análisis o generación se procesa en los servidores del proveedor LLM seleccionado (o localmente si usas LM Studio/Ollama). Revisa las políticas de privacidad de los proveedores si tienes preocupaciones sobre la confidencialidad.
-*   **Estado de Funcionalidades**: Algunas funcionalidades, como el análisis detallado de proyectos Git o la aplicación automática de todas las sugerencias de un grupo, pueden estar aún en desarrollo o ser simuladas. El README intentará reflejar el estado actual.
+    *   "Aplicar Sugerencia" en AutoUpdate modifica archivos directamente. Usa con precaución.
+    *   Capacidades de Agente (ejecución, lectura/escritura) son peligrosas. Habilita solo en entornos seguros.
+*   **Costes de API**: El uso de APIs LLM puede incurrir en costes.
+*   **Privacidad**: El código se procesa en servidores del proveedor LLM (o localmente). Revisa sus políticas.
+*   **Estado de Funcionalidades**: Algunas funciones (análisis detallado de Git, aplicación automática de sugerencias de grupo) pueden ser simuladas o estar en desarrollo.
+
+## Pruebas Unitarias (Conceptual)
+
+Aunque no se incluye código de pruebas en este entregable, un proyecto robusto como CodeAlchemist requeriría pruebas unitarias y de integración. Algunas áreas clave para probar serían:
+
+*   **Validación de Carga de Proyectos (Refactorizar Proyecto)**:
+    *   Asegurar que se aceptan ZIP, JSON y archivos de texto válidos.
+    *   Rechazar tipos de archivo no soportados.
+    *   Manejar límites de tamaño de archivo.
+*   **Flujo de Refactorización (Autogen/Agentes)**:
+    *   Verificar que el Orquestador recibe la tarea y la delega correctamente al agente "Refactorizador".
+    *   Asegurar que el "Refactorizador" procesa el código y genera sugerencias en el formato esperado.
+    *   Probar el flujo cuando un grupo de trabajo es seleccionado (Orquestador -> Refactorizador -> Validador -> Orquestador).
+    *   Verificar el manejo de errores si un agente falla.
+*   **Resolución de Configuración LLM (`llm-utils.ts`)**:
+    *   Probar `resolveLlmOptionsForSource` con diferentes escenarios (global, agente específico, agente con config "default", grupo de trabajo).
+    *   Asegurar que se seleccionan las claves API y modelos correctos.
+*   **Manejo de Errores Críticos**:
+    *   Simular respuestas de error de APIs LLM (ej. clave inválida, modelo no encontrado, rate limits) y verificar que la UI los muestra correctamente y que la funcionalidad de "Auto-Fix" se activa.
+    *   Probar errores de conexión Git.
+*   **Fragmentación de Código (AutoUpdate)**:
+    *   Verificar que `getApplicationSourceBundle` y `handleAutoAnalyzeAppSource` dividen correctamente el código en fragmentos según `MAX_CHARS_PER_CHUNK`.
+*   **Aplicación de Sugerencias (AutoUpdate)**:
+    *   Probar que `applySuggestedChange` modifica correctamente los archivos en el sistema de archivos (en un entorno de prueba controlado).
 
 ## Contribuciones
 
