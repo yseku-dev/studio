@@ -4,6 +4,7 @@
 import type { AgentConfig, AgentLLMConfig } from '@/types/agent';
 import { chatWithLLM, type LLMOptions, type ChatMessage, type ChatLLMPayload } from '@/services/groq';
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
+import { resolveLlmOptionsForSource } from '@/lib/llm-utils'; // Import the helper
 
 // --- Types for Server Action ---
 
@@ -239,3 +240,4 @@ declare module '@/services/groq' {
         name?: string; // Optional agent name
     }
 }
+

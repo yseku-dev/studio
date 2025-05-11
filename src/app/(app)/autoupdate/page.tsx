@@ -56,7 +56,7 @@ type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | 
 // Correctly extend the type of an element in the 'suggestions' array
 // The type ProjectAnalysisResponse['suggestions'][number] is equivalent to SuggestionItem
 interface SingleSuggestion extends SuggestionItem {
-  id?: string; // Add an optional id, which might not exist on the initial SuggestionItem
+  id?: string; // id might not exist initially, make it optional
   // Fields like 'area', 'suggestion', 'priority', 'suggestedFullFileContent'
   // are inherited from SuggestionItem and do not need to be re-declared here.
 }
@@ -189,7 +189,7 @@ export default function AutoUpdatePage() {
 
   const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
     const options = resolvedLlmOptions;
-    if (!options) {
+    if (!options && !selectedConfigSource.startsWith("workgroup:")) {
       toast({
         title: "Configuración LLM Incompleta",
         description: `La configuración LLM seleccionada (${getSourceName(selectedConfigSource)}) está incompleta. Revisa los Ajustes o la configuración del Agente/Grupo.`,
@@ -243,7 +243,7 @@ export default function AutoUpdatePage() {
             setStatus("error");
             setCurrentAnalysisError("Grupo de trabajo seleccionado no encontrado.");
         }
-    } else {
+    } else if (options) { // Ensure options exist for direct call
         addDetailedLog(`Estado cambiado a 'analyzing'. Llamando a handleAutoAnalyzeAppSource.`);
         setStatus("analyzing");
 
@@ -262,6 +262,15 @@ export default function AutoUpdatePage() {
         } else {
             handleAnalysisError(result.error);
         }
+    } else {
+        // This case should ideally not be reached if the initial check for options is correct
+        toast({
+            title: "Error de Configuración",
+            description: "No se pudieron resolver las opciones LLM para la fuente seleccionada.",
+            variant: "destructive",
+        });
+        setStatus("error");
+        setCurrentAnalysisError("No se pudieron resolver las opciones LLM.");
     }
   };
   
@@ -289,7 +298,7 @@ export default function AutoUpdatePage() {
         return;
     }
 
-    const orchestratorLlmOptions = resolveLlmOptionsForSource(orchestratorAgent.id, agents, workgroups);
+    const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestratorAgent.id}`, agents, workgroups);
     if (!orchestratorLlmOptions) {
         addWorkgroupLog({ type: 'error', message: `Configuración LLM inválida para Orquestrador (${orchestratorAgent.name})`});
         setCurrentAnalysisError(`Configuración LLM inválida para Orquestrador.`);
@@ -303,7 +312,7 @@ export default function AutoUpdatePage() {
         .filter(agent => agent !== undefined) as AgentConfig[];
 
     const participantAgentConfigs = participantAgentDetails.reduce((acc, agent) => {
-        const llmOptions = resolveLlmOptionsForSource(agent.id, agents, workgroups);
+        const llmOptions = resolveLlmOptionsForSource(`agent:${agent.id}`, agents, workgroups);
         if (llmOptions) {
             acc[agent.id] = {
                 id: agent.id, name: agent.name, systemMessage: agent.systemMessage,
@@ -666,10 +675,12 @@ export default function AutoUpdatePage() {
           </CardTitle>
           <CardDescription className="text-lg text-foreground">
             Analiza el código fuente de CodeAlchemist usando la configuración LLM seleccionada.
-            {!resolvedLlmOptions && selectedConfigSource ? (
+            {!resolvedLlmOptions && selectedConfigSource && !selectedConfigSource.startsWith("workgroup:") ? (
               <span className="text-destructive block mt-1"> (Configuración LLM para '{getSourceName(selectedConfigSource)}' incompleta)</span>
-            ) : resolvedLlmOptions ? (
+            ) : resolvedLlmOptions && !selectedConfigSource.startsWith("workgroup:") ? (
               <span className="text-foreground block mt-1">(Usando: {getSourceName(selectedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
+            ) : selectedConfigSource.startsWith("workgroup:") ? (
+                 <span className="text-foreground block mt-1">(Usando Grupo: {getSourceName(selectedConfigSource)})</span>
             ) : (
               <span className="text-muted-foreground block mt-1">(Selecciona fuente de configuración)</span>
             )}
@@ -686,7 +697,7 @@ export default function AutoUpdatePage() {
                 {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
               </SelectContent>
             </Select>
-            {!resolvedLlmOptions && selectedConfigSource && (
+            {!resolvedLlmOptions && selectedConfigSource && !selectedConfigSource.startsWith("workgroup:") && (
               <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(selectedConfigSource)}' incompleta. Revisa Ajustes, Agentes o Grupos.</p>
             )}
           </div>
@@ -701,7 +712,7 @@ export default function AutoUpdatePage() {
             <p className="text-xs text-muted-foreground">Describe qué tipo de actualizaciones o áreas te gustaría que la IA priorizara.</p>
           </div>
           <div className="flex flex-wrap gap-4">
-            <Button onClick={() => handleStartAutoAnalysis(false)} disabled={isProcessing || !resolvedLlmOptions} className="text-base py-3 px-6">
+            <Button onClick={() => handleStartAutoAnalysis(false)} disabled={isProcessing || (!resolvedLlmOptions && !selectedConfigSource.startsWith("workgroup:"))} className="text-base py-3 px-6">
               {status === "analyzing" || status === "loading_source" || status === "processing_workgroup_turn" ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Sparkles className="mr-2 h-5 w-5" />}
               Iniciar Auto-Análisis
             </Button>
