@@ -162,7 +162,21 @@ export default function AutoUpdatePage() {
   }, []);
 
   useEffect(() => {
-    const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups);
+    const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups, {
+      [LOCALSTORAGE_PROVIDER_ID_KEY]: typeof window !== 'undefined' ? localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null : null,
+      apiKeys: LLM_PROVIDERS.reduce((acc, p) => {
+        acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(getLocalStorageApiKeyName(p.id)) : null;
+        return acc;
+      }, {} as LocalStorageSnapshot['apiKeys']),
+      modelNames: LLM_PROVIDERS.reduce((acc, p) => {
+        acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(getLocalStorageModelName(p.id)) : null;
+        return acc;
+      }, {} as LocalStorageSnapshot['modelNames']),
+      apiUrls: LLM_PROVIDERS.reduce((acc, p) => {
+        acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(`codealchemist_apiurl_${p.id}`) : null;
+        return acc;
+      }, {} as LocalStorageSnapshot['apiUrls']),
+    });
     setResolvedLlmOptions(options);
   }, [selectedConfigSource, agents, workgroups]);
 
@@ -365,7 +379,7 @@ export default function AutoUpdatePage() {
         setCurrentAnalysisError(errorMsg);
         setStatus("error");
     }
-  }, [addWorkgroupLog, agents, workgroups, processAnalysisResult, status, setWorkgroupConversationHistory]); 
+  }, [addWorkgroupLog, agents, workgroups, processAnalysisResult, status]); 
 
   const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
     const options = resolvedLlmOptions;
@@ -590,10 +604,10 @@ export default function AutoUpdatePage() {
     const bundleResult = await getApplicationSourceBundle(false);
     addServerLogs(bundleResult.logsBuilt);
 
-    let filesToProcess = projectFiles;
+    let filesToProcess: AppSourceFile[] = [];
     if (bundleResult.success && bundleResult.files) {
       filesToProcess = bundleResult.files;
-      setProjectFiles(filesToProcess);
+      // setProjectFiles(filesToProcess); // No need to set projectFiles here, it's just for download
       addDetailedLog(`Paquete de código fuente más reciente obtenido con ${filesToProcess.length} archivos.`, true);
     } else {
       toast({ title: "Error al Obtener Código", description: bundleResult.error || "No se pudo obtener el código fuente actualizado.", variant: "destructive" });
@@ -759,13 +773,13 @@ export default function AutoUpdatePage() {
               {isProcessing && (status === "analyzing" || status === "loading_source" || status === "chunking_source" || status === "processing_workgroup_turn") ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Sparkles className="mr-2 h-5 w-5" />}
               Iniciar Auto-Análisis
             </Button>
-            <Button onClick={() => handleDownloadSource('zip')} disabled={isDownloading || projectFiles.length === 0 || isProcessing} variant="outline" className="text-base py-3 px-6 text-foreground">
+            <Button onClick={() => handleDownloadSource('zip')} disabled={isDownloading} variant="outline" className="text-base py-3 px-6 text-foreground">
               {isDownloading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <DownloadCloud className="mr-2 h-5 w-5" />} Descargar Código (ZIP)
             </Button>
-             <Button onClick={() => handleDownloadSource('json')} disabled={isDownloading || projectFiles.length === 0 || isProcessing} variant="outline" className="text-base py-3 px-6 text-foreground">
+             <Button onClick={() => handleDownloadSource('json')} disabled={isDownloading} variant="outline" className="text-base py-3 px-6 text-foreground">
               {isDownloading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <DownloadCloud className="mr-2 h-5 w-5" />} Descargar Código (JSON)
             </Button>
-            <Button onClick={handleInitialGitUpload} disabled={!isGitConfigured || projectFiles.length === 0 || isProcessing} variant="outline" className="text-base py-3 px-6 text-foreground"
+            <Button onClick={handleInitialGitUpload} disabled={!isGitConfigured || isProcessing} variant="outline" className="text-base py-3 px-6 text-foreground"
               title={!isGitConfigured ? "Configura Git en Ajustes." : "Subir código a Git"}>
               {status === "uploading_git" ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <GitFork className="mr-2 h-5 w-5" />} Subir a Git
             </Button>
