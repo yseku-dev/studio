@@ -26,7 +26,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"; // Import AlertDialog components
 import { useToast } from '@/hooks/use-toast';
-import { PlusCircle, Users2, Edit2, Trash2, Wand2, UploadCloud, DownloadCloud, MessageSquare, Code, Terminal, FolderGit2, FileCode } from 'lucide-react';
+import { PlusCircle, Users2, Edit2, Trash2, Wand2, UploadCloud, DownloadCloud, MessageSquare, Code, Terminal, FolderGit2, FileCode, ShieldCheck } from 'lucide-react';
 import type { AgentConfig, AgentLLMConfig, AgentSpecificLLMConfig, WorkgroupConfig } from '@/types/agent';
 import { LLM_PROVIDERS, MODELS_BY_PROVIDER, DEFAULT_LLM_PROVIDER, type LLMProviderId, getLocalStorageApiKeyName, getLocalStorageModelName, LOCALSTORAGE_PROVIDER_ID_KEY as GLOBAL_PROVIDER_ID_KEY } from '@/config/llm-config';
 import { AgentTestChatModal } from '@/components/agent-test-chat-modal'; // Import the new component
@@ -73,17 +73,27 @@ const defaultAgents: Omit<AgentConfig, 'id'>[] = [
   { name: "RepresentanteUsuario", description: "Proporciona feedback desde la perspectiva del usuario final.", systemMessage: "Eres el Representante del Usuario. Tu perspectiva es crucial. Proporciona feedback sobre las funcionalidades desarrolladas y valida que el producto cumple con las expectativas.", llmConfig: 'default' },
   {
     name: ORCHESTRATOR_AGENT_NAME,
-    description: "Agente central obligatorio en cada Grupo de Trabajo. Gestiona el flujo de interacciones, recibe todas las respuestas y decide qué agente actúa a continuación para garantizar un proceso coordinado y la toma de decisiones centralizada.",
-    systemMessage: "Eres el Orquestador del Grupo de Trabajo. Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti. Tu objetivo es asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realizas la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso.",
+    description: "Agente central obligatorio en cada Grupo de Trabajo. Gestiona el flujo de interacciones, recibe todas las respuestas y decide qué agente actúa a continuación para garantizar un proceso coordinado y la toma de decisiones centralizada. Limita los turnos a 10 por defecto.",
+    systemMessage: "Eres el Orquestador del Grupo de Trabajo. Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti. Tu objetivo es asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realizas la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso. Si el usuario no propone un paso, prioriza agentes con capacidades relevantes para la tarea actual (ej. 'RefactorizadorCodigoExperto' para mejoras de código).",
     llmConfig: 'default'
   },
   {
     name: REFACTOR_AGENT_NAME,
-    description: "Analiza código y propone refactorizaciones para mejorar calidad, rendimiento o legibilidad.",
-    systemMessage: `Eres un agente experto en refactorización de código. Analiza el proyecto o fragmento de código proporcionado. Considera las metas y prioridades de refactorización especificadas. Genera una lista de sugerencias de refactorización. Para cada sugerencia, indica el archivo/área, una descripción clara de la mejora, una prioridad (Alta, Media, o Baja) y, si es aplicable, un fragmento del código modificado. Tu respuesta DEBE ser un objeto JSON con la clave "refactoringSuggestions", que es un array de objetos, cada uno con "area", "description", "priority", y opcionalmente "suggestedSnippet".`,
+    description: "Analiza código y propone refactorizaciones para mejorar calidad, rendimiento o legibilidad, priorizando estándares como SOLID y Clean Code.",
+    systemMessage: `Eres un experto en refactorización de código. Prioriza estándares como SOLID y Clean Code. Analiza el proyecto o fragmento de código proporcionado. Considera las metas y prioridades de refactorización especificadas. Genera una lista de sugerencias de refactorización. Para cada sugerencia, indica el archivo/área, una descripción clara de la mejora, una prioridad (Alta, Media, o Baja) y, si es aplicable, un fragmento del código modificado. Tu respuesta DEBE ser un objeto JSON con la clave "refactoringSuggestions", que es un array de objetos, cada uno con "area", "description", "priority", y opcionalmente "suggestedSnippet".`,
     llmConfig: 'default',
-    selfCodeAccess: true, // Puede necesitar acceso para leer el código del proyecto
+    selfCodeAccess: true,
+    executionCapability: true, // Para ejecutar linters, etc.
     readWriteCapability: false, // Por defecto no escribe, solo sugiere.
+  },
+  {
+    name: "ValidadorCodigo",
+    description: "Analiza resultados de refactorización para detectar errores y asegurar la calidad del código, por ejemplo, ejecutando linters o tests.",
+    systemMessage: "Eres un Validador de Código. Tu tarea es analizar el código proporcionado o modificado para detectar errores de sintaxis, violaciones de estilo, y asegurar que las pruebas (si existen) pasen. Puedes usar herramientas como linters (ej. ESLint) o ejecutar scripts de prueba. Informa sobre cualquier problema encontrado.",
+    llmConfig: 'default',
+    selfCodeAccess: true,
+    executionCapability: true, // Para ejecutar linters, tests.
+    readWriteCapability: false,
   }
 ];
 
@@ -147,7 +157,6 @@ export default function AgentsPage() {
     const initialAgents = defaultAgents.map(agent => ({
         ...agent,
         id: crypto.randomUUID(),
-        // Set default values for new flags
         selfCodeAccess: agent.selfCodeAccess ?? false,
         executionCapability: agent.executionCapability ?? false,
         virtualEnvCapability: agent.virtualEnvCapability ?? false,
@@ -163,8 +172,7 @@ export default function AgentsPage() {
       const modelNames = Object.keys(models).sort((a,b) => (models[b].tpm || 0) - (models[a].tpm || 0) || a.localeCompare(b));
       setAvailableCustomModels(modelNames);
       if (modelNames.length > 0 && !watch('customModelName')) {
-        // Only set default if no model is currently selected for custom config
-        setValue('customModelName', modelNames[0], { shouldDirty: !!editingAgent }); // Mark dirty if editing
+        setValue('customModelName', modelNames[0], { shouldDirty: !!editingAgent }); 
       }
     } else {
       setAvailableCustomModels([]);
@@ -183,7 +191,6 @@ export default function AgentsPage() {
         customModelName: agent.llmConfig !== 'default' ? agent.llmConfig.modelName : undefined,
         customApiKey: agent.llmConfig !== 'default' ? agent.llmConfig.apiKey || '' : '',
         customApiUrl: agent.llmConfig !== 'default' ? agent.llmConfig.apiUrl || '' : '',
-        // --- Set capability flags ---
         selfCodeAccess: agent.selfCodeAccess ?? false,
         executionCapability: agent.executionCapability ?? false,
         virtualEnvCapability: agent.virtualEnvCapability ?? false,
@@ -200,7 +207,6 @@ export default function AgentsPage() {
         customModelName: undefined,
         customApiKey: '',
         customApiUrl: '',
-        // --- Reset capability flags ---
         selfCodeAccess: false,
         executionCapability: false,
         virtualEnvCapability: false,
@@ -217,8 +223,8 @@ export default function AgentsPage() {
       llmConfigToSave = {
         providerId: data.customProviderId,
         modelName: data.customModelName,
-        apiKey: data.customApiKey || null, // Store empty string as null
-        apiUrl: data.customApiUrl || provider?.apiUrl || null, // Store empty string as null or use provider default
+        apiKey: data.customApiKey || null, 
+        apiUrl: data.customApiUrl || provider?.apiUrl || null, 
       };
     }
 
@@ -228,7 +234,6 @@ export default function AgentsPage() {
       description: data.description,
       systemMessage: data.systemMessage,
       llmConfig: llmConfigToSave,
-      // --- Save capability flags ---
       selfCodeAccess: data.selfCodeAccess ?? false,
       executionCapability: data.executionCapability ?? false,
       virtualEnvCapability: data.virtualEnvCapability ?? false,
@@ -251,7 +256,6 @@ export default function AgentsPage() {
     const agentToDelete = agents.find(a => a.id === agentId);
     if (!agentToDelete) return;
 
-    // Prevent deletion of the main Orchestrator agent if it's the one defined by ORCHESTRATOR_AGENT_NAME
     if (agentToDelete.name === ORCHESTRATOR_AGENT_NAME) {
       toast({
         title: 'Eliminación Denegada',
@@ -265,7 +269,6 @@ export default function AgentsPage() {
     setAgents(updatedAgents);
     localStorage.setItem(LOCALSTORAGE_AGENTS_KEY, JSON.stringify(updatedAgents));
 
-    // Update workgroups: Remove the deleted agentId from all workgroups
     const storedWorkgroupsRaw = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
     if (storedWorkgroupsRaw) {
       try {
@@ -273,12 +276,7 @@ export default function AgentsPage() {
         const newWorkgroups = currentWorkgroups.map(wg => ({
           ...wg,
           agentIds: wg.agentIds.filter(id => id !== agentId)
-        })).filter(wg => {
-          // Optionally, further filter workgroups if they become invalid (e.g., no agents left)
-          // For now, just remove the specific agent.
-          // The orchestrator check is primarily handled by resolveLlmOptionsForSource
-          return true;
-        });
+        }));
         localStorage.setItem(LOCALSTORAGE_WORKGROUPS_KEY, JSON.stringify(newWorkgroups));
       } catch (e) {
         console.error("Error updating workgroups in localStorage after agent deletion:", e);
@@ -290,8 +288,7 @@ export default function AgentsPage() {
 
   const handleTestAgent = (agent: AgentConfig) => {
     let options: LLMOptions | null = null;
-    let providerConfig = null;
-
+    
     const localStorageSnapshot: LocalStorageSnapshot = {
       [GLOBAL_PROVIDER_ID_KEY]: localStorage.getItem(GLOBAL_PROVIDER_ID_KEY) as LLMProviderId | null,
       apiKeys: {},
@@ -340,7 +337,6 @@ export default function AgentsPage() {
         customModelName: undefined,
         customApiKey: '',
         customApiUrl: '',
-        // --- Reset capability flags ---
         selfCodeAccess: false,
         executionCapability: false,
         virtualEnvCapability: false,
@@ -396,22 +392,19 @@ export default function AgentsPage() {
         const text = e.target?.result as string;
         const importedData = JSON.parse(text);
 
-        // Validate if it's an array (for multiple agents) or a single agent object
         let agentsToImport: AgentConfig[];
         if (Array.isArray(importedData)) {
-          agentsToImport = importedData as AgentConfig[]; // Add more validation here if needed
+          agentsToImport = importedData as AgentConfig[]; 
         } else if (typeof importedData === 'object' && importedData !== null && 'id' in importedData && 'name' in importedData) {
           agentsToImport = [importedData as AgentConfig];
         } else {
           throw new Error("El archivo JSON no contiene un agente o una lista de agentes válidos.");
         }
 
-        // Basic validation for each agent (can be enhanced with Zod)
         agentsToImport.forEach(agent => {
           if (!agent.id || !agent.name || !agent.systemMessage) {
             throw new Error(`Agente importado inválido: falta id, name o systemMessage. Agente: ${JSON.stringify(agent).substring(0,100)}`);
           }
-          // Ensure new capability flags have default values if missing from import
           agent.selfCodeAccess = agent.selfCodeAccess ?? false;
           agent.executionCapability = agent.executionCapability ?? false;
           agent.virtualEnvCapability = agent.virtualEnvCapability ?? false;
@@ -425,10 +418,10 @@ export default function AgentsPage() {
         agentsToImport.forEach(importedAgent => {
           const existingIndex = updatedAgents.findIndex(a => a.id === importedAgent.id);
           if (existingIndex > -1) {
-            updatedAgents[existingIndex] = importedAgent; // Update existing
+            updatedAgents[existingIndex] = importedAgent; 
             updatedAgentsCount++;
           } else {
-            updatedAgents.push({...importedAgent, id: importedAgent.id || crypto.randomUUID()}); // Add new
+            updatedAgents.push({...importedAgent, id: importedAgent.id || crypto.randomUUID()}); 
             newAgentsCount++;
           }
         });
@@ -441,7 +434,6 @@ export default function AgentsPage() {
         console.error("Error importing agents:", error);
         toast({ title: "Error de Importación", description: `No se pudo importar el archivo. ${error instanceof Error ? error.message : "Formato inválido."}`, variant: "destructive" });
       } finally {
-        // Reset file input
         if (importFileRef.current) {
           importFileRef.current.value = "";
         }
@@ -462,7 +454,8 @@ export default function AgentsPage() {
                   Gestión de Agentes IA
                 </CardTitle>
                 <CardDescription className="mt-1 text-muted-foreground">
-                  Crea, administra, prueba, importa y exporta tus agentes de IA para grupos de trabajo.
+                  Crea, administra, prueba, importa y exporta tus agentes de IA.
+                  Los agentes pueden ser configurados con capacidades específicas y asignados a grupos de trabajo.
                 </CardDescription>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
@@ -490,8 +483,8 @@ export default function AgentsPage() {
               {agents.length === 0 ? (
                 <p className="text-muted-foreground text-center py-12">No hay agentes creados. ¡Empieza creando uno o importa agentes existentes!</p>
               ) : (
-                <ScrollArea className="h-[calc(100vh-20rem)] lg:h-[calc(100vh-18rem)]"> {/* Adjusted height */}
-                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"> {/* Adjust grid columns */}
+                <ScrollArea className="h-[calc(100vh-20rem)] lg:h-[calc(100vh-18rem)]"> 
+                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"> 
                     {agents.map(agent => (
                       <Card key={agent.id} className="flex flex-col bg-card hover:shadow-md transition-shadow duration-200">
                         <CardHeader className="pb-3">
@@ -563,8 +556,7 @@ export default function AgentsPage() {
             </CardContent>
           </Card>
 
-          {/* Agent Creation/Editing Form Dialog */}
-          <DialogContent className="sm:max-w-3xl"> {/* Adjusted max-width */}
+          <DialogContent className="sm:max-w-3xl"> 
             <DialogHeader>
               <DialogTitle>{editingAgent ? 'Editar Agente' : 'Crear Nuevo Agente'}</DialogTitle>
               <DialogDescription>
@@ -574,7 +566,6 @@ export default function AgentsPage() {
             <form id="agent-form-id" onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
               <ScrollArea className="max-h-[70vh] p-1 -mx-1 pr-4">
                 <div className="space-y-4 px-1">
-                  {/* --- Basic Info --- */}
                   <div>
                     <Label htmlFor="name">Nombre del Agente</Label>
                     <Input id="name" {...register('name')} placeholder="Ej: Planificador, Programador" disabled={editingAgent?.name === ORCHESTRATOR_AGENT_NAME} />
@@ -592,7 +583,6 @@ export default function AgentsPage() {
                     {errors.systemMessage && <p className="text-sm text-destructive mt-1">{errors.systemMessage.message}</p>}
                   </div>
 
-                   {/* --- Capabilities --- */}
                    <div className="space-y-3 rounded-md border p-4 bg-muted/30">
                         <Label className="text-base font-medium text-foreground">Capacidades del Agente</Label>
                         <p className="text-xs text-muted-foreground">Habilita permisos específicos para el agente. ¡Ten cuidado con las capacidades de ejecución y escritura!</p>
@@ -644,7 +634,6 @@ export default function AgentsPage() {
                    </div>
 
 
-                  {/* --- LLM Configuration --- */}
                   <div className="space-y-2 rounded-md border p-4 bg-muted/30">
                       <Label className="text-base font-medium text-foreground">Configuración LLM del Agente</Label>
                       <Controller
@@ -735,7 +724,6 @@ export default function AgentsPage() {
                 <DialogClose asChild>
                   <Button type="button" variant="outline">Cancelar</Button>
                 </DialogClose>
-                {/* Submit button uses form attribute to link to the form inside ScrollArea */}
                 <Button type="submit" form="agent-form-id" disabled={editingAgent?.name === ORCHESTRATOR_AGENT_NAME && (dirtyFields.name || dirtyFields.llmConfigType || dirtyFields.customProviderId || dirtyFields.customModelName || dirtyFields.customApiKey || dirtyFields.customApiUrl)}>
                   <Wand2 className="mr-2 h-4 w-4" />
                   {editingAgent ? 'Guardar Cambios' : 'Crear Agente'}
@@ -745,7 +733,6 @@ export default function AgentsPage() {
         </div>
       </Dialog>
 
-      {/* Test Agent Chat Modal */}
       {testingAgent && resolvedLlmOptions && (
         <AgentTestChatModal
           isOpen={isTestModalOpen}
@@ -755,9 +742,10 @@ export default function AgentsPage() {
             setResolvedLlmOptions(null);
           }}
           agent={testingAgent}
-          llmOptions={resolvedLlmOptions} // Pass resolved options
+          llmOptions={resolvedLlmOptions}
         />
       )}
     </>
   );
 }
+

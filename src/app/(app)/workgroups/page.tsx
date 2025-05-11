@@ -1,8 +1,7 @@
-
 // src/app/(app)/workgroups/page.tsx
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react'; // Added useCallback
+import { useState, useEffect, useMemo, useCallback } from 'react'; 
 import { useForm, SubmitHandler, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -15,7 +14,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger, DialogClose } from '@/components/ui/dialog';
 import { Checkbox } from "@/components/ui/checkbox";
 import { useToast } from '@/hooks/use-toast';
-import { PlusCircle, Workflow, Edit2, Trash2, Play, Users2, Lock } from 'lucide-react';
+import { PlusCircle, Workflow, Edit2, Trash2, Play, Users2, Lock, Code, Terminal, FolderGit2, FileCode, ShieldCheck } from 'lucide-react';
 import type { WorkgroupConfig, AgentConfig } from '@/types/agent';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -30,23 +29,26 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { WorkgroupExecutionModal } from '@/components/workgroup-execution-modal';
-import { LOCALSTORAGE_WORKGROUPS_KEY, LOCALSTORAGE_AGENTS_KEY, ORCHESTRATOR_AGENT_NAME } from '@/config/agent-config';
+import { LOCALSTORAGE_WORKGROUPS_KEY, LOCALSTORAGE_AGENTS_KEY, ORCHESTRATOR_AGENT_NAME, REFACTOR_AGENT_NAME } from '@/config/agent-config';
 
 const defaultWorkgroup: Omit<WorkgroupConfig, 'id' | 'agentIds'> & { agentNames: string[] } = {
   name: "EquipoDesarrolloSoftware",
   description: "Un equipo multidisciplinario capaz de abordar diversas tareas de desarrollo de software, gestionado por un Orquestador. Este grupo simula un ciclo de vida de desarrollo completo.",
-  task: `Este grupo de trabajo se comporta como un equipo de producción de software completo. Dada una descripción de proyecto o una necesidad funcional, el Orquestador coordinará a los agentes especializados (JefeDeProducto, ArquitectoSoftware, DesarrolladorSoftware, IngenieroPruebas, IngenieroDevOps, RepresentanteUsuario) para: 
+  task: `Este grupo de trabajo se comporta como un equipo de producción de software completo. Dada una descripción de proyecto o una necesidad funcional, el Orquestador coordinará a los agentes especializados (JefeDeProducto, ArquitectoSoftware, DesarrolladorSoftware, ${REFACTOR_AGENT_NAME}, ValidadorCodigo, IngenieroPruebas, IngenieroDevOps, RepresentanteUsuario) para: 
 1. Definir requisitos y alcance del proyecto.
 2. Diseñar la arquitectura técnica de la solución.
-3. Implementar el código fuente necesario.
-4. Asegurar la calidad del software mediante pruebas exhaustivas.
-5. Preparar el entorno para el despliegue y gestionar la infraestructura si es pertinente.
-6. Validar la solución desde la perspectiva del usuario final.
+3. Implementar el código fuente necesario y proponer refactorizaciones.
+4. Validar la calidad y corrección del código.
+5. Asegurar la calidad del software mediante pruebas exhaustivas.
+6. Preparar el entorno para el despliegue y gestionar la infraestructura si es pertinente.
+7. Validar la solución desde la perspectiva del usuario final.
 El objetivo es entregar una solución funcional, un análisis detallado, o cualquier artefacto de software solicitado, basado en la entrada inicial.`,
   agentNames: [
     "JefeDeProducto",
     "ArquitectoSoftware",
     "DesarrolladorSoftware",
+    REFACTOR_AGENT_NAME,
+    "ValidadorCodigo",
     "IngenieroPruebas",
     "IngenieroDevOps",
     "RepresentanteUsuario",
@@ -110,7 +112,7 @@ export default function WorkgroupsPage() {
             console.error("Error parsing stored workgroups:", e);
             localStorage.removeItem(LOCALSTORAGE_WORKGROUPS_KEY); 
             setWorkgroups([]);
-            initializeDefaultWorkgroup(agentsList); // Pass agentsList here
+            initializeDefaultWorkgroup(agentsList); 
        }
     } else if (agentsList.length > 0) {
       initializeDefaultWorkgroup(agentsList);
@@ -131,7 +133,7 @@ export default function WorkgroupsPage() {
         name: defaultWorkgroup.name,
         description: defaultWorkgroup.description,
         task: defaultWorkgroup.task,
-        agentIds: Array.from(new Set([orchestrator.id, ...defaultAgentIds])), // Ensure orchestrator is unique
+        agentIds: Array.from(new Set([orchestrator.id, ...defaultAgentIds])), 
       };
       setWorkgroups([initialWorkgroup]);
       localStorage.setItem(LOCALSTORAGE_WORKGROUPS_KEY, JSON.stringify([initialWorkgroup]));
@@ -215,8 +217,17 @@ export default function WorkgroupsPage() {
     setIsExecutionModalOpen(true);
   };
 
-  const getAgentNameById = (agentId: string): string => {
-    return availableAgents.find(a => a.id === agentId)?.name || 'Agente Desconocido';
+  const getAgentDisplayInfo = (agentId: string): { name: string; capabilities: AgentConfig['capabilities'] } => {
+    const agent = availableAgents.find(a => a.id === agentId);
+    return {
+        name: agent?.name || 'Agente Desconocido',
+        capabilities: {
+            selfCodeAccess: agent?.selfCodeAccess ?? false,
+            executionCapability: agent?.executionCapability ?? false,
+            virtualEnvCapability: agent?.virtualEnvCapability ?? false,
+            readWriteCapability: agent?.readWriteCapability ?? false,
+        }
+    };
   }
 
   const handleDialogVisibilityChange = (open: boolean) => {
@@ -361,12 +372,12 @@ export default function WorkgroupsPage() {
                            <h4 className="text-sm font-semibold mb-1 text-foreground">Agentes ({wg.agentIds.length}):</h4>
                            <div className="flex flex-wrap gap-1">
                              {wg.agentIds.map(id => {
-                                const agentName = getAgentNameById(id);
-                                const isOrchestrator = agentName === ORCHESTRATOR_AGENT_NAME;
+                                const agentInfo = getAgentDisplayInfo(id);
+                                const isOrchestrator = agentInfo.name === ORCHESTRATOR_AGENT_NAME;
                                 return (
                                     <Badge key={id} variant={isOrchestrator ? "default" : "secondary"} className={isOrchestrator ? "bg-accent text-accent-foreground" : ""}>
                                         {isOrchestrator && <Lock className="mr-1 h-3 w-3"/>}
-                                        {agentName}
+                                        {agentInfo.name}
                                     </Badge>
                                 );
                              })}
