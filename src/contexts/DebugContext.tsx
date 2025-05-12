@@ -15,6 +15,8 @@ export interface DebugLogEntry {
 interface DebugContextType {
   isDebugModeActive: boolean;
   setIsDebugModeActive: (isActive: boolean) => void;
+  isLogWindowExpanded: boolean; // New state
+  setIsLogWindowExpanded: (isExpanded: boolean) => void; // New setter
   debugLogs: DebugLogEntry[];
   addDebugLog: (log: Omit<DebugLogEntry, 'timestamp'>) => void;
   clearDebugLogs: () => void;
@@ -31,9 +33,11 @@ export const useDebug = (): DebugContextType => {
 };
 
 const LOCALSTORAGE_DEBUG_MODE_KEY = 'codealchemist_debug_mode_active';
+const LOCALSTORAGE_DEBUG_EXPANDED_KEY = 'codealchemist_debug_expanded';
 
 export const DebugProvider = ({ children }: { children: ReactNode }) => {
   const [isDebugModeActive, setIsDebugModeActiveState] = useState<boolean>(false);
+  const [isLogWindowExpanded, setIsLogWindowExpandedState] = useState<boolean>(false); // New state
   const [debugLogs, setDebugLogs] = useState<DebugLogEntry[]>([]);
 
   useEffect(() => {
@@ -41,21 +45,30 @@ export const DebugProvider = ({ children }: { children: ReactNode }) => {
     if (storedDebugMode) {
       setIsDebugModeActiveState(JSON.parse(storedDebugMode));
     }
+    const storedDebugExpanded = localStorage.getItem(LOCALSTORAGE_DEBUG_EXPANDED_KEY);
+    if (storedDebugExpanded) {
+      setIsLogWindowExpandedState(JSON.parse(storedDebugExpanded));
+    }
   }, []);
 
   const setIsDebugModeActive = useCallback((isActive: boolean) => {
     setIsDebugModeActiveState(isActive);
     localStorage.setItem(LOCALSTORAGE_DEBUG_MODE_KEY, JSON.stringify(isActive));
     if (!isActive) {
-      // Optionally clear logs when debug mode is deactivated
-      // setDebugLogs([]); 
+      // Optionally clear logs or collapse window when debug mode is deactivated
+      setIsLogWindowExpandedState(false); 
+      localStorage.setItem(LOCALSTORAGE_DEBUG_EXPANDED_KEY, JSON.stringify(false));
     }
+  }, []);
+
+  const setIsLogWindowExpanded = useCallback((isExpanded: boolean) => { // New setter implementation
+    setIsLogWindowExpandedState(isExpanded);
+    localStorage.setItem(LOCALSTORAGE_DEBUG_EXPANDED_KEY, JSON.stringify(isExpanded));
   }, []);
 
   const addDebugLog = useCallback((log: Omit<DebugLogEntry, 'timestamp'>) => {
     const timestamp = new Date().toISOString();
-    // Prepend new logs to keep the latest at the top if desired, or append
-    setDebugLogs(prevLogs => [{ ...log, timestamp }, ...prevLogs.slice(0, 499)]); // Keep last 500 logs
+    setDebugLogs(prevLogs => [{ ...log, timestamp }, ...prevLogs.slice(0, 499)]); 
   }, []);
 
   const clearDebugLogs = useCallback(() => {
@@ -67,6 +80,8 @@ export const DebugProvider = ({ children }: { children: ReactNode }) => {
       value={{
         isDebugModeActive,
         setIsDebugModeActive,
+        isLogWindowExpanded, // Provide new state
+        setIsLogWindowExpanded, // Provide new setter
         debugLogs,
         addDebugLog,
         clearDebugLogs,
@@ -76,3 +91,4 @@ export const DebugProvider = ({ children }: { children: ReactNode }) => {
     </DebugContext.Provider>
   );
 };
+

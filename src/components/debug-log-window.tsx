@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useDebug, type DebugLogEntry } from '@/contexts/DebugContext';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -10,23 +10,27 @@ import { cn } from '@/lib/utils';
 import { useToast } from '@/hooks/use-toast';
 
 export function DebugLogWindow() {
-  const { isDebugModeActive, debugLogs, clearDebugLogs } = useDebug();
-  const [isExpanded, setIsExpanded] = useState(false);
+  const { 
+    isDebugModeActive, 
+    debugLogs, 
+    clearDebugLogs, 
+    isLogWindowExpanded, // Use from context
+    setIsLogWindowExpanded // Use from context
+  } = useDebug();
+  
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
   useEffect(() => {
-    if (isExpanded && scrollAreaRef.current) {
+    if (isLogWindowExpanded && scrollAreaRef.current) {
       const scrollViewport = scrollAreaRef.current.querySelector('div[data-radix-scroll-area-viewport]');
       if (scrollViewport) {
-        // Scroll to bottom when new logs are added and window is expanded
-        // Using requestAnimationFrame to ensure DOM update before scrolling
         requestAnimationFrame(() => {
             scrollViewport.scrollTop = scrollViewport.scrollHeight;
         });
       }
     }
-  }, [debugLogs, isExpanded]);
+  }, [debugLogs, isLogWindowExpanded]);
 
 
   if (!isDebugModeActive) {
@@ -35,8 +39,8 @@ export function DebugLogWindow() {
 
   const handleCopyLogs = () => {
     const logText = debugLogs
-        .slice() // Create a copy to reverse without mutating original
-        .reverse() // Show oldest first for copy
+        .slice() 
+        .reverse() 
         .map(log => 
             `[${log.timestamp}] [${log.source}] [${log.type}] ${log.message}${log.data ? `\n  Data: ${JSON.stringify(log.data, null, 2)}` : ''}`
         )
@@ -65,10 +69,10 @@ export function DebugLogWindow() {
         <Button
           variant="ghost"
           size="sm"
-          onClick={() => setIsExpanded(!isExpanded)}
+          onClick={() => setIsLogWindowExpanded(!isLogWindowExpanded)} // Use context setter
           className="text-sm font-medium text-foreground flex items-center gap-1"
         >
-          {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
+          {isLogWindowExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
           Registro de Depuración
           <span className="ml-2 text-xs text-muted-foreground">({debugLogs.length} entradas)</span>
         </Button>
@@ -81,7 +85,7 @@ export function DebugLogWindow() {
             </Button>
         </div>
       </div>
-      {isExpanded && (
+      {isLogWindowExpanded && (
         <ScrollArea 
           ref={scrollAreaRef}
           className="h-64 w-full bg-card/80 border-t border-border"
