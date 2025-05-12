@@ -41,12 +41,12 @@ export async function handleAnalyzeCode(
     timeoutMs: LLM_API_TIMEOUT_MS_ANALYZE,
   };
   
+  const operationName = `el análisis del código con ${currentProvider.name}`;
   try {
     // Call the generic analyzeCode function
     const result = await analyzeCode(code, llmOptions);
     return { success: true, data: result };
   } catch (error) {
-    const operationName = `el análisis del código con ${currentProvider.name}`;
     console.error(`Error en ${operationName}:`, error); 
     
     let detailMessage: string;
@@ -56,16 +56,11 @@ export async function handleAnalyzeCode(
           detailMessage = `El análisis del código excedió el tiempo límite de ${LLM_API_TIMEOUT_MS_ANALYZE / 1000} segundos. Intenta con un fragmento más pequeño o revisa la conexión.`;
         }
     } else {
-        try {
-            detailMessage = String(error);
-        } catch (e) {
-            detailMessage = "Ocurrió un error desconocido.";
-        }
+        detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
     }
-    if (!detailMessage && detailMessage !== '') {
-        detailMessage = "Ocurrió un error desconocido.";
-    } else if (detailMessage === '') {
-        detailMessage = "Error sin mensaje detallado.";
+    
+    if (!detailMessage || detailMessage.trim() === "") {
+        detailMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
     }
     
     return { success: false, error: `Falló ${operationName}: ${detailMessage}` };

@@ -2,11 +2,11 @@
 'use server';
 
 import { analyzeProjectSourceChunk, type ProjectAnalysisResponse, type LLMOptions } from '@/services/groq';
-import { suggestErrorFix, SuggestErrorFixInput, SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
+import { suggestErrorFix, type SuggestErrorFixInput, type SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
 import fs from 'fs/promises';
 import path from 'path';
 import { glob } from 'glob';
-import simpleGit, { SimpleGitOptions, SimpleGit } from 'simple-git';
+import simpleGit, { type SimpleGitOptions, type SimpleGit } from 'simple-git';
 import os from 'os';
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
 
@@ -220,23 +220,16 @@ export async function handleAutoAnalyzeAppSource(
       }
 
     } catch (error) {
-      let errorMessage = "Ocurrió un error desconocido durante el análisis de un fragmento.";
-      if (error instanceof Error) {
-        errorMessage = error.message;
+      let errorMessage: string;
+       if (error instanceof Error) {
+          errorMessage = error.message;
       } else {
-        try {
-            errorMessage = String(error);
-        } catch (e) {
-            // Fallback handled below
-        }
+          errorMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante el análisis de un fragmento.";
       }
-      if (!errorMessage && errorMessage !=='') {
-        errorMessage = "Ocurrió un error desconocido durante el análisis de un fragmento.";
-      } else if (errorMessage === '') {
-        errorMessage = "Error sin mensaje detallado durante análisis de fragmento."
+      if (!errorMessage || errorMessage.trim() === "") {
+          errorMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles durante el análisis de un fragmento.";
       }
       logError(`Error analizando el fragmento ${currentChunkNum}/${totalChunks}.`, error);
-      // Return error but include logs so far
       return {
         success: false,
         error: `Falló el análisis del fragmento ${currentChunkNum}: ${errorMessage}`,
@@ -294,7 +287,7 @@ const ignorePatterns = [
   'node_modules/**',
   '.next/**',
   '*.zip',
-  '*.json', // Exclude JSON files like package-lock.json from direct analysis content
+  // '*.json', // Keep package.json, tsconfig.json etc.
   '.DS_Store',
   '*.log',
   'build/**',
@@ -305,8 +298,8 @@ const ignorePatterns = [
   '.env.production',
   '.env.test',
   '.git/**',
-  'public/generated/**', // Assuming generated assets might be here
-  '*.lock', // e.g. package-lock.json, yarn.lock
+  'public/generated/**', 
+  // '*.lock', // Keep lock files for reproducibility
 ];
 
 
@@ -419,17 +412,12 @@ export async function getApplicationSourceBundle(
     if (error instanceof Error) {
       errorMessage = error.message;
     } else {
-      try {
-        errorMessage = String(error);
-      } catch(e) {
-        errorMessage = "Ocurrió un error desconocido empaquetando código.";
-      }
+      errorMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
     }
-    if (!errorMessage && errorMessage !== '') {
-        errorMessage = "Ocurrió un error desconocido empaquetando código.";
-    } else if (errorMessage === '') {
-        errorMessage = "Error sin mensaje detallado empaquetando código.";
+    if (!errorMessage || errorMessage.trim() === "") {
+        errorMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
     }
+
     log(`Error crítico empaquetando el código fuente de la aplicación: ${errorMessage}`, 'ERROR');
     if (error instanceof Error && error.stack) {
         log(`Stack del error crítico: ${error.stack}`, 'ERROR');
@@ -485,16 +473,10 @@ export async function applySuggestedChange(
             errorMessage = error.message;
             if (error.stack) log(`Stack del error de escritura: ${error.stack}`, 'ERROR');
         } else {
-            try {
-                errorMessage = String(error);
-            } catch (e) {
-                errorMessage = "Error desconocido al aplicar el cambio.";
-            }
+            errorMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
         }
-        if (!errorMessage && errorMessage !== '') {
-            errorMessage = "Error desconocido al aplicar el cambio.";
-        } else if (errorMessage === '') {
-            errorMessage = "Error sin mensaje detallado al aplicar el cambio.";
+        if (!errorMessage || errorMessage.trim() === "") {
+            errorMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles al aplicar el cambio.";
         }
         log(`Error al aplicar el cambio al archivo ${filePath}: ${errorMessage}`, 'ERROR');
         return { success: false, error: `Error al escribir en ${filePath}: ${errorMessage}` };
@@ -559,6 +541,7 @@ export async function handleGetErrorFixSuggestion(
     llmOptions: llmOptions, 
   };
 
+  const operationName = `la obtención de sugerencia para corrección con ${currentProvider.name}`;
   try {
     const result = await suggestErrorFix(input); 
     log("Sugerencia de auto-corrección recibida exitosamente.", 'INFO');
@@ -569,19 +552,13 @@ export async function handleGetErrorFixSuggestion(
         specificErrorMessage = error.message;
         if (error.stack) log(`Stack del error en sugerencia: ${error.stack}`, 'ERROR');
     } else {
-        try {
-            specificErrorMessage = String(error);
-        } catch (e) {
-            specificErrorMessage = "Error desconocido obteniendo sugerencia.";
-        }
+        specificErrorMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
     }
-    if (!specificErrorMessage && specificErrorMessage !== '') {
-        specificErrorMessage = "Error desconocido obteniendo sugerencia.";
-    } else if (specificErrorMessage === '') {
-        specificErrorMessage = "Error sin mensaje detallado obteniendo sugerencia."
+    if (!specificErrorMessage || specificErrorMessage.trim() === "") {
+        specificErrorMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles al obtener sugerencia.";
     }
     log(`Error obteniendo sugerencia para la corrección con ${currentProvider.name}: ${specificErrorMessage}`, 'ERROR');
-    return { success: false, error: `Falló la obtención de sugerencia para corrección con ${currentProvider.name}: ${specificErrorMessage}` };
+    return { success: false, error: `Falló ${operationName}: ${specificErrorMessage}` };
   }
 }
 
@@ -730,7 +707,7 @@ export async function handleUploadToGit(
 
     } catch (error: any) {
         let errorMsg = "Error desconocido durante la subida a Git.";
-        let errorDetails = error instanceof Error ? error.stack : '';
+        let errorDetails = error instanceof Error ? error.stack || "" : '';
 
         if (error.message) {
              errorMsg = error.message;
@@ -744,6 +721,11 @@ export async function handleUploadToGit(
                   errorMsg = "Falló la autenticación Git (no se pudo leer el nombre de usuario). Verifica tu PAT y permisos.";
              }
         }
+        
+        if (!errorMsg || errorMsg.trim() === "") {
+            errorMsg = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles durante la subida a Git.";
+        }
+
 
         log(`Error crítico durante la subida a Git: ${errorMsg}`, 'ERROR');
         if (errorDetails) {
@@ -763,4 +745,3 @@ export async function handleUploadToGit(
         }
     }
 }
-

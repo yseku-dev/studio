@@ -128,10 +128,9 @@ JSON:`;
         try {
             const decisionResult = await chatWithLLM(orchestratorPayload);
             orchestratorRawResponse = decisionResult.content;
-            log('DEBUG', `Respuesta cruda del Orquestrador recibida`, {raw: orchestratorRawResponse}); // Log full raw response
+            log('DEBUG', `Respuesta cruda del Orquestrador recibida`, {raw: orchestratorRawResponse}); 
 
             let jsonString = orchestratorRawResponse;
-            // Remove potential markdown code block fences and think tags
             jsonString = jsonString.replace(/^```json\s*/, '').replace(/\s*```$/, '');
             jsonString = jsonString.replace(/<think>[\s\S]*?<\/think>/gi, '').trim(); 
             
@@ -196,26 +195,33 @@ JSON:`;
                 const agentLLMResponse = await chatWithLLM(agentPayload);
                 const agentResponseContent = agentLLMResponse.content;
 
-                log('INFO', `Respuesta recibida del Agente (${nextAgentConfig.name})`, { length: agentResponseContent.length, contentStart: agentResponseContent }); // Log full agent response content
-                currentHistory.push({ role: 'assistant', content: agentResponseContent, name: nextAgentConfig.name }); // Add agent name to assistant message
+                log('INFO', `Respuesta recibida del Agente (${nextAgentConfig.name})`, { length: agentResponseContent.length, contentStart: agentResponseContent }); 
+                currentHistory.push({ role: 'assistant', content: agentResponseContent, name: nextAgentConfig.name }); 
 
                 agentResponse = {
                     agentId: nextAgentConfig.id,
                     content: agentResponseContent,
-                    rawOutput: agentResponseContent, // Raw agent response
+                    rawOutput: agentResponseContent, 
                 };
             }
         } catch (err) {
             const error = err as Error;
             log('ERROR', `Fallo al parsear JSON del Orquestrador o error en su respuesta: ${error.message}`, { rawResponse: orchestratorRawResponse, stack: error.stack });
             currentHistory.push({ role: 'system', content: `[Error procesando decisión del Orquestrador (Turno ${payload.currentTurn}): ${error.message}]` });
-            // Return error with the raw output for debugging
             return { error: `Error del Orquestador (fallo al procesar respuesta): ${error.message}`, isComplete: false, updatedHistory: currentHistory, serverLogs, orchestratorDecision: { nextAgentId: 'ERROR', reason: error.message, rawOutput: orchestratorRawResponse || 'Respuesta cruda no disponible' } };
         }
     } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Error desconocido en el servidor.';
-        log('ERROR', `Error general en handleWorkgroupTurn (Turno ${payload.currentTurn}): ${errorMsg}`, { stack: (error as Error).stack });
-        return { error: errorMsg, isComplete: false, updatedHistory: currentHistory, serverLogs };
+        let detailMessage: string;
+        if (error instanceof Error) {
+            detailMessage = error.message;
+        } else {
+            detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación del grupo de trabajo.";
+        }
+        if (!detailMessage || detailMessage.trim() === "") {
+            detailMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
+        }
+        log('ERROR', `Error general en handleWorkgroupTurn (Turno ${payload.currentTurn}): ${detailMessage}`, { stack: (error as Error).stack });
+        return { error: detailMessage, isComplete: false, updatedHistory: currentHistory, serverLogs };
     }
 
     if (payload.currentTurn >= payload.maxTurns && !isComplete) {
@@ -239,8 +245,7 @@ function formatHistoryForPrompt(history: ChatMessage[], maxMessages: number = 6)
         if (msg.role === 'user') roleName = 'Usuario';
         else if (msg.role === 'assistant') roleName = (msg as any).name || 'Agente'; 
         else if (msg.role === 'system') roleName = 'Sistema';
-        // Log full message content in prompt context
-        return `  [${roleName}]: ${contentString}`; // No truncation for prompt context
+        return `  [${roleName}]: ${contentString}`; 
     }).join('\n');
 }
 

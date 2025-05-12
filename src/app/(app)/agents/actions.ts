@@ -48,12 +48,12 @@ export async function handleAgentChatCompletion(
     },
   };
 
+  const operationName = `la respuesta del chat de prueba del agente con ${currentProvider.name}`;
   try {
     console.log(`[Agent Test] Calling chatWithLLM for agent with provider: ${llmOptions.providerId}, model: ${llmOptions.modelName}`);
     const result = await chatWithLLM(payload);
     return { success: true, data: result };
   } catch (error) {
-    const operationName = `la respuesta del chat de prueba del agente con ${currentProvider.name}`;
     console.error(`Error en ${operationName}:`, error);
 
     let detailMessage: string;
@@ -63,20 +63,13 @@ export async function handleAgentChatCompletion(
           detailMessage = `La solicitud de chat de prueba excedió el tiempo límite de ${AGENT_CHAT_TIMEOUT_MS / 1000} segundos.`;
         }
     } else {
-        try {
-            detailMessage = String(error);
-        } catch (e) {
-            detailMessage = "Ocurrió un error desconocido.";
-        }
+        detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
     }
-     if (!detailMessage && detailMessage !== '') {
-        detailMessage = "Ocurrió un error desconocido.";
-    } else if (detailMessage === '') {
-        detailMessage = "Error sin mensaje detallado.";
+    
+    if (!detailMessage || detailMessage.trim() === "") {
+        detailMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
     }
 
     return { success: false, error: `Falló ${operationName}: ${detailMessage}` };
   }
 }
-
-    

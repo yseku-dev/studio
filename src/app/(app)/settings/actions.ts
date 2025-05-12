@@ -2,7 +2,7 @@
 'use server';
 
 import { LLM_PROVIDERS, type LLMProviderId, MODELS_BY_PROVIDER } from '@/config/llm-config';
-import simpleGit, { SimpleGit, SimpleGitOptions } from 'simple-git';
+import simpleGit, { type SimpleGit, type SimpleGitOptions } from 'simple-git';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
@@ -92,6 +92,7 @@ export async function handleTestLLMConnection(
   const timeoutForTest = 30000; 
   const timeoutId = setTimeout(() => controller.abort(), timeoutForTest);
 
+  const operationName = `la prueba de conexión con ${provider.name}`;
   try {
     const fetchRequestOptions: RequestInit = {
       method: 'POST',
@@ -136,14 +137,23 @@ export async function handleTestLLMConnection(
     return { success: false, message: `Respuesta inesperada de ${provider.name} API durante la prueba de conexión.`, data: responseData };
 
   } catch (error) {
-    clearTimeout(timeoutId); // Clear timeout on error as well
-    if (error instanceof Error && error.name === 'AbortError') {
-      console.error(`Error de timeout probando la conexión con ${provider.name} API`);
-      return { success: false, message: `La prueba de conexión a la API de ${provider.name} excedió el tiempo límite.` };
+    clearTimeout(timeoutId); 
+    console.error(`Error en ${operationName}:`, error);
+    let detailMessage: string;
+
+    if (error instanceof Error) {
+        detailMessage = error.message;
+        if (error.name === 'AbortError' || detailMessage.toLowerCase().includes("timeout") || detailMessage.toLowerCase().includes("excedió el tiempo límite")) {
+          detailMessage = `La solicitud de prueba de conexión excedió el tiempo límite de ${timeoutForTest / 1000} segundos.`;
+        }
+    } else {
+        detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
     }
-    console.error(`Error probando la conexión con ${provider.name} API:`, error);
-    const errorMessage = error instanceof Error ? error.message : "Error desconocido";
-    return { success: false, message: `Falló la prueba de conexión con ${provider.name}: ${errorMessage}` };
+    
+    if (!detailMessage || detailMessage.trim() === "") {
+        detailMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
+    }
+    return { success: false, message: `Falló ${operationName}: ${detailMessage}` };
   }
 }
 
@@ -167,8 +177,9 @@ export async function handleTestGitConnection(config: GitTestConnectionConfig): 
     }
 
     let tempRepoPath: string | undefined;
+    const operationName = `la prueba de conexión Git a ${repoUrl.replace(pat, '********')}`;
     try {
-        console.log(`[GitTest] Iniciando prueba de conexión a: ${repoUrl.replace(pat, '********')}`);
+        console.log(`[GitTest] Iniciando ${operationName}`);
         
         tempRepoPath = await fs.mkdtemp(path.join(os.tmpdir(), 'codealchemist-gittest-'));
         console.log(`[GitTest] Directorio temporal creado: ${tempRepoPath}`);
@@ -193,6 +204,7 @@ export async function handleTestGitConnection(config: GitTestConnectionConfig): 
         };
 
     } catch (error: any) {
+        console.error(`[GitTest] Error en ${operationName}:`, error);
         let errorMessage = "Error desconocido durante la prueba de conexión Git.";
         let errorDetails = "";
 
@@ -210,13 +222,16 @@ export async function handleTestGitConnection(config: GitTestConnectionConfig): 
         if (error.stderr) {
             errorDetails = error.stderr;
         } else if (error.message) {
-            errorDetails = error.message;
+            errorDetails = error.message; // Fallback if stderr is not available
         }
 
-        console.error(`[GitTest] Error en la prueba de conexión Git: ${errorMessage}`, errorDetails ? `Detalles: ${errorDetails}` : '', error);
+        if (!errorMessage || errorMessage.trim() === "") {
+            errorMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
+        }
+        
         return { 
             success: false, 
-            message: `Falló la prueba de conexión Git: ${errorMessage}`,
+            message: `Falló ${operationName}: ${errorMessage}`,
             details: errorDetails.substring(0, 500) 
         };
     } finally {

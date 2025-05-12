@@ -3,7 +3,7 @@
 
 import type { LLMOptions, ChatMessage } from '@/services/groq';
 import { generateCodeFromPrompt as callLLMToGenerateCode } from '@/services/groq'; 
-import { GeneratedCodeResponse as GeneratedCodeLLMResponse } from '@/services/groq'; 
+import { type GeneratedCodeResponse as GeneratedCodeLLMResponse } from '@/services/groq'; 
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
 import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
@@ -49,11 +49,11 @@ export async function handleGenerateCode(
     timeoutMs: LLM_API_TIMEOUT_MS_GENERATE_CODE,
   };
   
+  const operationName = `la generación del código con ${currentProvider.name}`;
   try {
     const result = await callLLMToGenerateCode(prompt, llmOptions);
     return { success: true, data: result };
   } catch (error) {
-    const operationName = `la generación del código con ${currentProvider.name}`;
     console.error(`Error en ${operationName}:`, error); 
     
     let detailMessage: string;
@@ -63,16 +63,11 @@ export async function handleGenerateCode(
           detailMessage = `La generación de código excedió el tiempo límite de ${LLM_API_TIMEOUT_MS_GENERATE_CODE / 1000} segundos. Intenta con un prompt más simple o revisa la conexión.`;
         }
     } else {
-        try {
-            detailMessage = String(error);
-        } catch (e) {
-            detailMessage = "Ocurrió un error desconocido.";
-        }
+        detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
     }
-    if (!detailMessage && detailMessage !== '') {
-        detailMessage = "Ocurrió un error desconocido.";
-    } else if (detailMessage === '') {
-        detailMessage = "Error sin mensaje detallado.";
+    
+    if (!detailMessage || detailMessage.trim() === "") {
+        detailMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
     }
     
     return { success: false, error: `Falló ${operationName}: ${detailMessage}` };
@@ -135,59 +130,69 @@ export async function initiateWorkgroupCodeGeneration(
   let conversationHistory: ChatMessage[] = [];
   const taskForWorkgroup = `Genera código basado en la siguiente descripción. Tu respuesta final (probablemente del agente DesarrolladorSoftware o similar) DEBE ser un objeto JSON con las claves "generatedCode" (string) y opcionalmente "explanation" (string). Descripción del usuario: "${prompt}"`;
 
-  for (let turn = 1; turn <= MAX_WORKGROUP_TURNS; turn++) {
-    log('INFO', `Procesando turno ${turn}/${MAX_WORKGROUP_TURNS} para la generación de código.`);
-    const payload: WorkgroupTurnPayload = {
-      workgroupName: workgroup.name,
-      task: taskForWorkgroup,
-      conversationHistory,
-      orchestrator: {
-        id: orchestrator.id, name: orchestrator.name, systemMessage: orchestrator.systemMessage,
-        llmProviderId: orchestratorLlmOptions.providerId, llmModelName: orchestratorLlmOptions.modelName,
-        llmApiKey: orchestratorLlmOptions.apiKey, llmApiUrl: orchestratorLlmOptions.apiUrl
-      },
-      participantAgentConfigs,
-      currentTurn: turn,
-      maxTurns: MAX_WORKGROUP_TURNS,
-      localStorageSnapshot, 
-    };
+  try {
+    for (let turn = 1; turn <= MAX_WORKGROUP_TURNS; turn++) {
+      log('INFO', `Procesando turno ${turn}/${MAX_WORKGROUP_TURNS} para la generación de código.`);
+      const payload: WorkgroupTurnPayload = {
+        workgroupName: workgroup.name,
+        task: taskForWorkgroup,
+        conversationHistory,
+        orchestrator: {
+          id: orchestrator.id, name: orchestrator.name, systemMessage: orchestrator.systemMessage,
+          llmProviderId: orchestratorLlmOptions.providerId, llmModelName: orchestratorLlmOptions.modelName,
+          llmApiKey: orchestratorLlmOptions.apiKey, llmApiUrl: orchestratorLlmOptions.apiUrl
+        },
+        participantAgentConfigs,
+        currentTurn: turn,
+        maxTurns: MAX_WORKGROUP_TURNS,
+        localStorageSnapshot, 
+      };
 
-    const turnResult: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
-    serverLogs.push(...(turnResult.serverLogs || []).map(sl => `[Turn ${turn} ServerLog] ${sl}`));
-    
-    if (turnResult.error) {
-      log('ERROR', `Error en el turno ${turn}: ${turnResult.error}`);
-      return { success: false, error: `Error en el grupo de trabajo (turno ${turn}): ${turnResult.error}`, workgroupLogs: serverLogs };
-    }
+      const turnResult: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
+      serverLogs.push(...(turnResult.serverLogs || []).map(sl => `[Turn ${turn} ServerLog] ${sl}`));
+      
+      if (turnResult.error) {
+        throw new Error(`Error en turno ${turn} del grupo: ${turnResult.error}`);
+      }
 
-    conversationHistory = turnResult.updatedHistory;
+      conversationHistory = turnResult.updatedHistory;
 
-    if (turnResult.isComplete || turnResult.orchestratorDecision?.nextAgentId === "COMPLETADO") {
-      log('INFO', `Grupo de trabajo completó la generación de código en el turno ${turn}.`);
-      const finalResponseContent = turnResult.agentResponse?.content || conversationHistory.findLast(m => m.role === 'assistant')?.content;
-      if (finalResponseContent) {
-        try {
-          
-          const cleanedContent = finalResponseContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-          const parsedData = JSON.parse(cleanedContent) as GeneratedCodeData;
-          if (typeof parsedData.generatedCode === 'string') {
-            return { success: true, data: parsedData, workgroupLogs: serverLogs };
-          } else {
-            log('ERROR', 'Respuesta final del grupo no contenía "generatedCode" como string.', parsedData);
-            return { success: false, error: "La respuesta final del grupo no tuvo el formato esperado (falta 'generatedCode').", workgroupLogs: serverLogs };
+      if (turnResult.isComplete || turnResult.orchestratorDecision?.nextAgentId === "COMPLETADO") {
+        log('INFO', `Grupo de trabajo completó la generación de código en el turno ${turn}.`);
+        const finalResponseContent = turnResult.agentResponse?.content || conversationHistory.findLast(m => m.role === 'assistant')?.content;
+        if (finalResponseContent) {
+          try {
+            
+            const cleanedContent = finalResponseContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
+            const parsedData = JSON.parse(cleanedContent) as GeneratedCodeData;
+            if (typeof parsedData.generatedCode === 'string') {
+              return { success: true, data: parsedData, workgroupLogs: serverLogs };
+            } else {
+              log('ERROR', 'Respuesta final del grupo no contenía "generatedCode" como string.', parsedData);
+              throw new Error("La respuesta final del grupo no tuvo el formato esperado (falta 'generatedCode').");
+            }
+          } catch (e) {
+            log('ERROR', `Error al parsear la respuesta final del grupo como JSON: ${(e as Error).message}`, { content: finalResponseContent });
+            throw new Error(`Error al interpretar la respuesta final del grupo. Contenido: ${finalResponseContent.substring(0,100)}...`);
           }
-        } catch (e) {
-          log('ERROR', `Error al parsear la respuesta final del grupo como JSON: ${(e as Error).message}`, { content: finalResponseContent });
-          return { success: false, error: `Error al interpretar la respuesta final del grupo. Contenido: ${finalResponseContent.substring(0,100)}...`, workgroupLogs: serverLogs };
+        } else {
+          log('ERROR', 'El grupo de trabajo finalizó pero no hubo respuesta de agente para extraer el código.');
+          throw new Error("El grupo de trabajo finalizó sin generar código.");
         }
-      } else {
-        log('ERROR', 'El grupo de trabajo finalizó pero no hubo respuesta de agente para extraer el código.');
-        return { success: false, error: "El grupo de trabajo finalizó sin generar código.", workgroupLogs: serverLogs };
       }
     }
+    throw new Error(`Grupo no completó generación en ${MAX_WORKGROUP_TURNS} turnos.`);
+  } catch (error) {
+    let detailMessage: string;
+    if (error instanceof Error) {
+        detailMessage = error.message;
+    } else {
+        detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la generación de código por grupo.";
+    }
+    if (!detailMessage || detailMessage.trim() === "") {
+        detailMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
+    }
+    log('ERROR', `Error en initiateWorkgroupCodeGeneration: ${detailMessage}`);
+    return { success: false, error: detailMessage, workgroupLogs: serverLogs };
   }
-
-  log('ERROR', `Grupo de trabajo alcanzó el máximo de turnos (${MAX_WORKGROUP_TURNS}) sin completar la generación de código.`);
-  return { success: false, error: `El grupo de trabajo no completó la generación en ${MAX_WORKGROUP_TURNS} turnos.`, workgroupLogs: serverLogs };
 }
-

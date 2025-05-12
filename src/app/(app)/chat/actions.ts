@@ -48,11 +48,11 @@ export async function handleChatCompletion(
     options: llmOptions,
   };
 
+  const operationName = `la respuesta del chat con ${currentProvider.name}`;
   try {
     const result = await chatWithLLM(payload);
     return { success: true, data: result };
   } catch (error) {
-    const operationName = `la respuesta del chat con ${currentProvider.name}`;
     console.error(`Error en ${operationName}:`, error); 
     
     let detailMessage: string;
@@ -62,16 +62,11 @@ export async function handleChatCompletion(
           detailMessage = `La solicitud de chat excedió el tiempo límite de ${LLM_API_TIMEOUT_MS_CHAT / 1000} segundos. Intenta con un mensaje más corto o revisa la conexión.`;
         }
     } else {
-        try {
-            detailMessage = String(error);
-        } catch (e) {
-            detailMessage = "Ocurrió un error desconocido.";
-        }
+        detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
     }
-    if (!detailMessage && detailMessage !== '') {
-        detailMessage = "Ocurrió un error desconocido.";
-    } else if (detailMessage === '') {
-        detailMessage = "Error sin mensaje detallado.";
+    
+    if (!detailMessage || detailMessage.trim() === "") {
+        detailMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
     }
     
     return { success: false, error: `Falló ${operationName}: ${detailMessage}` };

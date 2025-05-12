@@ -165,7 +165,7 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
       const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestratorAgentConfig.id}`, payload.agents, payload.workgroups || [], payload.localStorageSnapshot);
       if (!orchestratorLlmOptions) {
         log('ERROR', `Configuración LLM inválida para Orquestador (${orchestratorAgentConfig.name}) en grupo ${workgroupForAnalysis.name}.`);
-        return { success: false, error: `Configuración LLM inválida para Orquestador en grupo '${workgroupForAnalysis.name}'.`, workgroupLogs: serverLogs };
+        throw new Error(`Configuración LLM inválida para Orquestador en grupo '${workgroupForAnalysis.name}'.`);
       }
 
       const participantAgentConfigs = workgroupForAnalysis.agentIds
@@ -226,7 +226,6 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
     } else if (llmOptionsToUse) {
       log('INFO', `Usando llamada directa a LLM para refactorización con proveedor ${llmOptionsToUse.providerId}, modelo ${llmOptionsToUse.modelName}.`);
       
-      // If the source is a specific refactor agent, use its system message. Otherwise, use the generic direct call prompt.
       let systemPromptToUse = systemPromptForDirectCallOrRefactorAgent;
       if (payload.configSource.startsWith('agent:')) {
         const agentId = payload.configSource.split(':')[1];
@@ -241,33 +240,19 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
         { role: "system", content: systemPromptToUse },
         { role: "user", content: `Proyecto (contenido textual):\n\n${projectContent.substring(0, 15000)} ${projectContent.length > 15000 ? "\n... (contenido truncado)" : ""}` }
       ];
-
-      // Using analyzeProjectSourceChunk as a generic way to get structured JSON from a large text input.
-      // The system prompt guides it to produce the "refactoringSuggestions" structure.
+      
       const response = await analyzeProjectSourceChunk(
-          projectContent, // Full content or simulated content
+          projectContent, 
           { ...llmOptionsToUse, timeoutMs: REFACTOR_LLM_API_TIMEOUT_MS }, 
           `Refactorización solicitada. ${refactoringGoals} ${refactoringPriority}. El prompt del sistema detallado ya ha sido proporcionado.`
       );
       
-      // The analyzeProjectSourceChunk is expected to return a structure that might be different from RefactorProjectAIResponse.
-      // We need to adapt its output if it's not directly RefactorProjectAIResponse.
-      // For now, we assume the system prompt to analyzeProjectSourceChunk can guide it to produce "refactoringSuggestions".
-      // If analyzeProjectSourceChunk *always* returns its specific ProjectAnalysisResponse, then we map it.
-      // However, given the prompt now specifically asks for "refactoringSuggestions", the LLM might directly return that.
-      
-      // Let's assume the LLM, guided by the specific system prompt, directly returns the {refactoringSuggestions: ...} structure.
-      // If analyzeProjectSourceChunk parses it into its own ProjectAnalysisResponse, we need to extract from that.
-      // This part is a bit tricky as analyzeProjectSourceChunk has its own defined output structure.
-      // A more robust solution might be a dedicated service function for refactoring if the output format is consistently different.
-      
-      // Let's try to cast and see. If it fails, we need to adapt.
       const aiResponse = response as unknown as RefactorProjectAIResponse;
 
       if (aiResponse && Array.isArray(aiResponse.refactoringSuggestions)) {
         log('INFO', 'Respuesta de refactorización directa recibida y parseada correctamente.');
         return { success: true, data: aiResponse.refactoringSuggestions, workgroupLogs: serverLogs };
-      } else if (response.suggestions && response.analysisTitle) { // Fallback: map from ProjectAnalysisResponse if that's what we got
+      } else if (response.suggestions && response.analysisTitle) { 
         log('WARN', 'La respuesta directa de LLM se parseó como ProjectAnalysisResponse, mapeando a formato de refactorización.');
         const mappedSuggestions: RefactoringSuggestionItem[] = response.suggestions.map(s => ({
           area: s.area,
@@ -285,9 +270,17 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
         throw new Error("Configuración LLM inválida para iniciar refactorización.");
     }
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : "Error desconocido durante la refactorización.";
-    log('ERROR', `Error obteniendo sugerencias de refactorización: ${errorMsg}`);
-    return { success: false, error: errorMsg, workgroupLogs: serverLogs };
+    let detailMessage: string;
+    if (error instanceof Error) {
+        detailMessage = error.message;
+    } else {
+        detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación de refactorización.";
+    }
+    if (!detailMessage || detailMessage.trim() === "") {
+        detailMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
+    }
+    log('ERROR', `Error obteniendo sugerencias de refactorización: ${detailMessage}`);
+    return { success: false, error: detailMessage, workgroupLogs: serverLogs };
   }
 }
 
@@ -309,6 +302,7 @@ export async function handleApplyRefactoringSuggestion(
 ): Promise<ApplyRefactoringSuggestionResult> {
   console.log("TODO: Implementar lógica para aplicar sugerencia de refactorización", payload);
   await new Promise(resolve => setTimeout(resolve, 500));
+  // This should eventually interact with fs or a virtual file system
+  // For now, it's just a placeholder.
   return { success: true, updatedFileContent: "// Contenido del archivo actualizado (simulado)" };
 }
-
