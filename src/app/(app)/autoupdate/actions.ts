@@ -9,6 +9,8 @@ import { glob } from 'glob';
 import simpleGit, { type SimpleGitOptions, type SimpleGit } from 'simple-git';
 import os from 'os';
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
+import type { AppSourceFile, AppSourceBundleResult } from '@/types/project'; // Import from new location
+import { fetchRepositoryContents } from '@/services/git-service'; // Import Git service
 
 
 interface AutoUpdateAnalysisResult {
@@ -26,12 +28,13 @@ const INTER_CHUNK_PROCESSING_DELAY_MS = 7000; // Increased delay to 7 seconds
 
 // Modified to accept AppSourceFile[] directly
 export async function handleAutoAnalyzeAppSource(
-  sourceFiles: AppSourceFile[], // Added parameter
+  sourceFiles: AppSourceFile[], 
   providerId: LLMProviderId,
   apiKey: string,
   modelName: string,
   apiUrl?: string,
-  analysisPreferences?: string
+  analysisPreferences?: string,
+  gitRepoUrl?: string // New optional parameter for Git source
 ): Promise<AutoUpdateAnalysisResult> {
   const executionLogs: string[] = [];
 
@@ -74,7 +77,8 @@ export async function handleAutoAnalyzeAppSource(
   };
 
   const currentProvider = LLM_PROVIDERS.find(p => p.id === providerId);
-  log(`Iniciando análisis del código fuente de la aplicación con proveedor: ${currentProvider?.name || providerId}.`);
+  log(`Iniciando análisis del código fuente de la aplicación con proveedor: ${currentProvider?.name || providerId}. ${gitRepoUrl ? `Fuente: Git (${gitRepoUrl})` : 'Fuente: Local'}`);
+
 
   if (!currentProvider) {
     const errorMsg = `Proveedor LLM '${providerId}' no encontrado.`;
@@ -89,12 +93,34 @@ export async function handleAutoAnalyzeAppSource(
   if (!modelName) {
     const errorMsg = `Configuración de API incompleta para ${currentProvider.name}. Nombre de modelo es obligatorio.`;
     logError(errorMsg);
-    return { success: false, error: `${errorMsg} Por favor, configúralo en ajustes.`, detailedExecutionLogs: executionLogs };
+    return { success: false, error: `${errorMsg} Por favor, configúrala en ajustes.`, detailedExecutionLogs: executionLogs };
   }
   log(`Usando modelo: ${modelName}. Preferencias de análisis: ${analysisPreferences || 'Ninguna'}. Timeout por fragmento: ${LLM_API_TIMEOUT_MS_AUTOUPDATE / 1000}s. Retraso entre fragmentos: ${INTER_CHUNK_PROCESSING_DELAY_MS / 1000}s.`);
 
-  // Files are now passed as a parameter
-  if (!sourceFiles || sourceFiles.length === 0) {
+  let filesToAnalyze = sourceFiles;
+
+  if (gitRepoUrl) {
+    log(`Obteniendo código fuente desde Git URL: ${gitRepoUrl}`);
+    const gitBundleResult = await fetchRepositoryContents(gitRepoUrl);
+    if (!gitBundleResult.success || !gitBundleResult.files || gitBundleResult.files.length === 0) {
+      const errorMsg = gitBundleResult.error || "No se pudo obtener el código fuente desde Git para analizar.";
+      logError(errorMsg, gitBundleResult.logsBuilt);
+      executionLogs.push(...(gitBundleResult.logsBuilt || []));
+      return {
+        success: false,
+        error: errorMsg,
+        chunksProcessed: 0,
+        totalChunks: 0,
+        detailedExecutionLogs: executionLogs
+      };
+    }
+    filesToAnalyze = gitBundleResult.files;
+    executionLogs.push(...(gitBundleResult.logsBuilt || []));
+    log(`Se obtuvieron ${filesToAnalyze.length} archivos desde Git para procesar.`);
+  }
+
+
+  if (!filesToAnalyze || filesToAnalyze.length === 0) {
     const errorMsg = "No se proporcionó código fuente (lista de archivos vacía) para analizar.";
     logError(errorMsg);
     return {
@@ -105,17 +131,16 @@ export async function handleAutoAnalyzeAppSource(
       detailedExecutionLogs: executionLogs
     };
   }
-  log(`Se recibieron ${sourceFiles.length} archivos para procesar.`);
+  log(`Se recibieron ${filesToAnalyze.length} archivos para procesar.`);
 
-  const files = sourceFiles; // Use the passed parameter
   const chunks: string[] = [];
   let currentChunk = "";
   let currentChunkChars = 0;
-  let totalSourceChars = files.reduce((sum, f) => sum + f.content.length, 0);
+  let totalSourceChars = filesToAnalyze.reduce((sum, f) => sum + f.content.length, 0);
 
-  log(`Iniciando división del código fuente en fragmentos. Total de caracteres en ${files.length} archivos: ${totalSourceChars}. MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}.`);
+  log(`Iniciando división del código fuente en fragmentos. Total de caracteres en ${filesToAnalyze.length} archivos: ${totalSourceChars}. MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}.`);
 
-  for (const file of files) {
+  for (const file of filesToAnalyze) {
     logDetail(`Procesando archivo para fragmentación: ${file.fileName} (${file.content.length} caracteres).`);
     const baseFileName = file.fileName;
     let fileEffectiveContent = file.content;
@@ -141,7 +166,7 @@ export async function handleAutoAnalyzeAppSource(
 
         if (charsToTake <= 0) {
             logError(`El marcador para ${baseFileName}${partInfo} es demasiado largo (${partMarker.length}) para el tamaño del fragmento (MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}). Omitiendo esta parte del archivo.`);
-            break; // Break from while loop for this file's parts
+            break; 
         }
         const part = fileEffectiveContent.substring(offset, offset + charsToTake);
         chunks.push(partMarker + part);
@@ -149,10 +174,9 @@ export async function handleAutoAnalyzeAppSource(
         offset += part.length;
         partIndex++;
       }
-      continue; // Continue to next file
+      continue; 
     }
 
-    // File fits (potentially with others) in a chunk
     const fileContentMarker = fileMarkerTemplate.replace("{part_info}", "");
     if (currentChunkChars + fileEffectiveContent.length + fileContentMarker.length > MAX_CHARS_PER_CHUNK) {
       if (currentChunk.length > 0) {
@@ -208,7 +232,6 @@ export async function handleAutoAnalyzeAppSource(
     logDetail(`[CHUNK_ANALYSIS_CONTENT ${currentChunkNum}/${totalChunks}] Contenido del fragmento (primeros 200 caracteres): ${chunk.substring(0,200)}...`);
 
     try {
-      // This is the primary LLM call per chunk
       const result = await analyzeProjectSourceChunk(chunk, llmAPIOptions, analysisPreferences);
       allResults.push(result);
       processedChunks++;
@@ -254,7 +277,6 @@ export async function handleAutoAnalyzeAppSource(
   }
   log(`Análisis de todos los ${processedChunks} fragmentos completado. Agregando resultados...`);
 
-  // Basic aggregation: concatenate assessments, collect unique areas, combine suggestions
   const aggregatedResult: ProjectAnalysisResponse = {
     analysisTitle: allResults.length > 0 && allResults[0].analysisTitle ? `${allResults[0].analysisTitle} (Agregado de ${totalChunks} fragmentos)` : `Análisis Agregado de ${totalChunks} Fragmentos`,
     identifiedAreas: Array.from(new Set(allResults.flatMap(r => r.identifiedAreas || []))),
@@ -272,17 +294,6 @@ export async function handleAutoAnalyzeAppSource(
   };
 }
 
-export interface AppSourceFile {
-  fileName: string;
-  content: string;
-}
-interface AppSourceBundleResult {
-  success: boolean;
-  files?: AppSourceFile[];
-  concatenatedSource?: string;
-  error?: string;
-  logsBuilt?: string[];
-}
 
 const ignorePatterns = [
   'node_modules/**',
@@ -306,7 +317,8 @@ const ignorePatterns = [
 
 export async function getApplicationSourceBundle(
   concatenate: boolean = false,
-  parentExecutionLogs?: string[]
+  parentExecutionLogs?: string[],
+  gitRepoUrl?: string // New optional parameter for Git source
 ): Promise<AppSourceBundleResult> {
   const internalLogs: string[] = [];
   const log = (message: string, level: 'INFO' | 'DETAIL' | 'WARN' | 'ERROR' = 'INFO') => {
@@ -321,7 +333,25 @@ export async function getApplicationSourceBundle(
     if (parentExecutionLogs) parentExecutionLogs.push(timestampedMessage);
   };
 
-  log("Iniciando obtención del paquete de código fuente de la aplicación.", 'INFO');
+  if (gitRepoUrl) {
+    log(`Obteniendo paquete de código fuente desde Git URL: ${gitRepoUrl}`, 'INFO');
+    const gitResult = await fetchRepositoryContents(gitRepoUrl, undefined, ignorePatterns);
+    // Prepend git-service logs to current function's logs
+    if (gitResult.logsBuilt) internalLogs.unshift(...gitResult.logsBuilt);
+    
+    if (!gitResult.success || !gitResult.files) {
+      log(`Error obteniendo contenido de Git: ${gitResult.error}`, 'ERROR');
+      return { success: false, error: gitResult.error || "Fallo al obtener contenido de Git.", logsBuilt: internalLogs };
+    }
+    if (concatenate) {
+      // fetchRepositoryContents already provides concatenatedSource
+      return { success: true, files: gitResult.files, concatenatedSource: gitResult.concatenatedSource, logsBuilt: internalLogs };
+    }
+    return { success: true, files: gitResult.files, logsBuilt: internalLogs };
+  }
+
+  // --- Original local file fetching logic ---
+  log("Iniciando obtención del paquete de código fuente de la aplicación (local).", 'INFO');
   try {
     const projectRoot = process.cwd();
     log(`Directorio raíz del proyecto: ${projectRoot}. Patrones de ignorados aplicados.`, 'DETAIL');
@@ -606,7 +636,7 @@ export async function handleUploadToGit(
 
     try {
         log("Paso 1: Obteniendo el paquete de código fuente más reciente...", 'INFO');
-        const sourceBundle = await getApplicationSourceBundle(false, internalLogs);
+        const sourceBundle = await getApplicationSourceBundle(false, internalLogs); // false = no concatenar
         if (!sourceBundle.success || !sourceBundle.files || sourceBundle.files.length === 0) {
             const errorMsg = sourceBundle.error || "No se pudo obtener el código fuente para subir a Git.";
             log(errorMsg, 'ERROR');
@@ -746,4 +776,5 @@ export async function handleUploadToGit(
         }
     }
 }
+
 

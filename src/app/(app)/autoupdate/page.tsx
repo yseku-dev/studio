@@ -4,10 +4,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork, Trash2, Expand, Minimize, Workflow, Bug } from "lucide-react"; // Added Bug
+import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork, Trash2, Expand, Minimize, Workflow, Bug, Github } from "lucide-react"; 
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion, handleUploadToGit } from './actions';
-import type { AppSourceFile } from './actions';
+import type { AppSourceFile } from '@/types/project'; 
 import type { ProjectAnalysisResponse, LLMOptions, SuggestionItem } from '@/services/groq';
 import type { SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -24,6 +24,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input'; // Added Input
 import JSZip from 'jszip';
 import { Label } from '@/components/ui/label';
 import { Progress } from "@/components/ui/progress";
@@ -58,15 +59,10 @@ type AutoUpdateStatus = "idle" | "loading_source" | "chunking_source" | "analyzi
 
 type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
 
-// Define the type for a single suggestion item from the response
-// Correctly extend the type of an element in the 'suggestions' array
+
 interface SingleSuggestion extends SuggestionItem {
-  id?: string; // id might not exist initially, make it optional
-  // Add other fields from the base type if needed, e.g.:
+  id?: string; 
   area: string;
-  // suggestion: string; // Already in SuggestionItem
-  // priority?: 'high' | 'medium' | 'low'; // Already in SuggestionItem
-  // suggestedFullFileContent?: string; // Already in SuggestionItem
 }
 
 
@@ -109,6 +105,7 @@ export default function AutoUpdatePage() {
   const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
   const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global');
   const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null);
+  const [gitSourceUrl, setGitSourceUrl] = useState<string>(""); // For Git URL input
 
   const [gitConfig, setGitConfig] = useState<GitConfig>({ repoUrl: null, username: null, email: null, pat: null });
   const [gitUploadRetryCount, setGitUploadRetryCount] = useState(0);
@@ -174,12 +171,12 @@ export default function AutoUpdatePage() {
   
   const addServerLogsToDebugAndPage = useCallback((serverLogs: string[] | undefined, sourcePrefix: string = 'SERVER_AUTOUDDATE') => {
     if (serverLogs) {
-      setDetailedLogs(prev => [...prev, ...serverLogs]); // Add to page logs
+      setDetailedLogs(prev => [...prev, ...serverLogs]); 
       if (isMountedRef.current) {
           serverLogs.forEach(logMsg => {
-              const match = logMsg.match(/^\[(.*?)\s(.*?)\s(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/) || // Matches [SourcePrefix LEVEL TIMESTAMP] Message | Data: JSON
-                            logMsg.match(/^\[(.*?)\s(.*?)]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/) ||       // Matches [SourcePrefix TIMESTAMP] [LEVEL] Message | Data: JSON
-                            logMsg.match(/^\[(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/);             // Matches [TIMESTAMP] [LEVEL] Message | Data: JSON
+              const match = logMsg.match(/^\[(.*?)\s(.*?)\s(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/) || 
+                            logMsg.match(/^\[(.*?)\s(.*?)]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/) ||       
+                            logMsg.match(/^\[(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/);             
               
               let parsedLog: Omit<DebugLogEntry, 'timestamp'>;
 
@@ -189,12 +186,12 @@ export default function AutoUpdatePage() {
                   let message = '';
                   let dataStr: string | undefined = undefined;
 
-                  if (match[0].startsWith(`[${sourcePrefix}`)) { // First two patterns
-                      source = match[1]; // Source e.g. "SourceBundle" or "GitUpload"
+                  if (match[0].startsWith(`[${sourcePrefix}`)) { 
+                      source = match[1]; 
                       type = match[3].toUpperCase() as DebugLogEntry['type'];
                       message = match[4];
                       dataStr = match[5];
-                  } else { // Last pattern
+                  } else { 
                       type = match[2].toUpperCase() as DebugLogEntry['type'];
                       message = match[3];
                       dataStr = match[4];
@@ -205,12 +202,12 @@ export default function AutoUpdatePage() {
                       try {
                           data = JSON.parse(dataStr);
                       } catch {
-                          data = dataStr; // Keep as string if not valid JSON
+                          data = dataStr; 
                       }
                   }
                   parsedLog = { source, type, message, data };
               } else {
-                  // Fallback for unparsed logs
+                  
                   parsedLog = { source: sourcePrefix, type: 'INFO', message: logMsg };
               }
               addDebugLog(parsedLog);
@@ -387,7 +384,7 @@ export default function AutoUpdatePage() {
   const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
     const options = resolvedLlmOptions;
     let workgroupForAnalysis: WorkgroupConfig | undefined;
-    setDetailedLogs([]); // Clear previous logs
+    setDetailedLogs([]); 
 
     if (selectedConfigSource.startsWith("workgroup:")) {
         const workgroupId = selectedConfigSource.split(":")[1];
@@ -420,15 +417,15 @@ export default function AutoUpdatePage() {
     setSuggestionsWithStatus([]);
     setAnalysisProgress({ processed: 0, total: 0 });
     setAutoFixSuggestion(null);
-    setWorkgroupConversationHistoryState([]); // Reset workgroup history
+    setWorkgroupConversationHistoryState([]); 
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: "Paso 1: Obteniendo código fuente de la aplicación..."});
 
     toast({
       title: isRetry ? "Reintentando Auto-Análisis" : "Auto-Análisis Iniciado",
-      description: `Paso 1: Cargando y preparando el código fuente...`
+      description: `Paso 1: Cargando y preparando el código fuente... ${gitSourceUrl ? `desde ${gitSourceUrl}` : '(local)'}`
     });
 
-    const bundleResult = await getApplicationSourceBundle(workgroupForAnalysis ? true : false);
+    const bundleResult = await getApplicationSourceBundle(workgroupForAnalysis ? true : false, undefined, gitSourceUrl || undefined);
     addServerLogsToDebugAndPage(bundleResult.logsBuilt, 'SERVER_SOURCE_BUNDLE');
 
     if (!bundleResult.success || (!bundleResult.files && !bundleResult.concatenatedSource)) {
@@ -466,7 +463,8 @@ export default function AutoUpdatePage() {
             options.apiKey,
             options.modelName,
             options.apiUrl,
-            analysisPreferences
+            analysisPreferences,
+            gitSourceUrl || undefined // Pass Git URL if it was used
         );
         addServerLogsToDebugAndPage(analysisActionResult.detailedExecutionLogs, 'SERVER_AUTO_ANALYZE');
         setAnalysisProgress({ processed: analysisActionResult.chunksProcessed || 0, total: analysisActionResult.totalChunks || 0 });
@@ -588,7 +586,7 @@ export default function AutoUpdatePage() {
 
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Obteniendo el paquete de código fuente más reciente para la descarga...`});
     const tempLogsForBundle: string[] = [];
-    const bundleResult = await getApplicationSourceBundle(false, tempLogsForBundle); // false for individual files for ZIP
+    const bundleResult = await getApplicationSourceBundle(false, tempLogsForBundle, gitSourceUrl || undefined); 
     addServerLogsToDebugAndPage(tempLogsForBundle, 'SERVER_DOWNLOAD_BUNDLE');
 
     let filesToProcess: AppSourceFile[] = [];
@@ -710,6 +708,9 @@ export default function AutoUpdatePage() {
   const isGitConfigured = gitConfig.repoUrl && gitConfig.username && gitConfig.email && gitConfig.pat;
   const isWorkgroupSelected = selectedConfigSource.startsWith('workgroup:');
 
+  const sourceDescription = gitSourceUrl ? `Git: ${gitSourceUrl.split('/').pop() || gitSourceUrl}` : 'Local';
+
+
   return (
     <> {/* Added Fragment */}
       <div className="flex flex-col gap-6">
@@ -720,7 +721,7 @@ export default function AutoUpdatePage() {
             AutoUpdate: Análisis de CodeAlchemist
           </CardTitle>
           <CardDescription className="text-lg text-foreground">
-            Analiza el código fuente de CodeAlchemist usando la configuración LLM seleccionada.
+            Analiza el código fuente de CodeAlchemist (local o desde Git) usando la config LLM seleccionada.
             {!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource ? (
               <span className="text-destructive block mt-1"> (Configuración para '{getSourceName(selectedConfigSource)}' incompleta)</span>
             ) : resolvedLlmOptions && !isWorkgroupSelected ? (
@@ -730,32 +731,44 @@ export default function AutoUpdatePage() {
             ) : (
               <span className="text-muted-foreground block mt-1">(Selecciona fuente de configuración)</span>
             )}
+             <span className="text-foreground block mt-1">(Fuente actual: {sourceDescription})</span>
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="space-y-2">
-            <Label htmlFor="configSource" className="text-base flex items-center gap-1"><Settings2 className="h-4 w-4" /> Usar Configuración LLM De:</Label>
-            <Select onValueChange={setSelectedConfigSource} value={selectedConfigSource}>
-              <SelectTrigger id="configSource" className="w-full md:w-1/2"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
-              <SelectContent>
-                <ScrollArea className="h-[--radix-select-content-available-height] max-h-60"> {/* Added ScrollArea */}
-                    <SelectItem value="global">Ajustes Globales</SelectItem>
-                    {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
-                    {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
-                </ScrollArea>
-              </SelectContent>
-            </Select>
-            {(!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource) && (
-              <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(selectedConfigSource)}' incompleta. Revisa Ajustes, Agentes o Grupos.</p>
-            )}
-             {(isWorkgroupSelected && !workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1])) && (
-                <p className="text-xs text-destructive mt-1">Grupo de trabajo '{getSourceName(selectedConfigSource)}' no encontrado o no disponible.</p>
-            )}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label htmlFor="configSource" className="text-base flex items-center gap-1"><Settings2 className="h-4 w-4" /> Usar Configuración LLM De:</Label>
+              <Select onValueChange={setSelectedConfigSource} value={selectedConfigSource}>
+                <SelectTrigger id="configSource" className="w-full"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
+                <SelectContent>
+                  <ScrollArea className="h-[--radix-select-content-available-height] max-h-60"> 
+                      <SelectItem value="global">Ajustes Globales</SelectItem>
+                      {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
+                      {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
+                  </ScrollArea>
+                </SelectContent>
+              </Select>
+              {(!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource) && (
+                <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(selectedConfigSource)}' incompleta. Revisa Ajustes, Agentes o Grupos.</p>
+              )}
+              {(isWorkgroupSelected && !workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1])) && (
+                  <p className="text-xs text-destructive mt-1">Grupo de trabajo '{getSourceName(selectedConfigSource)}' no encontrado o no disponible.</p>
+              )}
+            </div>
+             <div className="space-y-2">
+              <Label htmlFor="gitSourceUrl" className="text-base flex items-center gap-1"><Github className="h-4 w-4" /> URL del Repositorio Git (Opcional)</Label>
+              <Input 
+                id="gitSourceUrl" 
+                type="url" 
+                value={gitSourceUrl} 
+                onChange={(e) => setGitSourceUrl(e.target.value)} 
+                placeholder="Ej: https://github.com/usuario/repo.git (deja vacío para local)"
+                className="bg-card text-foreground" 
+              />
+              <p className="text-xs text-muted-foreground">Si se proporciona, se analizará este repositorio en lugar del código local.</p>
+            </div>
           </div>
-          <p className="text-muted-foreground">
-            Al hacer clic en &quot;Iniciar Auto-Análisis&quot;, CodeAlchemist recopilará su código fuente y lo enviará
-            al modelo/grupo configurado. También puedes descargar el código o subirlo a Git.
-          </p>
+          
           <div className="space-y-2">
             <Label htmlFor="analysis-preferences" className="text-base flex items-center gap-2 text-foreground"><Edit3 className="h-5 w-5" /> Preferencias de Análisis (Opcional)</Label>
             <Textarea id="analysis-preferences" value={analysisPreferences} onChange={(e) => setAnalysisPreferences(e.target.value)}
@@ -807,7 +820,7 @@ export default function AutoUpdatePage() {
             <Card className="mt-6 border-accent bg-accent/5">
               <CardHeader className="pb-3">
                 <CardTitle className="text-xl flex items-center gap-2 text-accent"><FileCode className="h-6 w-6" /> {analysisResult.analysisTitle}</CardTitle>
-                <CardDescription>Analizado usando la configuración de '{getSourceName(selectedConfigSource)}'.</CardDescription>
+                <CardDescription>Analizado usando la configuración de '{getSourceName(selectedConfigSource)}'. Fuente: {sourceDescription}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
@@ -920,7 +933,7 @@ export default function AutoUpdatePage() {
           )}
         </CardContent>
         <CardFooter className="flex flex-col items-start gap-2">
-            <p className="text-xs text-muted-foreground"><strong>Nota:</strong> El análisis se realiza sobre el código completo. La descarga proporciona un ZIP. La subida a Git usa el estado actual. Revisa cuidadosamente las sugerencias de IA.</p>
+            <p className="text-xs text-muted-foreground"><strong>Nota:</strong> El análisis se realiza sobre el código completo (local o de Git). La descarga proporciona un ZIP. La subida a Git usa el estado actual del código (local o de Git si fue la fuente). Revisa cuidadosamente las sugerencias de IA.</p>
             {detailedLogs.length > 0 && (
               <Card className="mt-6 border-primary/30 w-full">
                   <CardHeader className="pb-2 flex flex-row items-center justify-between">

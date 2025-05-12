@@ -12,7 +12,7 @@ import { Input } from '@/components/ui/input';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Wand2, Save, UploadCloud, XCircle, AlertTriangle, Copy, Settings2 } from 'lucide-react';
+import { Loader2, Wand2, Save, UploadCloud, XCircle, AlertTriangle, Copy, Settings2, Link as LinkIcon, Github } from 'lucide-react'; // Added LinkIcon
 import { ScrollArea } from './ui/scroll-area';
 import {
   Select,
@@ -25,12 +25,11 @@ import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
 import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config';
-// Import action for workgroup-based analysis (to be created or adapted)
-// import { handleAnalyzeCodeViaWorkgroup } from '@/app/(app)/analyze/actions'; 
 
 const formSchema = z.object({
   code: z.string().min(10, 'El código debe tener al menos 10 caracteres.'),
   configSource: z.string().min(1, 'Debes seleccionar una fuente de configuración LLM.'),
+  gitFileUrl: z.string().url({ message: "Por favor, introduce una URL válida." }).optional().or(z.literal('')), // New field for Git file URL
 });
 
 type FormData = z.infer<typeof formSchema>;
@@ -46,6 +45,7 @@ interface CodeAnalysisSectionProps {
 
 export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps) {
   const [isLoading, setIsLoading] = useState(false);
+  const [isFetchingGitFile, setIsFetchingGitFile] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [originalCode, setOriginalCode] = useState<string>('');
@@ -64,13 +64,15 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
     setValue,
     watch,
     control,
+    getValues, // To get gitFileUrl
   } = useForm<FormData>({
     resolver: zodResolver(formSchema),
-    defaultValues: { code: '', configSource: 'global' }
+    defaultValues: { code: '', configSource: 'global', gitFileUrl: '' }
   });
 
   const codeValue = watch('code');
   const watchedConfigSource = watch('configSource');
+  const watchedGitFileUrl = watch('gitFileUrl');
 
   useEffect(() => {
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
@@ -97,6 +99,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
         const content = e.target?.result as string;
         setValue('code', content, { shouldValidate: true });
         setFileName(file.name);
+        setValue('gitFileUrl', ''); // Clear Git URL if file is uploaded
         toast({ title: 'Archivo Cargado', description: `Contenido de "${file.name}" cargado.` });
       };
       reader.onerror = () => toast({ title: 'Error al Leer Archivo', variant: 'destructive' });
@@ -111,6 +114,44 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
     setValue('code', ''); setFileName(null);
     toast({ title: 'Archivo Eliminado', description: 'Contenido eliminado del área de texto.' });
   };
+
+  const handleFetchFromGitUrl = async () => {
+    const url = getValues('gitFileUrl');
+    if (!url || !url.trim()) {
+      toast({ title: "URL Vacía", description: "Por favor, introduce una URL de archivo Git.", variant: "destructive" });
+      return;
+    }
+    setIsFetchingGitFile(true);
+    toast({ title: "Obteniendo Archivo...", description: `Intentando obtener contenido de ${url}`});
+    try {
+      // Attempt to construct a raw URL for GitHub, GitLab, Bitbucket
+      let rawUrl = url;
+      if (url.includes("github.com") && !url.includes("/raw/")) {
+        rawUrl = url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/");
+      } else if (url.includes("gitlab.com") && !url.includes("/-/raw/")) {
+        rawUrl = url.replace("/blob/", "/-/raw/");
+      } else if (url.includes("bitbucket.org") && !url.includes("?raw=true")) {
+         rawUrl = url.replace("/src/", "/raw/") + "?raw=true"; // Common pattern, might vary
+      }
+      
+      const response = await fetch(rawUrl);
+      if (!response.ok) {
+        throw new Error(`Error al obtener el archivo: ${response.status} ${response.statusText}. Asegúrate de que la URL sea a un archivo raw accesible.`);
+      }
+      const content = await response.text();
+      setValue('code', content, { shouldValidate: true });
+      setFileName(url.substring(url.lastIndexOf('/') + 1));
+      setValue('gitFileUrl', url); // Keep the original URL for reference
+      toast({ title: "Archivo Obtenido", description: `Contenido de ${fileName || url} cargado en el editor.` });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Error desconocido al obtener el archivo.";
+      toast({ title: "Error al Obtener Archivo Git", description: errorMessage, variant: "destructive", duration: 7000 });
+      console.error("Error fetching Git file:", error);
+    } finally {
+      setIsFetchingGitFile(false);
+    }
+  };
+
 
   const onSubmit: SubmitHandler<FormData> = async (data) => {
     const options = resolvedLlmOptions;
@@ -129,22 +170,13 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
     setIsLoading(true); setAnalysisResult(null); setAnalysisError(null); setOriginalCode(data.code);
 
     if (data.configSource.startsWith('workgroup:')) {
-      const workgroupId = data.configSource.split(':')[1];
+      // const workgroupId = data.configSource.split(':')[1];
       toast({ title: "Análisis con Grupo de Trabajo", description: "Funcionalidad pendiente de implementación para análisis de código con grupos.", duration: 5000});
       // TODO: Implement workgroup analysis logic
-      // const result = await handleAnalyzeCodeViaWorkgroup(data.code, workgroupId, agents, workgroups);
-      // if (result.success && result.data) {
-      //   setAnalysisResult(result.data);
-      //   toast({ title: 'Análisis con Grupo Completo' });
-      // } else {
-      //   setAnalysisError(result.error || 'Error desconocido en análisis con grupo.');
-      //   toast({ title: 'Análisis con Grupo Fallido', variant: 'destructive' });
-      // }
-      setIsLoading(false); // Remove this when implemented
-      return; // Remove this when implemented
+      setIsLoading(false); 
+      return; 
     }
 
-    // Standard LLM call (should not happen if options is null and not workgroup, but check anyway)
     if (!options) {
       toast({ title: "Error Interno", description: "Faltan opciones LLM para llamada directa.", variant: "destructive"});
       setIsLoading(false);
@@ -197,7 +229,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
             <Wand2 className="h-6 w-6 text-primary" /> Analiza Tu Código
           </CardTitle>
           <CardDescription>
-            Pega código o sube archivo para obtener sugerencias usando config LLM seleccionada.
+            Pega código, sube un archivo, o introduce una URL de archivo Git para obtener sugerencias usando config LLM seleccionada.
             {!resolvedLlmOptions && !isWorkgroupSelected && watchedConfigSource ? (
                  <span className="text-destructive block mt-1"> (Configuración para '{getSourceName(watchedConfigSource)}' incompleta)</span>
              ) : resolvedLlmOptions && !isWorkgroupSelected ? (
@@ -211,14 +243,26 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
         </CardHeader>
         <form onSubmit={handleSubmit(onSubmit)}>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
-                <Label htmlFor="code-file" className="text-base flex items-center gap-2"><UploadCloud className="h-5 w-5" /> Sube archivo (opcional)</Label>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                  <Label htmlFor="code-file" className="text-base flex items-center gap-2"><UploadCloud className="h-5 w-5" /> Sube archivo (opcional)</Label>
+                  <div className="flex items-center gap-2">
+                      <Input id="code-file" type="file" onChange={handleFileChange} className="text-base file:text-base flex-grow"
+                          accept=".py,.js,.ts,.jsx,.tsx,.java,.c,.cpp,.cs,.go,.php,.rb,.rs,.swift,.kt,.html,.css,.json,.md,.txt"/>
+                      {fileName && (<Button variant="ghost" size="icon" onClick={clearFile} title="Eliminar"><XCircle className="h-5 w-5 text-muted-foreground hover:text-destructive" /></Button>)}
+                  </div>
+                  {fileName && <p className="text-sm text-muted-foreground">Cargado: <span className="font-medium text-foreground">{fileName}</span>.</p>}
+              </div>
+               <div className="space-y-2">
+                <Label htmlFor="gitFileUrl" className="text-base flex items-center gap-2"><Github className="h-5 w-5" /> URL de Archivo Git (opcional)</Label>
                 <div className="flex items-center gap-2">
-                    <Input id="code-file" type="file" onChange={handleFileChange} className="text-base file:text-base flex-grow"
-                        accept=".py,.js,.ts,.jsx,.tsx,.java,.c,.cpp,.cs,.go,.php,.rb,.rs,.swift,.kt,.html,.css,.json,.md,.txt"/>
-                    {fileName && (<Button variant="ghost" size="icon" onClick={clearFile} title="Eliminar"><XCircle className="h-5 w-5 text-muted-foreground hover:text-destructive" /></Button>)}
+                  <Input id="gitFileUrl" {...register('gitFileUrl')} placeholder="Ej: https://github.com/usuario/repo/raw/main/archivo.ts" className="bg-card text-foreground flex-grow"/>
+                  <Button type="button" onClick={handleFetchFromGitUrl} disabled={isFetchingGitFile || !watchedGitFileUrl?.trim()} variant="outline" size="sm">
+                    {isFetchingGitFile ? <Loader2 className="h-4 w-4 animate-spin" /> : <LinkIcon className="h-4 w-4" />} Obtener
+                  </Button>
                 </div>
-                {fileName && <p className="text-sm text-muted-foreground">Cargado: <span className="font-medium text-foreground">{fileName}</span>.</p>}
+                {errors.gitFileUrl && <p className="text-sm text-destructive mt-1">{errors.gitFileUrl.message}</p>}
+              </div>
             </div>
             <div className="space-y-2">
                 <Label htmlFor="configSourceCodeAnalysis" className="text-base flex items-center gap-1"><Settings2 className="h-4 w-4"/> Usar Configuración LLM De:</Label>
@@ -227,7 +271,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
                         <Select onValueChange={field.onChange} value={field.value}>
                             <SelectTrigger id="configSourceCodeAnalysis"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
                             <SelectContent>
-                                <ScrollArea className="h-[--radix-select-content-available-height] max-h-60"> {/* Added ScrollArea */}
+                                <ScrollArea className="h-[--radix-select-content-available-height] max-h-60"> 
                                     <SelectItem value="global">Ajustes Globales</SelectItem>
                                     {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
                                     {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
@@ -245,7 +289,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
             </div>
             <div className="mt-4">
               <Label htmlFor="code">Entrada de Código</Label>
-              <Textarea id="code" {...register('code')} rows={15} className="font-mono text-sm bg-card mt-1" placeholder="Pega tu código aquí o sube un archivo..." />
+              <Textarea id="code" {...register('code')} rows={15} className="font-mono text-sm bg-card mt-1" placeholder="Pega tu código aquí, sube un archivo o introduce una URL de Git..." />
               {errors.code && (<p className="text-sm text-destructive mt-1">{errors.code.message}</p>)}
             </div>
           </CardContent>
