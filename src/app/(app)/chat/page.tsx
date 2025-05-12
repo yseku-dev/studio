@@ -10,7 +10,7 @@ import { useToast } from '@/hooks/use-toast';
 import { Loader2, Send, User, Sparkles, AlertTriangle, Copy, Trash2, Settings2 } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
-import { handleChatCompletion } from './actions'; // TODO: Add initiateWorkgroupChat
+import { handleChatCompletion, initiateWorkgroupChat } from './actions'; 
 import type { ChatMessage } from '@/services/groq';
 import {
   Select,
@@ -20,10 +20,11 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
-import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
+import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
 import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config';
-// import { initiateWorkgroupChat } from './actions'; // To be created
+import { LLM_PROVIDERS, LOCALSTORAGE_PROVIDER_ID_KEY, getLocalStorageApiKeyName, getLocalStorageModelName, type LLMProviderId } from '@/config/llm-config';
+import { useDebug } from '@/contexts/DebugContext';
 
 export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
@@ -31,6 +32,8 @@ export default function ChatPage() {
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chatError, setChatError] = useState<string | null>(null);
   const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const { addDebugLog } = useDebug();
+  const isMountedRef = useRef(false);
 
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
@@ -40,20 +43,49 @@ export default function ChatPage() {
   const { toast } = useToast();
 
   useEffect(() => {
+    isMountedRef.current = true;
+    addDebugLog({ source: 'CHAT_PAGE', type: 'INFO', message: 'Componente ChatPage montado.' });
+    return () => { 
+      isMountedRef.current = false; 
+      addDebugLog({ source: 'CHAT_PAGE', type: 'INFO', message: 'Componente ChatPage desmontado.' });
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const addServerLogsToDebug = useCallback((serverLogs: string[] | undefined, sourcePrefix: string = 'SERVER_CHAT') => {
+    if (isMountedRef.current && serverLogs) {
+        serverLogs.forEach(logMsg => {
+            const match = logMsg.match(/^\[(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/);
+            if (match) {
+                const [, timestamp, type, message, dataStr] = match;
+                let data: any = undefined;
+                if (dataStr) {
+                    try { data = JSON.parse(dataStr); } catch { data = dataStr; }
+                }
+                addDebugLog({ source: sourcePrefix, type: type.toUpperCase() as any, message, data });
+            } else {
+                addDebugLog({ source: sourcePrefix, type: 'INFO', message: logMsg });
+            }
+        });
+    }
+  }, [addDebugLog]);
+
+  useEffect(() => {
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
     if (storedAgents) {
-      try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing stored agents:", e); setAgents([]); }
+      try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing stored agents:", e); setAgents([]); addDebugLog({source: 'CHAT_PAGE', type: 'ERROR', message: 'Error al parsear agentes de localStorage.', data: e});}
     }
     const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
     if (storedWorkgroups) {
-      try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); }
+      try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); addDebugLog({source: 'CHAT_PAGE', type: 'ERROR', message: 'Error al parsear grupos de localStorage.', data: e});}
     }
-  }, []);
+  }, [addDebugLog]);
 
   useEffect(() => {
     const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups);
     setResolvedLlmOptions(options);
-  }, [selectedConfigSource, agents, workgroups]);
+    addDebugLog({ source: 'CHAT_PAGE', type: 'DEBUG', message: `Opciones LLM resueltas para ${selectedConfigSource}`, data: options });
+  }, [selectedConfigSource, agents, workgroups, addDebugLog]);
 
   useEffect(() => {
     if (scrollAreaRef.current) {
@@ -68,18 +100,38 @@ export default function ChatPage() {
     let result;
     const newUserMessage: ChatMessage = { role: 'user', content: currentMessage };
     setChatHistory(prev => [...prev, newUserMessage]);
-    const messagesForApi = [...chatHistory, newUserMessage]; // Use updated history
+    const messagesForApi = [...chatHistory, newUserMessage]; 
     setCurrentMessage('');
     setIsLoading(true);
     setChatError(null);
+    addDebugLog({ source: 'CHAT_PAGE', type: 'INFO', message: `Enviando mensaje: "${newUserMessage.content.substring(0,50)}..." usando ${getSourceName(selectedConfigSource)}`});
 
     if (selectedConfigSource.startsWith('workgroup:')) {
       const workgroupId = selectedConfigSource.split(':')[1];
-      toast({ title: "Chat con Grupo de Trabajo", description: "Funcionalidad pendiente de implementación para chat con grupos.", duration: 5000});
-      // TODO: Implement workgroup chat logic
-      // result = await initiateWorkgroupChat(messagesForApi, workgroupId, agents, workgroups);
-      setIsLoading(false); // Remove this
-      return; // Remove this
+      const workgroup = workgroups.find(wg => wg.id === workgroupId);
+      if (!workgroup) {
+        toast({ title: "Error de Grupo", description: "Grupo de trabajo no encontrado.", variant: "destructive"});
+        addDebugLog({ source: 'CHAT_PAGE', type: 'ERROR', message: `Grupo de trabajo ${workgroupId} no encontrado.`});
+        setIsLoading(false);
+        setChatHistory(prev => prev.slice(0, -1)); // Remove user message if group not found
+        return;
+      }
+      
+      const snapshot: LocalStorageSnapshot = {
+        [LOCALSTORAGE_PROVIDER_ID_KEY]: localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null,
+        apiKeys: {},
+        modelNames: {},
+        apiUrls: {},
+      };
+      LLM_PROVIDERS.forEach(provider => {
+        snapshot.apiKeys[provider.id] = localStorage.getItem(getLocalStorageApiKeyName(provider.id));
+        snapshot.modelNames[provider.id] = localStorage.getItem(getLocalStorageModelName(provider.id));
+        snapshot.apiUrls[provider.id] = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
+      });
+      addDebugLog({ source: 'CHAT_PAGE', type: 'DEBUG', message: 'Snapshot de localStorage enviado para chat de grupo.'});
+
+      result = await initiateWorkgroupChat(messagesForApi, workgroupId, agents, workgroups, snapshot);
+      addServerLogsToDebug(result.workgroupLogs, 'SERVER_WG_CHAT');
     } else {
         const options = resolvedLlmOptions;
         if (!options) {
@@ -89,7 +141,9 @@ export default function ChatPage() {
                 variant: "destructive",
                 duration: 7000,
             });
+            addDebugLog({ source: 'CHAT_PAGE', type: 'ERROR', message: `Configuración LLM para '${getSourceName(selectedConfigSource)}' incompleta.`});
             setIsLoading(false);
+            setChatHistory(prev => prev.slice(0, -1)); // Remove user message
             return;
         }
         result = await handleChatCompletion(messagesForApi, options.providerId, options.apiKey, options.modelName, options.apiUrl);
@@ -99,9 +153,12 @@ export default function ChatPage() {
     if (result.success && result.data) {
       const assistantMessage: ChatMessage = { role: 'assistant', content: result.data.content };
       setChatHistory(prev => [...prev, assistantMessage]);
+      addDebugLog({ source: 'CHAT_PAGE', type: 'INFO', message: `Respuesta recibida: "${assistantMessage.content.substring(0,50)}..."`});
     } else {
       setChatError(result.error || 'Ocurrió un error desconocido.');
       toast({ title: 'Error en Chat', description: result.error || `No se pudo obtener respuesta.`, variant: 'destructive' });
+      addDebugLog({ source: 'CHAT_PAGE', type: 'ERROR', message: `Error en chat: ${result.error || 'Desconocido'}`, data:result});
+      // Optionally remove the user message that led to an error: setChatHistory(prev => prev.slice(0, -1));
     }
     setIsLoading(false);
   };
@@ -117,6 +174,7 @@ export default function ChatPage() {
     setChatHistory([]);
     setChatError(null);
     toast({ title: 'Chat Borrado', description: 'Historial de chat limpiado.' });
+    addDebugLog({ source: 'CHAT_PAGE', type: 'INFO', message: 'Historial de chat limpiado.'});
   };
 
    const getSourceName = (sourceId: string): string => {
@@ -133,7 +191,8 @@ export default function ChatPage() {
   };
   
   const isWorkgroupSelected = selectedConfigSource.startsWith('workgroup:');
-  const canSend = isLoading || !currentMessage.trim() || (!resolvedLlmOptions && !isWorkgroupSelected) || (isWorkgroupSelected && workgroups.length === 0);
+  // Disable send button if loading, message is empty, OR (not workgroup AND no LLM options) OR (workgroup AND no workgroups exist)
+  const isSendButtonDisabled = isLoading || !currentMessage.trim() || (!isWorkgroupSelected && !resolvedLlmOptions) || (isWorkgroupSelected && workgroups.length === 0);
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] md:h-[calc(100vh-10rem)] gap-6">
@@ -165,7 +224,7 @@ export default function ChatPage() {
                     </SelectContent>
                 </Select>
                  {!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource && (
-                     <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(selectedConfigSource)}' incompleta. Revisa Ajustes o Agentes.</p>
+                     <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(selectedConfigSource)}' incompleta. Revisa Ajustes, Agentes o Grupos.</p>
                 )}
             </div>
         </CardHeader>
@@ -207,11 +266,13 @@ export default function ChatPage() {
             <Textarea value={currentMessage} onChange={(e) => setCurrentMessage(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }}}
               placeholder="Escribe tu mensaje... (Shift+Enter para nueva línea)" rows={1}
-              className="flex-1 resize-none min-h-[40px] max-h-[120px] text-sm bg-card" disabled={canSend} />
+              className="flex-1 resize-none min-h-[40px] max-h-[120px] text-sm bg-card" 
+              disabled={isLoading} // Only disable textarea when actively loading a response
+            />
             <Button onClick={handleClearChat} variant="ghost" size="icon" disabled={isLoading || chatHistory.length === 0} title="Limpiar Chat">
               <Trash2 className="h-5 w-5 text-muted-foreground hover:text-destructive"/>
             </Button>
-            <Button onClick={handleSendMessage} disabled={canSend} className="h-10">
+            <Button onClick={handleSendMessage} disabled={isSendButtonDisabled} className="h-10">
               {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
               <span className="sr-only">Enviar</span>
             </Button>
