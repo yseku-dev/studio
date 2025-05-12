@@ -1,4 +1,5 @@
 
+// src/app/(app)/chat/actions.ts
 'use server';
 
 import type { LLMOptions, ChatMessage, ChatLLMPayload, ChatLLMResponse as ChatResponse } from '@/services/groq';
@@ -134,12 +135,17 @@ export async function initiateWorkgroupChat(
   const latestUserMessageContent = messages.findLast(m => m.role === 'user')?.content || "No se encontró el mensaje del usuario.";
   const formattedHistoryForPrompt = messages.map(m => `[${m.role === 'user' ? 'Usuario' : m.name || 'Asistente'}]: ${m.content}`).join('\n');
 
-  const taskForWorkgroup = `El usuario ha enviado un mensaje. Tu tarea es coordinar a los agentes para formular una respuesta adecuada. La respuesta final debe ser una respuesta textual directa al usuario, no un objeto JSON.
+  const taskForWorkgroup = `El objetivo es responder al último mensaje del usuario en el contexto de la conversación.
+Tu rol como Orquestador es determinar el siguiente paso para lograr una respuesta coherente y útil.
+La respuesta final al usuario deberá ser textual y NO un objeto JSON.
+
 Historial de Conversación:
 ${formattedHistoryForPrompt}
 
 Último mensaje del Usuario: "${latestUserMessageContent}"
-Instrucción: Decide qué agente debe responder o si puedes consolidar una respuesta.`;
+
+Instrucción para ESTE TURNO (Orquestador): Basado en el último mensaje y el historial, decide qué agente debe formular la respuesta al usuario o si tú puedes consolidar una respuesta final. Tu decisión debe seguir el formato JSON especificado en tu prompt de sistema (next_agent_name, reason). Si decides que un agente debe responder, ese agente será el responsable de generar la respuesta textual directa al usuario.`;
+
 
   // For chat, we expect a relatively quick turnaround.
   // The orchestrator should ideally select an agent, that agent responds,
@@ -206,3 +212,4 @@ Instrucción: Decide qué agente debe responder o si puedes consolidar una respu
     return { success: false, error: detailMessage, workgroupLogs: serverLogs };
   }
 }
+

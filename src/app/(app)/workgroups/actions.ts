@@ -65,7 +65,7 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
                 const previewData = (typeof data === 'object' && data !== null) 
                     ? JSON.stringify(data) 
                     : String(data);
-                dataStringForLogMessage = ` | Data: ${previewData.substring(0, 200)}${previewData.length > 200 ? '...' : ''}`;
+                dataStringForLogMessage = ` | Data: ${previewData.substring(0, 300)}${previewData.length > 300 ? '...' : ''}`;
             } catch {
                 dataStringForLogMessage = ' | Data: [Unserializable for log preview]';
             }
@@ -108,7 +108,10 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
 
 
         const availableAgentNames = Object.values(payload.participantAgentConfigs).map(a => a.name).join(', ');
-        const orchestratorSystemPrompt = `${payload.orchestrator.systemMessage}
+        
+        // Refined orchestrator system prompt to ensure it doesn't try to DO the task itself.
+        const orchestratorSystemPrompt = `${payload.orchestrator.systemMessage} 
+Tu función principal es FACILITAR la colaboración entre los agentes para completar la tarea, no realizar la tarea directamente.
 
 CONTEXTO ACTUAL:
 Tarea Principal: ${payload.task}
@@ -132,7 +135,7 @@ JSON:`;
             messages: [{ role: 'system', content: orchestratorSystemPrompt }],
             options: orchestratorOptions,
         };
-        log('DEBUG', 'Llamando a LLM del Orquestrador...', { model: orchestratorOptions.modelName, promptStart: orchestratorSystemPrompt.substring(0,500) + "..." }); 
+        log('DEBUG', `Llamando a LLM del Orquestrador...`, { model: orchestratorOptions.modelName, promptStart: orchestratorSystemPrompt.substring(0,500) + "..." }); 
 
         let orchestratorRawResponse = '';
         let decisionJson: { next_agent_name: string; reason: string } | null = null;
@@ -281,10 +284,4 @@ function formatHistoryForPrompt(history: ChatMessage[], maxMessages: number = 6)
     }).join('\n');
 }
 
-// Extend ChatMessage type to potentially include agent name for logging/prompt context
-declare module '@/services/groq' {
-    interface ChatMessage {
-        name?: string; // Optional agent name
-    }
-}
 
