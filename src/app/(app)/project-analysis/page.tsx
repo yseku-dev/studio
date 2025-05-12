@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, ChangeEvent, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
@@ -18,11 +18,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
-import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
+import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
 import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config';
 // TODO: import { handleAnalyzeProjectViaWorkgroup } from './actions';
 import { useDebug } from '@/contexts/DebugContext'; // Added useDebug
+import { LLM_PROVIDERS, LOCALSTORAGE_PROVIDER_ID_KEY, getLocalStorageApiKeyName, getLocalStorageModelName, type LLMProviderId } from '@/config/llm-config';
+
 
 type AnalysisStatus = "idle" | "loading" | "success" | "error";
 
@@ -62,7 +64,21 @@ export default function ProjectAnalysisPage() {
   }, []);
 
   useEffect(() => {
-    const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups);
+    const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups, {
+        [LOCALSTORAGE_PROVIDER_ID_KEY]: typeof window !== 'undefined' ? localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null : null,
+        apiKeys: LLM_PROVIDERS.reduce((acc, p) => {
+            acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(getLocalStorageApiKeyName(p.id)) : null;
+            return acc;
+        }, {} as LocalStorageSnapshot['apiKeys']),
+        modelNames: LLM_PROVIDERS.reduce((acc, p) => {
+            acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(getLocalStorageModelName(p.id)) : null;
+            return acc;
+        }, {} as LocalStorageSnapshot['modelNames']),
+        apiUrls: LLM_PROVIDERS.reduce((acc, p) => {
+            acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(`codealchemist_apiurl_${p.id}`) : null;
+            return acc;
+        }, {} as LocalStorageSnapshot['apiUrls']),
+    });
     setResolvedLlmOptions(options);
     addDebugLog({source: 'PROJECT_ANALYSIS_PAGE', type: 'DEBUG', message: `Opciones LLM resueltas para ${selectedConfigSource}`, data: options });
   }, [selectedConfigSource, agents, workgroups, addDebugLog]);
