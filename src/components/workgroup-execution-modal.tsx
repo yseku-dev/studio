@@ -161,14 +161,20 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
                     if (dataSplit.length > 1) {
                         message = dataSplit[0];
                         try {
-                            data = JSON.parse(dataSplit.slice(1).join(' | Data: ')); 
+                            // Attempt to parse if it looks like JSON, otherwise keep as string
+                            const potentialJson = dataSplit.slice(1).join(' | Data: ');
+                            if (potentialJson.startsWith('{') && potentialJson.endsWith('}') || potentialJson.startsWith('[') && potentialJson.endsWith(']')) {
+                                data = JSON.parse(potentialJson);
+                            } else {
+                                data = { raw: potentialJson }; // Keep as raw if not obviously JSON
+                            }
                         } catch {
                             data = {raw: dataSplit.slice(1).join(' | Data: ')}; 
                         }
                     }
                     logMessage({
                         timestamp: timestamp, type: type.toLowerCase() as LogEntry['type'] || 'debug', message,
-                        llmResponse: data ? data : undefined,
+                        llmResponse: data ? data : undefined, // Store parsed or raw data
                     });
                 } else {
                     logMessage({ type: 'debug', message: `[SERVER] ${log}` });
@@ -184,7 +190,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
             return;
         }
         
-        const updatedHistory = result.updatedHistory || history;
+        const updatedHistory = result.updatedHistory || history; // Ensure history is an array
         setConversationHistory(updatedHistory);
 
         if (result.orchestratorDecision) {
@@ -201,7 +207,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
             setIsExecuting(false);
             isExecutingRef.current = false;
         } else if (!signal.aborted) {
-            await new Promise(resolve => setTimeout(resolve, 1500));
+            await new Promise(resolve => setTimeout(resolve, 1500)); // Delay between turns
             if (!signal.aborted && isMountedRef.current) {
                 runExecutionTurn(turn + 1, updatedHistory, signal);
             } else if (signal.aborted) {
@@ -252,10 +258,12 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
   useEffect(() => {
     isMountedRef.current = true;
     if (isOpen) {
+        // Reset and start execution only if not already executing
         if (!isExecutingRef.current) {
             startExecution();
         }
     } else {
+        // If modal is closed, ensure execution is stopped
         if (isExecutingRef.current) {
             isExecutingRef.current = false; 
             setIsExecuting(false); 
@@ -263,19 +271,21 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
         if (executionControllerRef.current) {
             executionControllerRef.current.abort();
             logMessage({ type: 'system', message: 'Ejecución detenida por cierre de modal.' });
-            executionControllerRef.current = null;
+            executionControllerRef.current = null; // Clear controller
         }
     }
     return () => {
         isMountedRef.current = false;
+        // Cleanup on unmount
         if (executionControllerRef.current) {
             executionControllerRef.current.abort();
             console.log('[WorkgroupExecutionModal] Execution aborted on unmount.');
             executionControllerRef.current = null;
         }
-        isExecutingRef.current = false;
+        isExecutingRef.current = false; // Ensure ref is false on unmount
     };
-  }, [isOpen, startExecution, logMessage]); 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, startExecution]); // Only re-run if isOpen changes or startExecution reference changes (which it shouldn't often)
 
   useEffect(() => {
     if (scrollAreaRef.current) {
@@ -295,16 +305,17 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
 
   const handleStopExecution = () => {
       if (executionControllerRef.current) {
-          executionControllerRef.current.abort();
+          executionControllerRef.current.abort(); // Send abort signal
           logMessage({type: 'system', message: 'Solicitando cancelación de la ejecución...'});
       }
-      setIsExecuting(false);
+      // State updates will be handled by runExecutionTurn or useEffect cleanup
+      setIsExecuting(false); // Immediately update UI button state
       isExecutingRef.current = false;
   };
 
   const handleDialogEvent = useCallback((open: boolean) => {
       if (!open) {
-          onClose();
+          onClose(); // Call the passed onClose handler
       }
   }, [onClose]);
 
@@ -392,7 +403,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
                              )
                         })}
                         {isExecuting && <div className="flex items-center gap-2 mt-2"><Loader2 className="h-4 w-4 animate-spin text-primary inline-block" /><span className='text-sm text-muted-foreground'>Procesando turno...</span></div>}
-                         {!isExecuting && executionError && <div className="mt-2 p-2 rounded bg-destructive/10 text-destructive text-sm font-medium">Ejecución detenida debido a un error.</div>}
+                         {!isExecuting && executionError && <div className="mt-2 p-2 rounded bg-destructive/10 text-destructive text-sm font-medium">Ejecución detenida debido a un error: {executionError}</div>}
                          {!isExecuting && !executionError && currentTurn >= MAX_WORKGROUP_TURNS && executionLogs.length > 0 && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución completada (Límite de turnos alcanzado).</div>}
                          {!isExecuting && !executionError && currentTurn < MAX_WORKGROUP_TURNS && executionLogs.length > 1 && !isExecutingRef.current && <div className="mt-2 p-2 rounded bg-primary/10 text-primary text-sm font-medium">Ejecución finalizada o detenida.</div>}
                     </pre>

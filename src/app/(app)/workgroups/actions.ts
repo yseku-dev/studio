@@ -64,8 +64,11 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
         let logMsg = `[${timestamp}] [${type}] ${message}`;
         if (data) {
             try {
-                const dataString = JSON.stringify(data, null, 2); // Pretty print JSON data
-                logMsg += ` | Data: ${dataString}`; // No truncation
+                // Attempt to pretty-print JSON if it's an object, otherwise stringify directly
+                const dataString = (typeof data === 'object' && data !== null) 
+                    ? JSON.stringify(data, null, 2) 
+                    : String(data);
+                logMsg += ` | Data: ${dataString}`; // No truncation for server logs
             } catch {
                 logMsg += ` | Data: [Unserializable]`;
             }
@@ -125,11 +128,12 @@ JSON:`;
         try {
             const decisionResult = await chatWithLLM(orchestratorPayload);
             orchestratorRawResponse = decisionResult.content;
-            log('DEBUG', `Respuesta cruda del Orquestrador recibida`, {raw: orchestratorRawResponse.substring(0, 500) + "..."});
+            log('DEBUG', `Respuesta cruda del Orquestrador recibida`, {raw: orchestratorRawResponse}); // Log full raw response
 
             let jsonString = orchestratorRawResponse;
+            // Remove potential markdown code block fences and think tags
             jsonString = jsonString.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-            jsonString = jsonString.replace(/<think>[\s\S]*?<\/think>/gi, '').trim(); // Case-insensitive removal of think tags
+            jsonString = jsonString.replace(/<think>[\s\S]*?<\/think>/gi, '').trim(); 
             
             const firstBrace = jsonString.indexOf('{');
             const lastBrace = jsonString.lastIndexOf('}');
@@ -192,20 +196,21 @@ JSON:`;
                 const agentLLMResponse = await chatWithLLM(agentPayload);
                 const agentResponseContent = agentLLMResponse.content;
 
-                log('INFO', `Respuesta recibida del Agente (${nextAgentConfig.name})`, { length: agentResponseContent.length, contentStart: agentResponseContent.substring(0, 200) + (agentResponseContent.length > 200 ? '...' : '') });
+                log('INFO', `Respuesta recibida del Agente (${nextAgentConfig.name})`, { length: agentResponseContent.length, contentStart: agentResponseContent }); // Log full agent response content
                 currentHistory.push({ role: 'assistant', content: agentResponseContent, name: nextAgentConfig.name }); // Add agent name to assistant message
 
                 agentResponse = {
                     agentId: nextAgentConfig.id,
                     content: agentResponseContent,
-                    rawOutput: agentResponseContent,
+                    rawOutput: agentResponseContent, // Raw agent response
                 };
             }
         } catch (err) {
             const error = err as Error;
-            log('ERROR', `Error durante la llamada LLM del Orquestrador o al procesar su respuesta: ${error.message}`, { rawResponse: orchestratorRawResponse.substring(0,500) + "...", stack: error.stack });
+            log('ERROR', `Fallo al parsear JSON del Orquestrador o error en su respuesta: ${error.message}`, { rawResponse: orchestratorRawResponse, stack: error.stack });
             currentHistory.push({ role: 'system', content: `[Error procesando decisión del Orquestrador (Turno ${payload.currentTurn}): ${error.message}]` });
-            return { error: `Error del Orquestrador: ${error.message}`, isComplete: false, updatedHistory: currentHistory, serverLogs, orchestratorDecision: { nextAgentId: 'ERROR', reason: error.message, rawOutput: orchestratorRawResponse || undefined } };
+            // Return error with the raw output for debugging
+            return { error: `Error del Orquestador (fallo al procesar respuesta): ${error.message}`, isComplete: false, updatedHistory: currentHistory, serverLogs, orchestratorDecision: { nextAgentId: 'ERROR', reason: error.message, rawOutput: orchestratorRawResponse || 'Respuesta cruda no disponible' } };
         }
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Error desconocido en el servidor.';
@@ -215,9 +220,12 @@ JSON:`;
 
     if (payload.currentTurn >= payload.maxTurns && !isComplete) {
         log('INFO', `Se alcanzó el límite máximo de turnos (${payload.maxTurns}). Finalizando ejecución.`);
-        isComplete = true;
+        isComplete = true; // Mark as complete due to max turns
         currentHistory.push({ role: 'system', content: `[Sistema: Se alcanzó el límite de ${payload.maxTurns} turnos. Ejecución finalizada.]` });
+    } else if (isComplete && payload.currentTurn < payload.maxTurns) {
+        log('INFO', `Orquestador marcó la tarea como completada en el turno ${payload.currentTurn}. Finalizando ejecución.`);
     }
+
 
     log('INFO', `Turno ${payload.currentTurn} completado.`);
     return { isComplete, updatedHistory: currentHistory, serverLogs, orchestratorDecision, agentResponse };
@@ -229,10 +237,10 @@ function formatHistoryForPrompt(history: ChatMessage[], maxMessages: number = 6)
         const contentString = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
         let roleName = 'Desconocido';
         if (msg.role === 'user') roleName = 'Usuario';
-        else if (msg.role === 'assistant') roleName = (msg as any).name || 'Agente'; // Try to get agent name if present
+        else if (msg.role === 'assistant') roleName = (msg as any).name || 'Agente'; 
         else if (msg.role === 'system') roleName = 'Sistema';
         // Log full message content in prompt context
-        return `  [${roleName}]: ${contentString.substring(0, 1000) + (contentString.length > 1000 ? "..." : "")}`; // Truncate long messages in prompt
+        return `  [${roleName}]: ${contentString}`; // No truncation for prompt context
     }).join('\n');
 }
 
