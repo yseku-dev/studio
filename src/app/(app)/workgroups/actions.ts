@@ -49,8 +49,8 @@ export interface WorkgroupTurnResponse {
   } | null; 
 }
 
-const ORCHESTRATOR_DECISION_TIMEOUT_MS = 60000; // Increased from 45s to 60s
-const AGENT_RESPONSE_TIMEOUT_MS = 120000; // Increased from 90s to 120s
+const ORCHESTRATOR_DECISION_TIMEOUT_MS = 60000; 
+const AGENT_RESPONSE_TIMEOUT_MS = 120000; 
 
 // --- Server Action ---
 
@@ -61,11 +61,11 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
         let dataStringForLogMessage = '';
         if (data) {
             try {
-                const previewData = (typeof data === 'object' && data !== null) 
-                    ? JSON.stringify(data) 
-                    : String(data);
-                dataStringForLogMessage = ` | Data: ${previewData.substring(0, 1500)}${previewData.length > 1500 ? '...' : ''}`; 
+                // Attempt to stringify and truncate. If it's already a string, just truncate.
+                const dataPreview = (typeof data === 'string') ? data : JSON.stringify(data);
+                dataStringForLogMessage = ` | Data: ${dataPreview.substring(0, 1500)}${dataPreview.length > 1500 ? '...' : ''}`;
             } catch {
+                // Handle cases where data might not be stringifiable (e.g. circular refs, though less common with simple objects)
                 dataStringForLogMessage = ' | Data: [Unserializable para vista previa del log]';
             }
         }
@@ -74,16 +74,17 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
         serverLogs.push(logMsg); 
     };
 
-    log('INFO', `Manejando turno ${payload.currentTurn} para grupo de trabajo "${payload.workgroupName}"`);
+    log('INFO', `Handling turn ${payload.currentTurn} for workgroup "${payload.workgroupName}"`);
 
     let currentHistory = [...payload.conversationHistory]; 
     let isComplete = false;
     let orchestratorDecision: WorkgroupTurnResponse['orchestratorDecision'] = null;
     let agentResponse: WorkgroupTurnResponse['agentResponse'] = null;
+    let orchestratorRawResponse = ''; // To store raw response for debugging
 
     try {
         // === 1. Orchestrator Decides ===
-        log('INFO', `Orquestador (${payload.orchestrator.name}) decidiendo próximo paso.`);
+        log('INFO', `Orchestrator (${payload.orchestrator.name}) deciding next step.`);
 
         const orchestratorOptions: LLMOptions = {
             providerId: payload.orchestrator.llmProviderId,
@@ -95,30 +96,27 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
         
         if (!orchestratorOptions.providerId || !orchestratorOptions.modelName) {
             log('ERROR', `Configuración LLM inválida para Orquestrador (${payload.orchestrator.name}): Falta providerId o modelName.`);
+            // Ensure currentHistory and serverLogs are serializable before returning
             return {
                 error: `Configuración LLM inválida para Orquestrador (${payload.orchestrator.name})`,
-                isComplete: false,
-                updatedHistory: currentHistory,
-                serverLogs,
+                isComplete: true, // Stop processing on client
+                updatedHistory: currentHistory.map(m => ({...m, content: String(m.content || '')})),
+                serverLogs: serverLogs.map(s => String(s || '')),
                 orchestratorDecision: null,
                 agentResponse: null,
             };
         }
 
-
         const availableAgentNames = Object.values(payload.participantAgentConfigs).map(a => a.name).join(', ');
         
-        // Truncate task view for orchestrator if it's too long (e.g., contains full source code)
-        const MAX_TASK_VIEW_LENGTH_FOR_ORCHESTRATOR = 5000; // Characters
+        const MAX_TASK_VIEW_LENGTH_FOR_ORCHESTRATOR = 5000; 
         const orchestratorTaskView = payload.task.length > MAX_TASK_VIEW_LENGTH_FOR_ORCHESTRATOR
             ? payload.task.substring(0, MAX_TASK_VIEW_LENGTH_FOR_ORCHESTRATOR) + "\n... (Contenido completo de la tarea es extenso y está disponible para los agentes especialistas)"
             : payload.task;
 
         const orchestratorSystemPrompt = `${payload.orchestrator.systemMessage} 
-Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti para asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realizas la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso. Si el usuario no propone un paso explícito, prioriza agentes con capacidades relevantes para la tarea actual.
-
 CONTEXTO ACTUAL:
-Tarea Principal (Vista para Orquestador): ${orchestratorTaskView} 
+Tarea Principal (Vista para Orquestrador): ${orchestratorTaskView} 
 Agentes Disponibles: ${availableAgentNames}
 Historial de Conversación Reciente:
 ${formatHistoryForPrompt(currentHistory)}
@@ -134,14 +132,13 @@ No incluyas nada más en tu respuesta. Solo el objeto JSON.
 
 JSON:`;
 
-
         const orchestratorPayload: ChatLLMPayload = {
             messages: [{ role: 'system', content: orchestratorSystemPrompt }],
             options: orchestratorOptions,
         };
         log('DEBUG', `Llamando a LLM del Orquestrador...`, { model: orchestratorOptions.modelName, promptStart: orchestratorSystemPrompt.substring(0,500) + "..." }); 
 
-        let orchestratorRawResponse = '';
+        
         let decisionJson: { next_agent_name: string; reason: string } | null = null;
         try {
             const decisionResult = await chatWithLLM(orchestratorPayload);
@@ -153,20 +150,19 @@ JSON:`;
             if (jsonMatch && jsonMatch[0]) {
                 jsonString = jsonMatch[0];
             } else {
-                 log('ERROR', `Respuesta del Orquestrador no contenía un bloque JSON reconocible. Contenido: ${jsonString.substring(0,500)}...`);
+                log('ERROR', `Respuesta del Orquestrador no contenía un bloque JSON reconocible. Contenido: ${jsonString.substring(0,500)}...`);
                 throw new Error("Respuesta del Orquestrador no contenía un bloque JSON reconocible.");
             }
             
             decisionJson = JSON.parse(jsonString);
 
             if (!decisionJson || typeof decisionJson.next_agent_name !== 'string' || typeof decisionJson.reason !== 'string') {
-                 log('ERROR', `Respuesta JSON del Orquestrador inválida. JSON parseado: ${JSON.stringify(decisionJson)}`, { originalJsonString: jsonString.substring(0,500) });
+                log('ERROR', `Respuesta JSON del Orquestrador inválida. JSON parseado: ${JSON.stringify(decisionJson)}`, { originalJsonString: jsonString.substring(0,500) });
                 throw new Error("Respuesta JSON del Orquestrador inválida: faltan 'next_agent_name' o 'reason', o tienen tipos incorrectos.");
             }
 
             log('INFO', `Decisión del Orquestrador: ${decisionJson.reason}. Próximo: ${decisionJson.next_agent_name}`);
             currentHistory.push({ role: 'system', content: `[Orquestador decide (Turno ${payload.currentTurn}): ${decisionJson.reason}. Próximo: ${decisionJson.next_agent_name}]`, name: payload.orchestrator.name });
-
 
             if (decisionJson.next_agent_name.toUpperCase() === "COMPLETADO") {
                 isComplete = true;
@@ -204,9 +200,7 @@ JSON:`;
                 }
 
                  const agentHistoryContext = formatHistoryForPrompt(currentHistory, 10);
-                 // When passing the task to the specialist, use the FULL payload.task
                  const agentSystemPrompt = `${nextAgentConfigFromPayload.systemMessage}\n\nCONTEXTO:\nTarea Principal del Grupo: ${payload.task}\nHistorial de Conversación Reciente:\n${agentHistoryContext}\n\nTU TURNO (Turno ${payload.currentTurn}):\nEl Orquestrador te ha pasado el control porque: "${orchestratorDecision.reason}".\nConsidera el historial y la tarea. Realiza tu contribución o responde. Sé conciso y directo.`;
-
 
                 const agentPayload: ChatLLMPayload = {
                     messages: [{ role: 'system', content: agentSystemPrompt }],
@@ -226,13 +220,25 @@ JSON:`;
                     rawOutput: agentResponseContent, 
                 };
             }
-        } catch (err) {
+        } catch (err) { // Catch for Orchestrator LLM call / JSON parse
             const error = err as Error;
             log('ERROR', `Fallo al parsear JSON del Orquestrador o error en su respuesta: ${error.message}`, { rawResponse: orchestratorRawResponse ? orchestratorRawResponse.substring(0,500) + (orchestratorRawResponse.length > 500 ? "..." : "") : "Respuesta cruda no disponible", stack: error.stack });
             currentHistory.push({ role: 'system', content: `[Error procesando decisión del Orquestrador (Turno ${payload.currentTurn}): ${error.message}]` , name: payload.orchestrator.name});
-            return { error: `Error del Orquestador (fallo al procesar respuesta): ${error.message}`, isComplete: false, updatedHistory: currentHistory, serverLogs, orchestratorDecision: { nextAgentId: 'ERROR', reason: error.message, rawOutput: orchestratorRawResponse || 'Respuesta cruda no disponible' }, agentResponse: null };
+            // This return is for the inner catch block
+            return { 
+                error: `Error del Orquestrador (fallo al procesar respuesta): ${error.message}`, 
+                isComplete: true, // Stop processing on client
+                updatedHistory: currentHistory.map(m => ({...m, content: String(m.content || '')})), 
+                serverLogs: serverLogs.map(s => String(s || '')), 
+                orchestratorDecision: { 
+                    nextAgentId: 'ERROR_ORCHESTRATOR', 
+                    reason: error.message, 
+                    rawOutput: orchestratorRawResponse || 'Respuesta cruda no disponible' 
+                }, 
+                agentResponse: null 
+            };
         }
-    } catch (error) {
+    } catch (error) { // Main catch block for the entire function
         let detailMessage: string;
         if (error instanceof Error) {
             detailMessage = error.message;
@@ -242,22 +248,35 @@ JSON:`;
         if (!detailMessage || detailMessage.trim() === "") {
             detailMessage = "Error desconocido o el servidor no proporcionó detalles.";
         }
-        log('ERROR', `Error general en handleWorkgroupTurn (Turno ${payload.currentTurn}): ${detailMessage}`, { stack: (error as Error)?.stack });
         
-        const safeServerLogs = serverLogs.map(logEntry => String(logEntry));
-        const safeUpdatedHistory = currentHistory.map(msg => ({
-            role: msg.role,
-            content: String(msg.content), 
-            name: msg.name ? String(msg.name) : undefined
-        }));
+        console.error(`[WORKGROUP_ACTION_ERROR] Turn ${payload.currentTurn} failed: ${detailMessage}`, { stack: (error as Error)?.stack, fullError: error });
+        serverLogs.push(`[${new Date().toISOString()}] [FATAL_ERROR_WORKGROUP_TURN] ${detailMessage}`);
+
+        let safeHistoryForError: ChatMessage[];
+        try {
+            safeHistoryForError = currentHistory.map(msg => ({
+                role: msg.role,
+                content: String(msg.content || '').substring(0, 1000), 
+                name: msg.name ? String(msg.name).substring(0, 100) : undefined
+            }));
+        } catch {
+            safeHistoryForError = [{role: 'system', content: 'Error processing history for error response.'}];
+        }
+
+        let safeLogsForError: string[];
+        try {
+            safeLogsForError = serverLogs.map(logEntry => String(logEntry || '').substring(0, 500));
+        } catch {
+            safeLogsForError = ['Error processing server logs for error response.'];
+        }
 
         return {
-            error: detailMessage,
-            isComplete: false,
-            updatedHistory: safeUpdatedHistory,
-            serverLogs: safeServerLogs,
-            orchestratorDecision: null, 
-            agentResponse: null, 
+            error: `SERVER_ACTION_UNHANDLED_ERROR: ${detailMessage.substring(0, 500)}`, 
+            isComplete: true, 
+            updatedHistory: safeHistoryForError,
+            serverLogs: safeLogsForError,
+            orchestratorDecision: null,
+            agentResponse: null,
         };
     }
 
@@ -265,10 +284,9 @@ JSON:`;
         log('INFO', `Se alcanzó el límite máximo de turnos (${payload.maxTurns}). Finalizando ejecución.`);
         isComplete = true; 
         currentHistory.push({ role: 'system', content: `[Sistema: Se alcanzó el límite de ${payload.maxTurns} turnos. Ejecución finalizada.]` });
-    } else if (isComplete && payload.currentTurn <= payload.maxTurns) { // Corrected condition
+    } else if (isComplete && payload.currentTurn <= payload.maxTurns) { 
         log('INFO', `Orquestador marcó la tarea como completada en el turno ${payload.currentTurn}. Finalizando ejecución.`);
     }
-
 
     log('INFO', `Turno ${payload.currentTurn} completado.`);
     return { isComplete, updatedHistory: currentHistory, serverLogs, orchestratorDecision, agentResponse };
@@ -280,12 +298,12 @@ function formatHistoryForPrompt(history: ChatMessage[], maxMessages: number = 6)
         const contentString = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
         let roleName = 'Desconocido';
         if (msg.role === 'user') roleName = 'Usuario';
-        else if (msg.role === 'assistant') roleName = (msg as any).name || 'Agente'; 
+        else if (msg.role === 'assistant') roleName = msg.name || 'Agente'; 
         else if (msg.role === 'system') {
-             // Try to get agent name if it's a system message from an agent
-            const agentName = (msg as any).name;
+            const agentName = msg.name;
             roleName = agentName ? `Sistema (${agentName})` : 'Sistema';
         }
         return `  [${roleName}]: ${contentString.substring(0,1000)}${contentString.length > 1000 ? '...' : ''}`; 
     }).join('\n');
 }
+
