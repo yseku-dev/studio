@@ -67,14 +67,14 @@ const LOCALSTORAGE_AGENTS_KEY = 'codealchemist_agents';
 const defaultAgents: Omit<AgentConfig, 'id'>[] = [
   { name: "JefeDeProducto", description: "Define requisitos, historias de usuario y prioridades.", systemMessage: "Eres un Jefe de Producto experimentado. Tu tarea es definir claramente los requisitos del proyecto, crear historias de usuario detalladas y establecer prioridades. Comunícate de forma efectiva con el equipo.", llmConfig: 'default' },
   { name: "ArquitectoSoftware", description: "Diseña la arquitectura del sistema y selecciona tecnologías.", systemMessage: "Eres un Arquitecto de Software senior. Tu responsabilidad es diseñar una arquitectura robusta, escalable y mantenible. Selecciona las tecnologías y patrones de diseño más adecuados.", llmConfig: 'default' },
-  { name: "DesarrolladorSoftware", description: "Escribe el código fuente de la aplicación.", systemMessage: "Eres un Desarrollador de Software competente. Tu misión es escribir código limpio, eficiente y bien documentado. Implementa las funcionalidades requeridas.", llmConfig: 'default', executionCapability: true, readWriteCapability: true }, // Example capabilities
-  { name: "IngenieroPruebas", description: "Escribe y ejecuta pruebas para asegurar la calidad.", systemMessage: "Eres un Ingeniero de Pruebas meticuloso. Tu objetivo es asegurar la calidad del software mediante la creación y ejecución de planes de prueba exhaustivos. Reporta los errores de forma clara.", llmConfig: 'default', executionCapability: true }, // Example capability
-  { name: "IngenieroDevOps", description: "Gestiona infraestructura, despliegues y CI/CD.", systemMessage: "Eres un Ingeniero DevOps eficiente. Tu función es automatizar los procesos de CI/CD y gestionar la infraestructura, asegurando su disponibilidad y rendimiento.", llmConfig: 'default', executionCapability: true, virtualEnvCapability: true, readWriteCapability: true }, // Example capabilities
+  { name: "DesarrolladorSoftware", description: "Escribe el código fuente de la aplicación.", systemMessage: "Eres un Desarrollador de Software competente. Tu misión es escribir código limpio, eficiente y bien documentado. Implementa las funcionalidades requeridas.", llmConfig: 'default', capabilities: { selfCodeAccess: true, executionCapability: true, virtualEnvCapability: false, readWriteCapability: true }},
+  { name: "IngenieroPruebas", description: "Escribe y ejecuta pruebas para asegurar la calidad.", systemMessage: "Eres un Ingeniero de Pruebas meticuloso. Tu objetivo es asegurar la calidad del software mediante la creación y ejecución de planes de prueba exhaustivos. Reporta los errores de forma clara.", llmConfig: 'default', capabilities: { executionCapability: true } },
+  { name: "IngenieroDevOps", description: "Gestiona infraestructura, despliegues y CI/CD.", systemMessage: "Eres un Ingeniero DevOps eficiente. Tu función es automatizar los procesos de CI/CD y gestionar la infraestructura, asegurando su disponibilidad y rendimiento.", llmConfig: 'default', capabilities: { executionCapability: true, virtualEnvCapability: true, readWriteCapability: true } },
   { name: "RepresentanteUsuario", description: "Proporciona feedback desde la perspectiva del usuario final.", systemMessage: "Eres el Representante del Usuario. Tu perspectiva es crucial. Proporciona feedback sobre las funcionalidades desarrolladas y valida que el producto cumple con las expectativas.", llmConfig: 'default' },
   {
     name: ORCHESTRATOR_AGENT_NAME,
-    description: "Agente central obligatorio en cada Grupo de Trabajo. Gestiona el flujo de interacciones, recibe todas las respuestas y decide qué agente actúa a continuación para garantizar un proceso coordinado y la toma de decisiones centralizada. Limita los turnos a 10 por defecto.",
-    systemMessage: "Eres el Orquestador del Grupo de Trabajo. Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti. Tu objetivo es asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realizas la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso. Si el usuario no propone un paso, prioriza agentes con capacidades relevantes para la tarea actual (ej. 'RefactorizadorCodigoExperto' para mejoras de código).",
+    description: "Agente central obligatorio en cada Grupo de Trabajo. Recibe y gestiona todas las respuestas generadas dentro del grupo y, si el usuario no propone un paso, decide qué agente o subgrupo actúa a continuación. Todas las respuestas deben pasar obligatoriamente por él para garantizar un flujo coordinado y la toma de decisiones centralizada. Limita los turnos a 10 por defecto.",
+    systemMessage: "Eres el Orquestador del Grupo de Trabajo. Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti para asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realizas la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso. Si el usuario no propone un paso explícito, prioriza agentes con capacidades relevantes para la tarea actual (ej. 'RefactorizadorCodigoExperto' para mejoras de código). Tu respuesta DEBE SER EXCLUSIVAMENTE un objeto JSON válido con las claves 'next_agent_name' (string, el nombre EXACTO de un agente disponible o 'COMPLETADO') y 'reason' (string, justificación concisa). No incluyas NADA más.",
     llmConfig: 'default'
   },
   {
@@ -82,18 +82,14 @@ const defaultAgents: Omit<AgentConfig, 'id'>[] = [
     description: "Analiza código y propone refactorizaciones para mejorar calidad, rendimiento o legibilidad, priorizando estándares como SOLID y Clean Code.",
     systemMessage: `Eres un experto en refactorización de código. Prioriza estándares como SOLID y Clean Code. Analiza el proyecto o fragmento de código proporcionado. Considera las metas y prioridades de refactorización especificadas. Genera una lista de sugerencias de refactorización. Para cada sugerencia, indica el archivo/área, una descripción clara de la mejora, una prioridad (Alta, Media, o Baja) y, si es aplicable, un fragmento del código modificado. Tu respuesta DEBE ser un objeto JSON con la clave "refactoringSuggestions", que es un array de objetos, cada uno con "area", "description", "priority", y opcionalmente "suggestedSnippet".`,
     llmConfig: 'default',
-    selfCodeAccess: true,
-    executionCapability: true, // Para ejecutar linters, etc.
-    readWriteCapability: false, // Por defecto no escribe, solo sugiere.
+    capabilities: { selfCodeAccess: true, executionCapability: true, readWriteCapability: false }
   },
   {
     name: "ValidadorCodigo",
     description: "Analiza resultados de refactorización para detectar errores y asegurar la calidad del código, por ejemplo, ejecutando linters o tests.",
     systemMessage: "Eres un Validador de Código. Tu tarea es analizar el código proporcionado o modificado para detectar errores de sintaxis, violaciones de estilo, y asegurar que las pruebas (si existen) pasen. Puedes usar herramientas como linters (ej. ESLint) o ejecutar scripts de prueba. Informa sobre cualquier problema encontrado.",
     llmConfig: 'default',
-    selfCodeAccess: true,
-    executionCapability: true, // Para ejecutar linters, tests.
-    readWriteCapability: false,
+    capabilities: { selfCodeAccess: true, executionCapability: true, readWriteCapability: false }
   }
 ];
 
@@ -134,10 +130,12 @@ export default function AgentsPage() {
           // Ensure new capability flags have default values if missing from storage
           const agentsWithDefaults = parsedAgents.map(agent => ({
               ...agent,
-              selfCodeAccess: agent.selfCodeAccess ?? false,
-              executionCapability: agent.executionCapability ?? false,
-              virtualEnvCapability: agent.virtualEnvCapability ?? false,
-              readWriteCapability: agent.readWriteCapability ?? false,
+              capabilities: {
+                selfCodeAccess: agent.capabilities?.selfCodeAccess ?? agent.selfCodeAccess ?? false, // Maintain old structure for a bit for migration
+                executionCapability: agent.capabilities?.executionCapability ?? agent.executionCapability ?? false,
+                virtualEnvCapability: agent.capabilities?.virtualEnvCapability ?? agent.virtualEnvCapability ?? false,
+                readWriteCapability: agent.capabilities?.readWriteCapability ?? agent.readWriteCapability ?? false,
+              }
           }));
           setAgents(agentsWithDefaults);
         } else {
@@ -157,10 +155,12 @@ export default function AgentsPage() {
     const initialAgents = defaultAgents.map(agent => ({
         ...agent,
         id: crypto.randomUUID(),
-        selfCodeAccess: agent.selfCodeAccess ?? false,
-        executionCapability: agent.executionCapability ?? false,
-        virtualEnvCapability: agent.virtualEnvCapability ?? false,
-        readWriteCapability: agent.readWriteCapability ?? false,
+        capabilities: {
+            selfCodeAccess: agent.capabilities?.selfCodeAccess ?? agent.selfCodeAccess ?? false,
+            executionCapability: agent.capabilities?.executionCapability ?? agent.executionCapability ?? false,
+            virtualEnvCapability: agent.capabilities?.virtualEnvCapability ?? agent.virtualEnvCapability ?? false,
+            readWriteCapability: agent.capabilities?.readWriteCapability ?? agent.readWriteCapability ?? false,
+        }
     }));
     setAgents(initialAgents);
     localStorage.setItem(LOCALSTORAGE_AGENTS_KEY, JSON.stringify(initialAgents));
@@ -191,10 +191,10 @@ export default function AgentsPage() {
         customModelName: agent.llmConfig !== 'default' ? agent.llmConfig.modelName : undefined,
         customApiKey: agent.llmConfig !== 'default' ? agent.llmConfig.apiKey || '' : '',
         customApiUrl: agent.llmConfig !== 'default' ? agent.llmConfig.apiUrl || '' : '',
-        selfCodeAccess: agent.selfCodeAccess ?? false,
-        executionCapability: agent.executionCapability ?? false,
-        virtualEnvCapability: agent.virtualEnvCapability ?? false,
-        readWriteCapability: agent.readWriteCapability ?? false,
+        selfCodeAccess: agent.capabilities?.selfCodeAccess ?? agent.selfCodeAccess ?? false,
+        executionCapability: agent.capabilities?.executionCapability ?? agent.executionCapability ?? false,
+        virtualEnvCapability: agent.capabilities?.virtualEnvCapability ?? agent.virtualEnvCapability ?? false,
+        readWriteCapability: agent.capabilities?.readWriteCapability ?? agent.readWriteCapability ?? false,
       });
     } else {
       setEditingAgent(null);
@@ -234,10 +234,12 @@ export default function AgentsPage() {
       description: data.description,
       systemMessage: data.systemMessage,
       llmConfig: llmConfigToSave,
-      selfCodeAccess: data.selfCodeAccess ?? false,
-      executionCapability: data.executionCapability ?? false,
-      virtualEnvCapability: data.virtualEnvCapability ?? false,
-      readWriteCapability: data.readWriteCapability ?? false,
+      capabilities: {
+        selfCodeAccess: data.selfCodeAccess ?? false,
+        executionCapability: data.executionCapability ?? false,
+        virtualEnvCapability: data.virtualEnvCapability ?? false,
+        readWriteCapability: data.readWriteCapability ?? false,
+      }
     };
 
     let updatedAgents;
@@ -405,10 +407,13 @@ export default function AgentsPage() {
           if (!agent.id || !agent.name || !agent.systemMessage) {
             throw new Error(`Agente importado inválido: falta id, name o systemMessage. Agente: ${JSON.stringify(agent).substring(0,100)}`);
           }
-          agent.selfCodeAccess = agent.selfCodeAccess ?? false;
-          agent.executionCapability = agent.executionCapability ?? false;
-          agent.virtualEnvCapability = agent.virtualEnvCapability ?? false;
-          agent.readWriteCapability = agent.readWriteCapability ?? false;
+          // Ensure capabilities object exists and has default values if missing from imported agent
+            agent.capabilities = {
+                selfCodeAccess: agent.capabilities?.selfCodeAccess ?? agent.selfCodeAccess ?? false,
+                executionCapability: agent.capabilities?.executionCapability ?? agent.executionCapability ?? false,
+                virtualEnvCapability: agent.capabilities?.virtualEnvCapability ?? agent.virtualEnvCapability ?? false,
+                readWriteCapability: agent.capabilities?.readWriteCapability ?? agent.readWriteCapability ?? false,
+            };
         });
 
         let updatedAgents = [...agents];
@@ -505,11 +510,11 @@ export default function AgentsPage() {
                            <div className="space-y-1">
                                 <Label className="text-xs font-medium text-foreground">Capacidades:</Label>
                                 <div className="flex flex-wrap gap-1">
-                                    {agent.selfCodeAccess && <Badge variant="outline" className="text-xs"><Code className="mr-1 h-3 w-3"/>Código Propio</Badge>}
-                                    {agent.executionCapability && <Badge variant="outline" className="text-xs"><Terminal className="mr-1 h-3 w-3"/>Ejecución</Badge>}
-                                    {agent.virtualEnvCapability && <Badge variant="outline" className="text-xs"><FolderGit2 className="mr-1 h-3 w-3"/>Entorno Virtual</Badge>}
-                                    {agent.readWriteCapability && <Badge variant="outline" className="text-xs"><FileCode className="mr-1 h-3 w-3"/>Lectura/Escritura</Badge>}
-                                    {!agent.selfCodeAccess && !agent.executionCapability && !agent.virtualEnvCapability && !agent.readWriteCapability && <span className="text-xs text-muted-foreground italic">Ninguna</span>}
+                                    {agent.capabilities?.selfCodeAccess && <Badge variant="outline" className="text-xs"><Code className="mr-1 h-3 w-3"/>Código Propio</Badge>}
+                                    {agent.capabilities?.executionCapability && <Badge variant="outline" className="text-xs"><Terminal className="mr-1 h-3 w-3"/>Ejecución</Badge>}
+                                    {agent.capabilities?.virtualEnvCapability && <Badge variant="outline" className="text-xs"><FolderGit2 className="mr-1 h-3 w-3"/>Entorno Virtual</Badge>}
+                                    {agent.capabilities?.readWriteCapability && <Badge variant="outline" className="text-xs"><FileCode className="mr-1 h-3 w-3"/>Lectura/Escritura</Badge>}
+                                    {(!agent.capabilities?.selfCodeAccess && !agent.capabilities?.executionCapability && !agent.capabilities?.virtualEnvCapability && !agent.capabilities?.readWriteCapability) && <span className="text-xs text-muted-foreground italic">Ninguna</span>}
                                 </div>
                             </div>
                         </CardContent>
@@ -748,4 +753,5 @@ export default function AgentsPage() {
     </>
   );
 }
+
 

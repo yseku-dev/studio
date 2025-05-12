@@ -1,4 +1,3 @@
-
 // src/components/workgroup-execution-modal.tsx
 'use client';
 
@@ -151,36 +150,27 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
         const result: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
 
         if (result.serverLogs && result.serverLogs.length > 0) {
-            result.serverLogs.forEach(log => {
-                const match = log.match(/^\[(.*?)\] \[(.*?)\] (.*)$/);
-                if (match) {
-                    const [, timestamp, type, messageData] = match;
-                    let message = messageData;
+            result.serverLogs.forEach(logEntry => {
+                 // Example parsing, adjust based on actual server log format
+                const parts = logEntry.match(/^\[(.*?)\] \[(WG-.*?)] (.*?)(?: \| Data: (.*))?$/);
+                if (parts && parts.length >= 4) {
+                    const [, timestamp, typeStr, message, dataStr] = parts;
                     let data;
-                    const dataSplit = messageData.split(' | Data: ');
-                    if (dataSplit.length > 1) {
-                        message = dataSplit[0];
-                        try {
-                            // Attempt to parse if it looks like JSON, otherwise keep as string
-                            const potentialJson = dataSplit.slice(1).join(' | Data: ');
-                            if (potentialJson.startsWith('{') && potentialJson.endsWith('}') || potentialJson.startsWith('[') && potentialJson.endsWith(']')) {
-                                data = JSON.parse(potentialJson);
-                            } else {
-                                data = { raw: potentialJson }; // Keep as raw if not obviously JSON
-                            }
-                        } catch {
-                            data = {raw: dataSplit.slice(1).join(' | Data: ')}; 
-                        }
+                    if (dataStr) {
+                        try { data = JSON.parse(dataStr); } catch { data = { raw: dataStr }; }
                     }
                     logMessage({
-                        timestamp: timestamp, type: type.toLowerCase() as LogEntry['type'] || 'debug', message,
-                        llmResponse: data ? data : undefined, // Store parsed or raw data
+                        timestamp,
+                        type: typeStr.replace('WG-', '').toLowerCase() as LogEntry['type'] || 'debug',
+                        message,
+                        llmResponse: data,
                     });
                 } else {
-                    logMessage({ type: 'debug', message: `[SERVER] ${log}` });
+                    logMessage({ type: 'debug', message: `[SERVER] ${logEntry}` });
                 }
             });
         }
+
 
         if (result.error) {
             logMessage({ type: 'error', message: `Error en el servidor durante el turno ${turn}: ${result.error}` });
@@ -190,7 +180,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
             return;
         }
         
-        const updatedHistory = result.updatedHistory || history; // Ensure history is an array
+        const updatedHistory = result.updatedHistory || history; 
         setConversationHistory(updatedHistory);
 
         if (result.orchestratorDecision) {
@@ -209,7 +199,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
         } else if (!signal.aborted) {
             await new Promise(resolve => setTimeout(resolve, 1500)); // Delay between turns
             if (!signal.aborted && isMountedRef.current) {
-                runExecutionTurn(turn + 1, updatedHistory, signal);
+                runExecutionTurn(turn + 1, updatedHistory, signal); // Pass updatedHistory
             } else if (signal.aborted) {
                  logMessage({ type: 'system', message: 'Ejecución cancelada por el usuario durante la espera.' });
                  setIsExecuting(false);
@@ -239,7 +229,7 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
     setExecutionLogs([]);
     const initialHistory: ChatMessage[] = [];
     setConversationHistory(initialHistory);
-    setCurrentTurn(0);
+    setCurrentTurn(0); // Reset turn count for new execution
     setExecutionError(null);
     
     logMessage({ type: 'system', message: `Iniciando ejecución del grupo de trabajo "${workgroup.name}"...` });
@@ -252,40 +242,37 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
         executionControllerRef.current.abort(); 
     }
     executionControllerRef.current = new AbortController();
-    runExecutionTurn(1, initialHistory, executionControllerRef.current.signal);
+    runExecutionTurn(1, initialHistory, executionControllerRef.current.signal); // Start with turn 1
   }, [workgroup.name, workgroup.task, orchestrator, participantAgents, logMessage, runExecutionTurn]);
 
   useEffect(() => {
     isMountedRef.current = true;
     if (isOpen) {
-        // Reset and start execution only if not already executing
         if (!isExecutingRef.current) {
             startExecution();
         }
     } else {
-        // If modal is closed, ensure execution is stopped
         if (isExecutingRef.current) {
             isExecutingRef.current = false; 
             setIsExecuting(false); 
-        }
-        if (executionControllerRef.current) {
-            executionControllerRef.current.abort();
-            logMessage({ type: 'system', message: 'Ejecución detenida por cierre de modal.' });
-            executionControllerRef.current = null; // Clear controller
+            if (executionControllerRef.current) {
+                executionControllerRef.current.abort();
+                logMessage({ type: 'system', message: 'Ejecución detenida por cierre de modal.' });
+                executionControllerRef.current = null; 
+            }
         }
     }
     return () => {
         isMountedRef.current = false;
-        // Cleanup on unmount
         if (executionControllerRef.current) {
             executionControllerRef.current.abort();
             console.log('[WorkgroupExecutionModal] Execution aborted on unmount.');
             executionControllerRef.current = null;
         }
-        isExecutingRef.current = false; // Ensure ref is false on unmount
+        isExecutingRef.current = false; 
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, startExecution]); // Only re-run if isOpen changes or startExecution reference changes (which it shouldn't often)
+  }, [isOpen]); 
 
   useEffect(() => {
     if (scrollAreaRef.current) {
@@ -305,19 +292,24 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
 
   const handleStopExecution = () => {
       if (executionControllerRef.current) {
-          executionControllerRef.current.abort(); // Send abort signal
+          executionControllerRef.current.abort(); 
           logMessage({type: 'system', message: 'Solicitando cancelación de la ejecución...'});
       }
-      // State updates will be handled by runExecutionTurn or useEffect cleanup
-      setIsExecuting(false); // Immediately update UI button state
+      setIsExecuting(false); 
       isExecutingRef.current = false;
   };
 
   const handleDialogEvent = useCallback((open: boolean) => {
       if (!open) {
-          onClose(); // Call the passed onClose handler
+          if (isExecutingRef.current && executionControllerRef.current) {
+             executionControllerRef.current.abort();
+             logMessage({ type: 'system', message: 'Ejecución cancelada por cierre de modal (botón X/escape).' });
+          }
+          setIsExecuting(false);
+          isExecutingRef.current = false;
+          onClose(); 
       }
-  }, [onClose]);
+  }, [onClose, logMessage]);
 
   return (
     <Dialog open={isOpen} onOpenChange={handleDialogEvent}>
@@ -425,3 +417,4 @@ export function WorkgroupExecutionModal({ isOpen, onClose, workgroup, agents, wo
     </Dialog>
   );
 }
+

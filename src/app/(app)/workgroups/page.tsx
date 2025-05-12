@@ -33,16 +33,14 @@ import { LOCALSTORAGE_WORKGROUPS_KEY, LOCALSTORAGE_AGENTS_KEY, ORCHESTRATOR_AGEN
 
 const defaultWorkgroup: Omit<WorkgroupConfig, 'id' | 'agentIds'> & { agentNames: string[] } = {
   name: "EquipoDesarrolloSoftware",
-  description: "Un equipo multidisciplinario capaz de abordar diversas tareas de desarrollo de software, gestionado por un Orquestador. Este grupo simula un ciclo de vida de desarrollo completo.",
-  task: `Este grupo de trabajo se comporta como un equipo de producción de software completo. Dada una descripción de proyecto o una necesidad funcional, el Orquestador coordinará a los agentes especializados (JefeDeProducto, ArquitectoSoftware, DesarrolladorSoftware, ${REFACTOR_AGENT_NAME}, ValidadorCodigo, IngenieroPruebas, IngenieroDevOps, RepresentanteUsuario) para: 
-1. Definir requisitos y alcance del proyecto.
-2. Diseñar la arquitectura técnica de la solución.
-3. Implementar el código fuente necesario y proponer refactorizaciones.
-4. Validar la calidad y corrección del código.
-5. Asegurar la calidad del software mediante pruebas exhaustivas.
-6. Preparar el entorno para el despliegue y gestionar la infraestructura si es pertinente.
-7. Validar la solución desde la perspectiva del usuario final.
-El objetivo es entregar una solución funcional, un análisis detallado, o cualquier artefacto de software solicitado, basado en la entrada inicial.`,
+  description: "Un equipo multidisciplinario capaz de abordar diversas tareas de desarrollo de software, incluyendo la mejora del sistema Auto-Fix, gestionado por un Orquestador. Este grupo simula un ciclo de vida de desarrollo completo y la optimización de herramientas internas.",
+  task: `Este grupo de trabajo se comporta como un equipo de producción de software completo, capaz de definir requisitos, diseñar arquitecturas, desarrollar, refactorizar, probar, desplegar y validar soluciones de software de diversa índole. Dada una necesidad funcional o un proyecto, el Orquestador coordinará a los agentes especializados (JefeDeProducto, ArquitectoSoftware, DesarrolladorSoftware, RefactorizadorCodigoExperto, ValidadorCodigo, IngenieroPruebas, IngenieroDevOps, RepresentanteUsuario) para entregar un producto funcional, un análisis detallado, o cualquier artefacto de software solicitado.
+
+Adicionalmente, este equipo es responsable de la mejora continua del sistema 'Auto-Fix' de CodeAlchemist, implementando las siguientes estrategias de refuerzo:
+*   **Priorización dinámica**: Desarrollar e integrar un módulo de análisis en tiempo real para clasificar errores por criticidad (ej.: impacto en rendimiento, seguridad o usabilidad), priorizando soluciones automáticas para casos de alta urgencia.
+*   **Aprendizaje automático predictivo**: Diseñar y entrenar un modelo con datos históricos de errores y correcciones para identificar patrones recurrentes y sugerir soluciones proactivas antes de que los problemas se vuelvan críticos.
+*   **Validación robusta**: Establecer e integrar un pipeline de pruebas automatizadas (unitarias, de integración y de regresión) como paso obligatorio antes de aplicar correcciones, utilizando herramientas estándar (ej. Jenkins, GitHub Actions) para minimizar falsos positivos.
+*   **Sincronización con el Orquestador principal de CodeAlchemist**: Diseñar y establecer canales de comunicación bidireccional entre el sistema Auto-Fix y el agente OrquestadorFlujoAgentes de la aplicación, asegurando que las correcciones se ejecuten en concordancia con los flujos de trabajo actuales (ej.: pausar tareas conflictivas o ajustar prioridades del sistema Auto-Fix).`,
   agentNames: [
     "JefeDeProducto",
     "ArquitectoSoftware",
@@ -336,7 +334,7 @@ export default function WorkgroupsPage() {
                 Gestión de Grupos de Trabajo IA
               </CardTitle>
               <CardDescription>
-                Crea, configura y ejecuta grupos de trabajo con tus agentes de IA. El "{ORCHESTRATOR_AGENT_NAME}" se incluye automáticamente.
+                Crea, configura y ejecuta grupos de trabajo con tus agentes de IA. El agente "{ORCHESTRATOR_AGENT_NAME}" es obligatorio y gestiona el flujo entre los demás agentes del grupo, quienes deben pasar obligatoriamente por él para una toma de decisiones centralizada y coordinada.
               </CardDescription>
             </div>
              <DialogTrigger asChild>

@@ -1,4 +1,3 @@
-
 // src/app/(app)/workgroups/actions.ts
 'use server';
 
@@ -65,7 +64,7 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
                 const previewData = (typeof data === 'object' && data !== null) 
                     ? JSON.stringify(data) 
                     : String(data);
-                dataStringForLogMessage = ` | Data: ${previewData.substring(0, 300)}${previewData.length > 300 ? '...' : ''}`;
+                dataStringForLogMessage = ` | Data: ${previewData.substring(0, 1000)}${previewData.length > 1000 ? '...' : ''}`; // Increased log length
             } catch {
                 dataStringForLogMessage = ' | Data: [Unserializable for log preview]';
             }
@@ -109,9 +108,8 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
 
         const availableAgentNames = Object.values(payload.participantAgentConfigs).map(a => a.name).join(', ');
         
-        // Refined orchestrator system prompt to ensure it doesn't try to DO the task itself.
         const orchestratorSystemPrompt = `${payload.orchestrator.systemMessage} 
-Tu función principal es FACILITAR la colaboración entre los agentes para completar la tarea, no realizar la tarea directamente.
+Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti para asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realizas la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso. Si el usuario no propone un paso explícito, prioriza agentes con capacidades relevantes para la tarea actual.
 
 CONTEXTO ACTUAL:
 Tarea Principal: ${payload.task}
@@ -145,18 +143,14 @@ JSON:`;
             log('DEBUG', `Respuesta cruda del Orquestrador recibida`, {raw: orchestratorRawResponse}); 
 
             let jsonString = orchestratorRawResponse;
-            jsonString = jsonString.replace(/^```json\s*/, '').replace(/\s*```$/, '');
-            jsonString = jsonString.replace(/<think>[\s\S]*?<\/think>/gi, '').trim(); 
-            
-            const firstBrace = jsonString.indexOf('{');
-            const lastBrace = jsonString.lastIndexOf('}');
-
-            if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
-                log('ERROR', `Respuesta del Orquestrador no contiene un objeto JSON válido (sin llaves de apertura/cierre). Contenido: ${jsonString}`);
-                throw new Error("Respuesta del Orquestrador no contiene un objeto JSON válido (sin llaves de apertura/cierre).");
+            // Attempt to extract JSON from potentially messy LLM output
+            const jsonMatch = jsonString.match(/\{[\s\S]*\}/);
+            if (jsonMatch && jsonMatch[0]) {
+                jsonString = jsonMatch[0];
+            } else {
+                 log('ERROR', `Respuesta del Orquestrador no contenía un bloque JSON reconocible. Contenido: ${jsonString}`);
+                throw new Error("Respuesta del Orquestrador no contenía un bloque JSON reconocible.");
             }
-
-            jsonString = jsonString.substring(firstBrace, lastBrace + 1);
             
             decisionJson = JSON.parse(jsonString);
 
@@ -280,7 +274,7 @@ function formatHistoryForPrompt(history: ChatMessage[], maxMessages: number = 6)
         if (msg.role === 'user') roleName = 'Usuario';
         else if (msg.role === 'assistant') roleName = (msg as any).name || 'Agente'; 
         else if (msg.role === 'system') roleName = 'Sistema';
-        return `  [${roleName}]: ${contentString}`; 
+        return `  [${roleName}]: ${contentString.substring(0,500)}${contentString.length > 500 ? '...' : ''}`; // Limit individual message length in prompt context
     }).join('\n');
 }
 
