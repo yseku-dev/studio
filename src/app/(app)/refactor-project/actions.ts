@@ -47,6 +47,7 @@ export interface HandleGetRefactoringSuggestionsResult {
 }
 
 const REFACTOR_LLM_API_TIMEOUT_MS = 180000;
+const MAX_DIRECT_CALL_CONTENT_LENGTH_BYTES = 500 * 1024; // 500KB limit for direct analysis
 
 
 export async function handleGetRefactoringSuggestions(
@@ -235,6 +236,15 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
     } else if (llmOptionsToUse) {
       log('INFO', `Usando llamada directa a LLM para refactorización con proveedor ${llmOptionsToUse.providerId}, modelo ${llmOptionsToUse.modelName}.`);
       
+      if (projectContent.length > MAX_DIRECT_CALL_CONTENT_LENGTH_BYTES) {
+        log('ERROR', `Contenido del proyecto (${projectContent.length} bytes) excede el límite para llamada directa (${MAX_DIRECT_CALL_CONTENT_LENGTH_BYTES} bytes).`);
+        return { 
+          success: false, 
+          error: `El contenido del proyecto es demasiado grande (${(projectContent.length / 1024).toFixed(0)}KB) para el análisis directo. Intente con un proyecto más pequeño o use un grupo de trabajo si está configurado para manejar entradas grandes.`, 
+          workgroupLogs: serverLogs 
+        };
+      }
+
       let systemPromptToUse = systemPromptForDirectCallOrRefactorAgent;
       if (payload.configSource.startsWith('agent:')) {
         const agentId = payload.configSource.split(':')[1];
@@ -245,34 +255,27 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
         }
       }
       
-      const messagesForDirectRefactor: ChatMessage[] = [
-        { role: "system", content: systemPromptToUse },
-        { role: "user", content: `Analiza ${sourceDescriptionForLLM} para refactorización. Contenido del proyecto:\\n\\n${projectContent.substring(0, 25000)} ${projectContent.length > 25000 ? "\\n... (contenido truncado para el prompt)" : ""}` }
-      ];
-
       // Using analyzeProjectSourceChunk as it expects a JSON response similar to RefactorProjectAIResponse.
-      // We might need to adjust the prompt slightly or create a dedicated service function if the structure is too different.
+      // The prompt should guide it to return RefactorProjectAIResponse structure.
       const refactorLLMResponse = await analyzeProjectSourceChunk(
-        projectContent, // Send the full (or chunked) content here
+        projectContent, // Send the full (but size-checked) content here
         {...llmOptionsToUse, timeoutMs: REFACTOR_LLM_API_TIMEOUT_MS},
-        systemPromptToUse // The prompt is already well-defined for getting suggestions
+        systemPromptToUse // The prompt guides the LLM to return refactoring suggestions
       );
       
-      // The analyzeProjectSourceChunk returns ProjectAnalysisResponse. We need to adapt it or ensure REFACTOR_AGENT_NAME returns this format.
-      // For now, let's assume the output is directly usable or the REFACTOR_AGENT_NAME prompt makes it so.
+      // The analyzeProjectSourceChunk returns ProjectAnalysisResponse. We need to adapt it or ensure REFACTOR_AGENT_NAME prompt makes it so.
       if (refactorLLMResponse && Array.isArray(refactorLLMResponse.suggestions)) {
         log('INFO', 'Respuesta de refactorización directa recibida y parseada correctamente (adaptada de analyzeProjectSourceChunk).');
-        // Adapt ProjectAnalysisResponse.suggestions to RefactoringSuggestionItem[]
         const adaptedSuggestions: RefactoringSuggestionItem[] = refactorLLMResponse.suggestions.map(s => ({
             area: s.area,
             description: s.suggestion,
-            priority: s.priority as 'Alta' | 'Media' | 'Baja' || 'Media', // Cast and provide default
+            priority: s.priority as 'Alta' | 'Media' | 'Baja' || 'Media',
             suggestedSnippet: s.suggestedFullFileContent
         }));
         return { success: true, data: adaptedSuggestions, workgroupLogs: serverLogs };
       } else {
           log('ERROR', 'La respuesta directa del LLM no contenía sugerencias de refactorización válidas en el formato esperado.', {response: refactorLLMResponse});
-          throw new Error("La respuesta del LLM no contenía sugerencias válidas para refactorización en el formato esperado (RefactorProjectAIResponse).");
+          throw new Error("La respuesta del LLM no contenía sugerencias válidas para refactorización en el formato esperado.");
       }
     } else {
         log('ERROR', 'Configuración LLM inválida para iniciar refactorización (ni directa ni de grupo).');

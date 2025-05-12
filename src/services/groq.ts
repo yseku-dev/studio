@@ -242,6 +242,14 @@ export async function makeLLMRequest<TResponse>(
   }
 
   console.log(`[${providerConfig.name} - ${serviceNameSuffix}] Llamando a ${endpoint} con modelo ${options.modelName}`);
+  
+  let stringifiedBody: string;
+  try {
+    stringifiedBody = JSON.stringify(requestBody);
+  } catch (stringifyError) {
+    console.error(`[${providerConfig.name} - ${serviceNameSuffix}] Error al serializar el cuerpo de la solicitud:`, stringifyError);
+    throw new Error(`Error interno al preparar la solicitud para ${providerConfig.name}: El payload es demasiado grande o tiene una estructura inválida para serializar. ${(stringifyError as Error).message}`);
+  }
 
   const controller = new AbortController();
   const timeoutDuration = options.timeoutMs || DEFAULT_TIMEOUT_MS;
@@ -251,7 +259,7 @@ export async function makeLLMRequest<TResponse>(
     const fetchRequestOptions: RequestInit = {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify(requestBody),
+      body: stringifiedBody,
       signal: controller.signal,
     };
 
