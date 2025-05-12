@@ -2,19 +2,17 @@
 'use server';
 
 import type { LLMOptions, ChatMessage } from '@/services/groq';
-// Assuming a generic service function similar to others for project-wide analysis
-import { analyzeProjectSourceChunk, makeLLMRequest } from '@/services/groq'; 
+import { analyzeProjectSourceChunk } from '@/services/groq'; 
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
 import type { AgentConfig, WorkgroupConfig, AgentLLMConfig } from '@/types/agent';
 import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
 import { ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS, REFACTOR_AGENT_NAME } from '@/config/agent-config';
 import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
-import fs from 'fs/promises'; // For potential future file modifications
-import path from 'path'; // For potential future file modifications
-import { fetchRepositoryContents } from '@/services/git-service'; // Import Git service
+import fs from 'fs/promises'; 
+import path from 'path'; 
+import { fetchRepositoryContents } from '@/services/git-service';
 
 
-// TODO: Define these types more precisely based on expected AI output for refactoring
 interface RefactoringSuggestionItem {
   area: string;
   description: string;
@@ -28,13 +26,13 @@ interface RefactorProjectAIResponse {
 }
 
 export interface HandleGetRefactoringSuggestionsPayload {
-  projectFileContent?: string; // Changed from File object
-  projectFileName?: string;    // Added for context
-  projectFileType?: string;    // Added for context
-  gitUrl?: string;
+  projectFileContent?: string; 
+  projectFileName?: string;    
+  projectFileType?: string;    
+  gitUrl?: string; // Added for Git URL
   goals?: string;
   priority?: "seguridad" | "legibilidad" | "rendimiento" | "estandarizar" | "reducir_complejidad";
-  configSource: string; // e.g., "global", "agent:id", "workgroup:id"
+  configSource: string; 
   llmOptions?: LLMOptions; 
   agents?: AgentConfig[];
   workgroups?: WorkgroupConfig[];
@@ -51,7 +49,6 @@ export interface HandleGetRefactoringSuggestionsResult {
 const REFACTOR_LLM_API_TIMEOUT_MS = 180000;
 
 
-// --- Main Action to get Refactoring Suggestions ---
 export async function handleGetRefactoringSuggestions(
   payload: HandleGetRefactoringSuggestionsPayload
 ): Promise<HandleGetRefactoringSuggestionsResult> {
@@ -94,7 +91,7 @@ export async function handleGetRefactoringSuggestions(
   } else if (payload.projectFileContent) {
     sourceDescriptionForLLM = `el archivo ${payload.projectFileName || 'subido'}`;
     log('INFO', `Procesando contenido de archivo: ${payload.projectFileName} (${payload.projectFileType})`);
-    projectContent = payload.projectFileContent; // Assuming this is already the string content
+    projectContent = payload.projectFileContent; 
     if (projectContent) {
       log('INFO', `Contenido de archivo procesado. Tamaño: ${projectContent.length}`);
     } else {
@@ -161,7 +158,7 @@ No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
 
   const taskForWorkgroup = `Analizar ${sourceDescriptionForLLM} para refactorización. ${refactoringGoals} ${refactoringPriority}
 El proyecto es (contenido textual):
-${projectContent.substring(0, 15000)} ${projectContent.length > 15000 ? "\n... (contenido truncado para el prompt)" : ""}
+${projectContent.substring(0, 15000)} ${projectContent.length > 15000 ? "\\n... (contenido truncado para el prompt)" : ""}
 La respuesta final de un agente especialista en refactorización (probablemente ${REFACTOR_AGENT_NAME}) DEBE ser un objeto JSON con la clave "refactoringSuggestions" como se describe en el prompt del sistema del ${REFACTOR_AGENT_NAME}.
 El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tarea y el código para analizar.`;
 
@@ -244,27 +241,35 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
         const refactorAgent = agentsForLookup.find(a => a.id === agentId && a.name === REFACTOR_AGENT_NAME);
         if (refactorAgent) {
             log('INFO', `Utilizando mensaje de sistema del agente ${REFACTOR_AGENT_NAME} para la llamada directa.`);
-            systemPromptToUse = `${refactorAgent.systemMessage}\n${refactoringGoals} ${refactoringPriority}\nTu respuesta DEBE seguir el formato JSON con "refactoringSuggestions" como se te indicó.`;
+            systemPromptToUse = `${refactorAgent.systemMessage}\\n${refactoringGoals} ${refactoringPriority}\\nTu respuesta DEBE seguir el formato JSON con "refactoringSuggestions" como se te indicó.`;
         }
       }
       
       const messagesForDirectRefactor: ChatMessage[] = [
         { role: "system", content: systemPromptToUse },
-        { role: "user", content: `Analiza ${sourceDescriptionForLLM} para refactorización. Contenido del proyecto:\n\n${projectContent.substring(0, 25000)} ${projectContent.length > 25000 ? "\n... (contenido truncado para el prompt)" : ""}` }
+        { role: "user", content: `Analiza ${sourceDescriptionForLLM} para refactorización. Contenido del proyecto:\\n\\n${projectContent.substring(0, 25000)} ${projectContent.length > 25000 ? "\\n... (contenido truncado para el prompt)" : ""}` }
       ];
 
-      const refactorLLMResponse = await makeLLMRequest<RefactorProjectAIResponse>(
+      // Using analyzeProjectSourceChunk as it expects a JSON response similar to RefactorProjectAIResponse.
+      // We might need to adjust the prompt slightly or create a dedicated service function if the structure is too different.
+      const refactorLLMResponse = await analyzeProjectSourceChunk(
+        projectContent, // Send the full (or chunked) content here
         {...llmOptionsToUse, timeoutMs: REFACTOR_LLM_API_TIMEOUT_MS},
-        messagesForDirectRefactor,
-        "json_object",
-        0.2, 
-        4000, 
-        "refactorProjectDirect"
+        systemPromptToUse // The prompt is already well-defined for getting suggestions
       );
       
-      if (refactorLLMResponse && Array.isArray(refactorLLMResponse.refactoringSuggestions)) {
-        log('INFO', 'Respuesta de refactorización directa recibida y parseada correctamente.');
-        return { success: true, data: refactorLLMResponse.refactoringSuggestions, workgroupLogs: serverLogs };
+      // The analyzeProjectSourceChunk returns ProjectAnalysisResponse. We need to adapt it or ensure REFACTOR_AGENT_NAME returns this format.
+      // For now, let's assume the output is directly usable or the REFACTOR_AGENT_NAME prompt makes it so.
+      if (refactorLLMResponse && Array.isArray(refactorLLMResponse.suggestions)) {
+        log('INFO', 'Respuesta de refactorización directa recibida y parseada correctamente (adaptada de analyzeProjectSourceChunk).');
+        // Adapt ProjectAnalysisResponse.suggestions to RefactoringSuggestionItem[]
+        const adaptedSuggestions: RefactoringSuggestionItem[] = refactorLLMResponse.suggestions.map(s => ({
+            area: s.area,
+            description: s.suggestion,
+            priority: s.priority as 'Alta' | 'Media' | 'Baja' || 'Media', // Cast and provide default
+            suggestedSnippet: s.suggestedFullFileContent
+        }));
+        return { success: true, data: adaptedSuggestions, workgroupLogs: serverLogs };
       } else {
           log('ERROR', 'La respuesta directa del LLM no contenía sugerencias de refactorización válidas en el formato esperado.', {response: refactorLLMResponse});
           throw new Error("La respuesta del LLM no contenía sugerencias válidas para refactorización en el formato esperado (RefactorProjectAIResponse).");
@@ -289,7 +294,6 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
 }
 
 
-// Placeholder for applying a single refactoring suggestion
 export interface ApplyRefactoringSuggestionPayload {
   suggestionId: string;
   projectIdentifier: string; 
@@ -306,7 +310,6 @@ export async function handleApplyRefactoringSuggestion(
 ): Promise<ApplyRefactoringSuggestionResult> {
   console.log("TODO: Implementar lógica para aplicar sugerencia de refactorización", payload);
   await new Promise(resolve => setTimeout(resolve, 500));
-  // This should eventually interact with fs or a virtual file system
-  // For now, it's just a placeholder.
   return { success: true, updatedFileContent: "// Contenido del archivo actualizado (simulado)" };
 }
+
