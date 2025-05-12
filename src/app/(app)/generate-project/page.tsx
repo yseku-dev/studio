@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, FolderPlus, Wand2, AlertTriangle, DownloadCloud, CheckCircle, FileText, ListTree, Copy, Settings2, ListOrdered, Trash2, Expand, Minimize, Bug } from 'lucide-react'; // Added Bug
+import { Loader2, FolderPlus, Wand2, AlertTriangle, DownloadCloud, CheckCircle, FileText, ListTree, Copy, Settings2, ListOrdered, Trash2, Expand, Minimize, Bug } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { handleGenerateProject, initiateWorkgroupProjectGeneration } from './actions'; 
 import type { HandleGenerateProjectResult, ProjectFile } from './actions';
@@ -325,7 +325,7 @@ export default function GenerateProjectPage() {
                         <Select onValueChange={field.onChange} value={field.value}>
                             <SelectTrigger id="configSource"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
                             <SelectContent>
-                                <ScrollArea className="h-[--radix-select-content-available-height] max-h-60"> {/* Added ScrollArea */}
+                                <ScrollArea className="h-[--radix-select-content-available-height] max-h-60">
                                     <SelectItem value="global">Ajustes Globales</SelectItem>
                                     {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
                                     {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
@@ -349,20 +349,29 @@ export default function GenerateProjectPage() {
                   {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wand2 className="mr-2 h-4 w-4" />} Generar Proyecto
                 </Button>
               </AlertDialogTrigger>
-              <AlertDialogContent>
+              <AlertDialogContent className="sm:max-w-2xl">
                 <AlertDialogHeader>
                   <AlertDialogTitle>Confirmar Generación de Proyecto</AlertDialogTitle>
-                   <AlertDialogDescription>
-                    <p>Generar estructura con '{getSourceName(watchedConfigSource)}'?</p>
-                    {!isWorkgroupSelected && resolvedLlmOptions && (
-                        <div className="mt-1 text-xs text-muted-foreground">(Proveedor: {resolvedLlmOptions?.providerId}, Modelo: {resolvedLlmOptions?.modelName})</div>
-                    )}
-                    {isWorkgroupSelected && (
-                        <div className="mt-1 text-xs text-muted-foreground">(Grupo de Trabajo)</div>
-                    )}
-                    <ScrollArea className="h-[150px] mt-2 p-2 border rounded bg-muted/30">
-                        <pre className="text-xs text-foreground whitespace-pre-wrap">{promptToConfirm}</pre>
-                    </ScrollArea>
+                   <AlertDialogDescription asChild>
+                     <div>
+                        <p>Generar estructura con '{getSourceName(watchedConfigSource)}'?</p>
+                        {!isWorkgroupSelected && resolvedLlmOptions && (
+                            <div className="mt-1 text-xs text-muted-foreground">(Proveedor: {resolvedLlmOptions?.providerId}, Modelo: {resolvedLlmOptions?.modelName})</div>
+                        )}
+                        {isWorkgroupSelected && (
+                            <div className="mt-1 text-xs text-muted-foreground">(Grupo de Trabajo)</div>
+                        )}
+                        <div className="mt-3 space-y-1">
+                            <Label htmlFor="confirm-prompt-textarea" className="text-sm font-medium">Redefinir Prompt (opcional):</Label>
+                            <Textarea
+                                id="confirm-prompt-textarea"
+                                value={promptToConfirm}
+                                onChange={(e) => setPromptToConfirm(e.target.value)}
+                                rows={6}
+                                className="font-mono text-xs bg-muted/50"
+                            />
+                        </div>
+                     </div>
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
