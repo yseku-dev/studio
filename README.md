@@ -10,7 +10,7 @@ CodeAlchemist es una plataforma de desarrollo asistido por inteligencia artifici
 *   **Análisis de Código Inteligente**: Pega fragmentos de código o sube archivos para recibir análisis detallados y sugerencias de mejora generadas por IA.
 *   **Análisis de Proyecto Completo**: Sube un proyecto en formato ZIP/JSON o proporciona una URL de Git para un análisis holístico (funcionalidad Git actualmente simulada).
 *   **AutoUpdate (Análisis del Propio Código)**: Permite que CodeAlchemist analice su propio código fuente (obtenido al momento). Ofrece sugerencias, permite aplicarlas directamente (modificando los archivos), descargar el código fuente completo en ZIP o JSON, o subirlo a un repositorio Git. Las comunicaciones con la IA están optimizadas para manejar grandes cantidades de código mediante fragmentación y timeouts.
-*   **Versiones Guardadas (Snapshots)**: Guarda diferentes versiones de tu código (original y sugerido) para una fácil revisión, comparación y seguimiento.
+*   **Versiones Guardadas (Snapshots)**: Guarda diferentes versiones de tu código (original y sugerido) para una fácil revisión, comparación y seguimiento. Incluye la opción de guardar el estado actual completo del código fuente de CodeAlchemist.
 *   **Chat con IA**: Interactúa con un asistente IA para obtener ayuda, resolver dudas o generar ideas.
 *   **Gestión de Agentes IA**: Crea y configura agentes IA individuales, cada uno con su propio mensaje de sistema, configuración LLM (global o personalizada) y capacidades (acceso a código propio, ejecución, entorno virtual, lectura/escritura de archivos).
 *   **Gestión de Grupos de Trabajo IA**: Define grupos de agentes para colaborar en tareas complejas. Un agente "OrquestadorFlujoAgentes" dirige el flujo de trabajo. Observa la ejecución en un log detallado.
@@ -19,6 +19,7 @@ CodeAlchemist es una plataforma de desarrollo asistido por inteligencia artifici
     *   **LLM**: Selecciona el proveedor (Groq, Google Gemini, OpenAI, Anthropic, LM Studio, Ollama), introduce tu clave API (si es necesaria), elige el modelo y, para proveedores locales, especifica la URL de la API. Incluye un test de conexión.
     *   **Git**: Configura la URL del repositorio, nombre de usuario, email y Token de Acceso Personal (PAT) para la funcionalidad de subida a Git en AutoUpdate. Incluye un test de conexión.
 *   **Manejo de Errores Mejorado**: Los errores, especialmente durante las interacciones con la IA o Git, se muestran claramente. Se pueden copiar para depuración y, en algunos casos (AutoUpdate, Subida a Git), se ofrece un botón "Auto-Fix" para que la IA intente proponer una solución al error. CodeAlchemist intenta gestionar errores comunes de API LLM (límites de tokens/TPM, timeouts) con reintentos y fragmentación.
+*   **Modo Depuración**: Una opción en configuración permite activar un panel de logs detallados fijo en la parte inferior de la pantalla, útil para el desarrollo y seguimiento de la aplicación.
 
 ## Arquitectura
 
@@ -99,6 +100,8 @@ Es crucial configurar correctamente la aplicación antes de usar las funcionalid
     *   **Email de Git**: El email asociado a tus commits.
     *   **Token de Acceso Personal (PAT)**: Un PAT con permisos para escribir en el repositorio.
     *   Haz clic en **"Probar Conexión Git"** para verificar la autenticación.
+*   **Modo Depuración**:
+    * Activa esta opción para mostrar una ventana de logs detallados en la parte inferior de la pantalla, útil para el desarrollo y seguimiento avanzado.
 *   Haz clic en **"Guardar Configuración"**.
 
 ### 3. Generar Código (Sección "Generar Código")
@@ -108,7 +111,7 @@ Crea fragmentos de código a partir de descripciones.
 *   **Usar Configuración LLM De**: Elige si usar la configuración "Global", de un "Agente IA" específico, o de un "Grupo de Trabajo IA".
 *   **Describe tu necesidad**: Escribe un prompt detallado.
 *   Haz clic en **"Generar Código"** y confirma.
-*   **Resultados**: Verás una explicación y el fragmento de código generado, que puedes copiar.
+*   **Resultados**: Verás una explicación y el fragmento de código generado, que puedes copiar. Un log detallado de la ejecución (si se usó un grupo) estará disponible.
 
 ### 4. Generar Proyecto (Sección "Generar Proyecto")
 
@@ -117,7 +120,7 @@ Crea una estructura base para un nuevo proyecto.
 *   **Usar Configuración LLM De**: Selecciona la fuente de configuración LLM.
 *   **Describe tu proyecto**: Proporciona un prompt detallado.
 *   Haz clic en **"Generar Proyecto"** y confirma.
-*   **Resultados**: Nombre sugerido, notas de la IA y una lista de archivos con su contenido. Puedes descargar el proyecto en ZIP.
+*   **Resultados**: Nombre sugerido, notas de la IA y una lista de archivos con su contenido. Puedes descargar el proyecto en ZIP. Un log detallado de la ejecución (si se usó un grupo) estará disponible.
 
 ### 5. Refactorizar Proyecto (Sección "Refactorizar Proyecto")
 
@@ -172,7 +175,7 @@ Permite que CodeAlchemist analice su propio código fuente.
 *   **Preferencias de Análisis (Opcional)**: Guía a la IA (ej. "mejorar rendimiento", "revisar manejo de errores"). Si se usa un Grupo, este es el input principal.
 *   Haz clic en **"Iniciar Auto-Análisis"**.
     *   Recopila su código fuente (excluyendo `node_modules`, etc.).
-    *   Si no se usa un grupo, el código se divide en fragmentos. Se muestra una barra de progreso.
+    *   Si no se usa un grupo, el código se divide en fragmentos. Se muestra una barra de progreso con fragmentos procesados/totales.
     *   Si se usa un grupo, la tarea se pasa al Orquestador.
 *   **Resultados**: Título, áreas identificadas, sugerencias detalladas y evaluación general.
 *   **Aplicar Sugerencias**: Para sugerencias con contenido de archivo:
@@ -191,6 +194,7 @@ Gestiona snapshots de tu código.
 *   Lista de versiones guardadas.
 *   **Acciones**: Ver, Descargar, Eliminar.
 *   **Comparar Versiones**: Selecciona A y B para ver diferencias.
+*   **Guardar Código Actual de CodeAlchemist**: Guarda un snapshot del código fuente completo de la aplicación en su estado actual.
 *   **Eliminar Todas**.
 
 ### 10. Chat con IA (Sección "Chat con IA")
@@ -206,6 +210,11 @@ Crea y administra agentes IA personalizados.
 
 *   Lista de agentes. Exportar/Importar todos.
 *   **Crear Agente**: Nombre, descripción, mensaje de sistema, capacidades (acceso a código propio, ejecución, entorno virtual, lectura/escritura) y configuración LLM (global o personalizada).
+*   **Agente Orquestador (Obligatorio para Grupos)**: Un agente llamado `OrquestadorFlujoAgentes` es crucial. Si no existe, créalo con la siguiente configuración (o similar):
+    *   **Nombre**: `OrquestadorFlujoAgentes`
+    *   **Descripción**: "Agente central obligatorio en cada Grupo de Trabajo. Gestiona el flujo de interacciones, recibe todas las respuestas y decide qué agente actúa a continuación para garantizar un proceso coordinado y la toma de decisiones centralizada."
+    *   **Mensaje de Sistema**: "Eres el Orquestador del Grupo de Trabajo. Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti. Tu objetivo es asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realizas la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso. Si el usuario no propone un paso, prioriza agentes con capacidades relevantes para la tarea actual (ej. 'RefactorizadorCodigoExperto' para mejoras de código). Tu respuesta DEBE SER EXCLUSIVAMENTE un objeto JSON válido con las claves 'next_agent_name' (string, el nombre EXACTO de un agente disponible o 'COMPLETADO') y 'reason' (string, justificación concisa). No incluyas NADA más."
+    *   **Configuración LLM**: Puede ser 'default' o personalizada.
 *   **Acciones por Agente**: Probar (chat modal), Exportar (JSON), Editar, Eliminar.
 
 ### 12. Gestión de Grupos de Trabajo IA (Sección "Grupos de Trabajo IA")
@@ -230,7 +239,7 @@ En la mayoría de las secciones que interactúan con un LLM, encontrarás el sel
 
 *   **Agentes**: Entidades IA con rol, capacidades y configuración LLM.
 *   **Grupos de Trabajo**: Equipos de agentes.
-    *   El **OrquestadorFlujoAgentes** (Orquestador del Grupo) es obligatorio y central. Recibe y gestiona todas las respuestas. Decide el siguiente paso para un flujo coordinado.
+    *   El **OrquestadorFlujoAgentes** (Orquestador del Grupo) es obligatorio y central. Cada Grupo de Trabajo debe incluirlo. El Orquestador recibe y gestiona todas las respuestas generadas dentro del grupo. Basado en la tarea principal asignada al grupo, el historial de conversación y el estado actual del proceso, el Orquestador decide a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por el Orquestador para garantizar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realiza la tarea directamente; facilita que los otros agentes la completen.
 
 ## Estructura de Carpetas y Archivos Clave
 
@@ -241,18 +250,19 @@ En la mayoría de las secciones que interactúan con un LLM, encontrarás el sel
 *   `tailwind.config.ts`: Configuración de Tailwind CSS para los estilos.
 *   `src/app/globals.css`: Estilos globales y variables de tema para ShadCN UI (colores, fuentes).
 *   `src/app/layout.tsx`: El layout raíz de la aplicación, donde se define la estructura HTML base.
-*   `src/app/(app)/layout.tsx`: Layout para las páginas autenticadas o principales de la aplicación, incluye la `AppSidebar`.
+*   `src/app/(app)/layout.tsx`: Layout para las páginas principales de la aplicación, incluye la `AppSidebar`.
 *   `src/app/(app)/[nombre_seccion]/page.tsx`: Componentes React que definen la interfaz de usuario para cada sección principal (ej. `dashboard`, `analyze`, `autoupdate`).
 *   `src/app/(app)/[nombre_seccion]/actions.ts`: Server Actions de Next.js que contienen la lógica del lado del servidor para las funcionalidades de cada sección (ej. llamadas a APIs LLM, manejo de archivos).
 *   `src/components/ui/`: Componentes de UI reutilizables de ShadCN (Button, Card, Input, etc.).
 *   `src/components/layout/`: Componentes estructurales de la UI (ej. `app-sidebar.tsx`).
-*   `src/components/[nombre_componente_especifico].tsx`: Componentes React personalizados y reutilizables para funcionalidades específicas (ej. `settings-form.tsx`, `version-snapshots.tsx`).
+*   `src/components/[nombre_componente_especifico].tsx`: Componentes React personalizados y reutilizables para funcionalidades específicas (ej. `settings-form.tsx`, `version-snapshots.tsx`, `workgroup-execution-modal.tsx`).
 *   `src/services/groq.ts`: Módulo central para interactuar con las APIs de los LLM. Aunque el nombre es "groq", ahora es genérico y maneja diferentes proveedores. Contiene funciones para `analyzeCode`, `generateCodeFromPrompt`, `analyzeProjectSourceChunk`, etc.
 *   `src/config/llm-config.ts`: Define los proveedores LLM soportados (Groq, OpenAI, Anthropic, LM Studio, Ollama, Google Gemini), sus URLs base, si requieren API Key, y los modelos disponibles para cada uno con sus características (TPM, tokens). También define claves para `localStorage`.
 *   `src/config/agent-config.ts`: Define constantes relacionadas con agentes y grupos, como las claves de `localStorage` y nombres de agentes especiales como `ORCHESTRATOR_AGENT_NAME`.
 *   `src/types/`: Contiene definiciones de tipos TypeScript (ej. `agent.ts` para `AgentConfig` y `WorkgroupConfig`, `snapshot.ts` para `CodeSnapshot`).
 *   `src/lib/llm-utils.ts`: Funciones de utilidad relacionadas con la configuración LLM, como `resolveLlmOptionsForSource` que determina qué configuración LLM usar basado en la selección del usuario (global, agente, o grupo).
 *   `src/hooks/`: Hooks personalizados de React (ej. `use-toast.ts` para notificaciones, `use-mobile.ts` para detectar dispositivos móviles).
+*   `src/contexts/DebugContext.tsx`: Contexto global para gestionar el estado del modo de depuración y los logs.
 
 ## Manejo de Errores
 
@@ -262,6 +272,12 @@ En la mayoría de las secciones que interactúan con un LLM, encontrarás el sel
 *   **Copia de Errores**: Botón para copiar mensajes de error.
 *   **Auto-Fix (Experimental)**:
     *   En AutoUpdate y Subida a Git, si ocurre un error, el botón "Auto-Fix" permite a la IA analizar el error y proponer una solución.
+    *   **Refuerzo Propuesto para el Sistema Auto-Fix**:
+        *   **Priorización dinámica**: Implementar un módulo de análisis en tiempo real para clasificar errores por criticidad (ej.: impacto en rendimiento, seguridad o usabilidad), priorizando soluciones automáticas para casos de alta urgencia.
+        *   **Aprendizaje automático predictivo**: Entrenar un modelo con datos históricos de errores y correcciones para identificar patrones recurrentes y sugerir soluciones proactivas antes de que los problemas se vuelvan críticos.
+        *   **Validación robusta**: Integrar pruebas automatizadas (unitarias, de integración y de regresión) como paso obligatorio antes de aplicar correcciones, usando herramientas como Jenkins o GitHub Actions para minimizar falsos positivos.
+        *   **Sincronización con el Orquestador**: Establecer canales de comunicación bidireccional entre autofix y el agente Orquestador, asegurando que las correcciones se ejecuten en concordancia con los flujos de trabajo actuales (ej.: pausar tareas conflictivas o ajustar prioridades).
+        *   Estas mejoras optimizarán la eficiencia del sistema, reducirán la carga manual de supervisión y garantizarán coherencia operativa al vincularse directamente con el núcleo de gestión del grupo de desarrollo.
 
 ## Notas Importantes y Consideraciones
 
