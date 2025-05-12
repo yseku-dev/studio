@@ -66,6 +66,8 @@ export default function RefactorProjectPage() {
   const [analysisStatus, setAnalysisStatus] = useState<'idle' | 'loading' | 'analyzing' | 'success' | 'error'>("idle");
   const [suggestions, setSuggestions] = useState<RefactoringSuggestion[]>([]);
   const [currentError, setCurrentError] = useState<string | null>(null);
+  const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
+  const [logsExpanded, setLogsExpanded] = useState(false);
   
   const { addDebugLog } = useDebug();
   const isMountedRef = useRef(false);
@@ -97,8 +99,10 @@ export default function RefactorProjectPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const addServerLogsToDebug = useCallback((serverLogs: string[] | undefined, sourcePrefix: string = 'SERVER_REFACTOR') => {
-    if (isMountedRef.current && serverLogs) {
+  const addServerLogsToDebugAndPage = useCallback((serverLogs: string[] | undefined, sourcePrefix: string = 'SERVER_REFACTOR') => {
+    if (serverLogs) {
+      setDetailedLogs(prev => [...prev, ...serverLogs]);
+      if (isMountedRef.current) {
         serverLogs.forEach(logMsg => {
             const match = logMsg.match(/^\[(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/);
             if (match) {
@@ -112,6 +116,7 @@ export default function RefactorProjectPage() {
                 addDebugLog({ source: sourcePrefix, type: 'INFO', message: logMsg });
             }
         });
+      }
     }
   }, [addDebugLog]);
 
@@ -154,6 +159,7 @@ export default function RefactorProjectPage() {
     setAnalysisStatus("loading");
     setCurrentError(null);
     setSuggestions([]);
+    setDetailedLogs([]); 
     addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: 'Iniciando análisis de refactorización...', data: { file: data.projectFile?.name, url: data.gitUrl, params }});
 
     const file = data.projectFile;
@@ -171,6 +177,9 @@ export default function RefactorProjectPage() {
             addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'DEBUG', message: `Contenido de archivo de texto/JSON leído. Tamaño: ${projectFileContent.length} bytes.`});
         } else if (file.type === 'application/zip' || file.name.endsWith('.zip')) {
             addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Archivo ZIP (${file.name}) seleccionado. Se enviará como string base64 (simulado) o se procesará en servidor.`});
+            // Simulate reading content for ZIP, actual unzipping/processing is complex for client-side.
+            // For a real implementation, this would likely involve sending the file to the server.
+            // This string placeholder approach needs to be handled by the server action.
             projectFileContent = `Contenido_ZIP_Placeholder_Nombre:${file.name}_Tipo:${file.type}`; // Placeholder
             addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'DEBUG', message: `Contenido ZIP (placeholder) preparado. Longitud: ${projectFileContent.length}`});
         } else {
@@ -230,7 +239,7 @@ export default function RefactorProjectPage() {
     setAnalysisStatus("analyzing");
     addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Enviando solicitud de análisis al servidor...`});
     const result = await handleGetRefactoringSuggestions(actionPayload);
-    addServerLogsToDebug(result.workgroupLogs, 'SERVER_WG_REFACTOR');
+    addServerLogsToDebugAndPage(result.workgroupLogs, 'SERVER_WG_REFACTOR');
 
     if (result.success && result.data) {
       setSuggestions(result.data.map(s => ({...s, id: crypto.randomUUID(), status: 'pending'})));
@@ -306,9 +315,12 @@ export default function RefactorProjectPage() {
   
   const isProcessing = analysisStatus === "loading" || analysisStatus === "analyzing";
   const formValues = fileForm.watch();
+  const isWorkgroupSelected = watchedConfigSource.startsWith('workgroup:');
   const canSubmit = isProcessing || 
                     (!formValues.projectFile && !formValues.gitUrl) || 
-                    (!resolvedLlmOptions && !watchedConfigSource.startsWith("workgroup:"));
+                    (!resolvedLlmOptions && !isWorkgroupSelected) ||
+                    (isWorkgroupSelected && workgroups.length === 0 && !workgroups.find(wg => wg.id === watchedConfigSource.split(':')[1]));
+
 
   return (
     <div className="space-y-6">
@@ -319,9 +331,9 @@ export default function RefactorProjectPage() {
           </CardTitle>
           <CardDescription>
             Sube o vincula tu proyecto y obtén sugerencias de refactorización potenciadas por IA.
-             {!resolvedLlmOptions && watchedConfigSource && !watchedConfigSource.startsWith("workgroup:") ? (
+             {!resolvedLlmOptions && watchedConfigSource && !isWorkgroupSelected ? (
                 <span className="text-destructive block mt-1"> (Configuración para '{getSourceName(watchedConfigSource)}' incompleta)</span>
-             ) : resolvedLlmOptions || watchedConfigSource.startsWith("workgroup:") ? (
+             ) : resolvedLlmOptions || isWorkgroupSelected ? (
                 <span className="text-foreground block mt-1">(Usando: {getSourceName(watchedConfigSource)})</span>
              ) : (
                  <span className="text-muted-foreground block mt-1">(Selecciona fuente de configuración)</span>
@@ -342,18 +354,26 @@ export default function RefactorProjectPage() {
                       <SelectValue placeholder="Seleccionar fuente (Agente Refactorizador o Grupo)" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="global">Agente {REFACTOR_AGENT_NAME} (Config. Global)</SelectItem>
-                      {agents.filter(a => a.name === REFACTOR_AGENT_NAME).map(agent => (
-                        <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>
-                      ))}
-                       {workgroups.filter(wg => wg.agentIds.some(agentId => agents.find(a => a.id === agentId)?.name === REFACTOR_AGENT_NAME)).map(wg => (
-                        <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>
-                      ))}
+                      <ScrollArea className="h-[--radix-select-content-available-height] max-h-60"> {/* Added ScrollArea */}
+                        <SelectItem value="global">Agente {REFACTOR_AGENT_NAME} (Config. Global)</SelectItem>
+                        {workgroups.filter(wg => wg.agentIds.some(agentId => agents.find(a => a.id === agentId)?.name === REFACTOR_AGENT_NAME)).map(wg => (
+                          <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>
+                        ))}
+                        {agents.filter(a => a.name === REFACTOR_AGENT_NAME).map(agent => (
+                          <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>
+                        ))}
+                      </ScrollArea>
                     </SelectContent>
                   </Select>
                 )}
               />
               {fileForm.formState.errors.configSource && <p className="text-sm text-destructive mt-1">{fileForm.formState.errors.configSource.message}</p>}
+              {(!resolvedLlmOptions && !isWorkgroupSelected && watchedConfigSource) && (
+                     <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(watchedConfigSource)}' incompleta. Revisa Ajustes o Agentes.</p>
+                )}
+                {(isWorkgroupSelected && !workgroups.find(wg => wg.id === watchedConfigSource.split(':')[1])) && (
+                    <p className="text-xs text-destructive mt-1">Grupo de trabajo '{getSourceName(watchedConfigSource)}' no encontrado o no disponible.</p>
+                )}
             </div>
 
             <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "upload" | "git")} className="w-full">
@@ -497,6 +517,31 @@ export default function RefactorProjectPage() {
             </CardContent>
         </Card>
        )}
+        {detailedLogs.length > 0 && (
+          <Card className="mt-6 border-primary/30">
+              <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                  <CardTitle className="text-lg flex items-center gap-2 text-primary"><ListOrdered className="h-5 w-5"/> Logs Detallados del Grupo</CardTitle>
+                  <div className="flex items-center gap-2">
+                       <Button variant="ghost" size="icon" onClick={() => setLogsExpanded(!logsExpanded)} title={logsExpanded ? "Contraer Logs" : "Expandir Logs"}>
+                          {logsExpanded ? <Minimize className="h-4 w-4"/> : <Expand className="h-4 w-4"/>}
+                      </Button>
+                      <Button variant="ghost" size="icon" onClick={() => setDetailedLogs([])} title="Limpiar Logs">
+                          <Trash2 className="h-4 w-4 text-destructive"/>
+                      </Button>
+                  </div>
+              </CardHeader>
+              <CardContent>
+                  <ScrollArea className={cn("p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out", logsExpanded ? "h-[300px]" : "h-[100px]")}>
+                      <pre className="text-xs text-foreground whitespace-pre-wrap">
+                          {detailedLogs.map((log, index) => (
+                              <span key={`log-${index}`} className={log.includes("[ERROR") || log.includes("Error:") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-500" : ""}>{log}\n</span>
+                          ))}
+                      </pre>
+                  </ScrollArea>
+              </CardContent>
+          </Card>
+      )}
     </div>
   );
 }
+

@@ -191,8 +191,7 @@ export default function ChatPage() {
   };
   
   const isWorkgroupSelected = selectedConfigSource.startsWith('workgroup:');
-  // Disable send button if loading, message is empty, OR (not workgroup AND no LLM options) OR (workgroup AND no workgroups exist)
-  const isSendButtonDisabled = isLoading || !currentMessage.trim() || (!isWorkgroupSelected && !resolvedLlmOptions) || (isWorkgroupSelected && workgroups.length === 0);
+  const canSubmit = isLoading || !currentMessage.trim() || (!resolvedLlmOptions && !isWorkgroupSelected) || (isWorkgroupSelected && workgroups.length === 0 && !workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1]));
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)] md:h-[calc(100vh-10rem)] gap-6">
@@ -218,13 +217,18 @@ export default function ChatPage() {
                 <Select onValueChange={setSelectedConfigSource} value={selectedConfigSource}>
                     <SelectTrigger id="configSourceChat" className="w-full md:w-1/2 h-9 text-xs"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
                     <SelectContent>
-                        <SelectItem value="global">Ajustes Globales</SelectItem>
-                        {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
-                        {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
+                        <ScrollArea className="h-[--radix-select-content-available-height] max-h-60"> {/* Added ScrollArea */}
+                            <SelectItem value="global">Ajustes Globales</SelectItem>
+                            {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
+                            {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
+                        </ScrollArea>
                     </SelectContent>
                 </Select>
-                 {!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource && (
+                 {(!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource) && (
                      <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(selectedConfigSource)}' incompleta. Revisa Ajustes, Agentes o Grupos.</p>
+                )}
+                {(isWorkgroupSelected && !workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1])) && (
+                    <p className="text-xs text-destructive mt-1">Grupo de trabajo '{getSourceName(selectedConfigSource)}' no encontrado o no disponible.</p>
                 )}
             </div>
         </CardHeader>
@@ -267,12 +271,12 @@ export default function ChatPage() {
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }}}
               placeholder="Escribe tu mensaje... (Shift+Enter para nueva línea)" rows={1}
               className="flex-1 resize-none min-h-[40px] max-h-[120px] text-sm bg-card" 
-              disabled={isLoading} // Only disable textarea when actively loading a response
+              disabled={isLoading} 
             />
             <Button onClick={handleClearChat} variant="ghost" size="icon" disabled={isLoading || chatHistory.length === 0} title="Limpiar Chat">
               <Trash2 className="h-5 w-5 text-muted-foreground hover:text-destructive"/>
             </Button>
-            <Button onClick={handleSendMessage} disabled={isSendButtonDisabled} className="h-10">
+            <Button onClick={handleSendMessage} disabled={canSubmit} className="h-10">
               {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
               <span className="sr-only">Enviar</span>
             </Button>
@@ -282,3 +286,4 @@ export default function ChatPage() {
     </div>
   );
 }
+

@@ -57,6 +57,8 @@ export default function GenerateProjectPage() {
   const [isConfirming, setIsConfirming] = useState(false);
   const [promptToConfirm, setPromptToConfirm] = useState<string>("");
   const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null);
+  const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
+  const [logsExpanded, setLogsExpanded] = useState(false);
 
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
@@ -94,8 +96,10 @@ export default function GenerateProjectPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const addServerLogsToDebug = useCallback((serverLogs: string[] | undefined, sourcePrefix: string = 'SERVER_GEN_PROJECT') => {
-    if (isMountedRef.current && serverLogs) {
+  const addServerLogsToDebugAndPage = useCallback((serverLogs: string[] | undefined, sourcePrefix: string = 'SERVER_GEN_PROJECT') => {
+    if (serverLogs) {
+      setDetailedLogs(prev => [...prev, ...serverLogs]);
+      if (isMountedRef.current) {
         serverLogs.forEach(logMsg => {
             const match = logMsg.match(/^\[(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/);
             if (match) {
@@ -109,6 +113,7 @@ export default function GenerateProjectPage() {
                 addDebugLog({ source: sourcePrefix, type: 'INFO', message: logMsg });
             }
         });
+      }
     }
   }, [addDebugLog]);
 
@@ -145,6 +150,12 @@ export default function GenerateProjectPage() {
         }
         setResolvedLlmOptions(options);
     } else {
+        const workgroupId = data.configSource.split(':')[1];
+        if (!workgroups.find(wg => wg.id === workgroupId)) {
+             toast({ title: "Error de Configuración", description: `Grupo de trabajo '${getSourceName(data.configSource)}' no encontrado.`, variant: "destructive", duration: 7000 });
+             addDebugLog({ source: 'GENERATE_PROJECT_PAGE', type: 'ERROR', message: `Grupo de trabajo ${workgroupId} no encontrado para la fuente de configuración.`});
+             return;
+        }
         setResolvedLlmOptions(null);
     }
     setPromptToConfirm(data.prompt);
@@ -153,6 +164,7 @@ export default function GenerateProjectPage() {
 
   const proceedWithGeneration = async () => {
     setIsConfirming(false);
+    setDetailedLogs([]);
     if (!promptToConfirm) {
          toast({ title: "Error Interno", description: "Falta el prompt.", variant: "destructive" });
          addDebugLog({ source: 'GENERATE_PROJECT_PAGE', type: 'ERROR', message: 'Intento de generación fallido: Falta el prompt.'});
@@ -191,7 +203,7 @@ export default function GenerateProjectPage() {
       addDebugLog({ source: 'GENERATE_PROJECT_PAGE', type: 'DEBUG', message: `Snapshot de localStorage enviado al servidor para el grupo de trabajo.`});
 
       result = await initiateWorkgroupProjectGeneration(promptToConfirm, workgroupId, agents, workgroups, snapshot);
-      addServerLogsToDebug(result.workgroupLogs, 'SERVER_WG_GEN_PROJECT');
+      addServerLogsToDebugAndPage(result.workgroupLogs, 'SERVER_WG_GEN_PROJECT');
     } else {
       if (!resolvedLlmOptions) {
         addDebugLog({ source: 'GENERATE_PROJECT_PAGE', type: 'ERROR', message: `Error: Faltan opciones LLM resueltas para llamada directa.`});
@@ -276,7 +288,7 @@ export default function GenerateProjectPage() {
   };
   
   const isWorkgroupSelected = watchedConfigSource.startsWith('workgroup:');
-  const canSubmit = isLoading || !currentPrompt || (!resolvedLlmOptions && !isWorkgroupSelected) || (isWorkgroupSelected && workgroups.length === 0);
+  const canSubmit = isLoading || !currentPrompt || (!resolvedLlmOptions && !isWorkgroupSelected) || (isWorkgroupSelected && workgroups.length === 0 && !workgroups.find(wg => wg.id === watchedConfigSource.split(':')[1]));
 
   return (
     <div className="space-y-6">
@@ -313,15 +325,20 @@ export default function GenerateProjectPage() {
                         <Select onValueChange={field.onChange} value={field.value}>
                             <SelectTrigger id="configSource"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
                             <SelectContent>
-                                <SelectItem value="global">Ajustes Globales</SelectItem>
-                                {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
-                                {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
+                                <ScrollArea className="h-[--radix-select-content-available-height] max-h-60"> {/* Added ScrollArea */}
+                                    <SelectItem value="global">Ajustes Globales</SelectItem>
+                                    {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
+                                    {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
+                                </ScrollArea>
                             </SelectContent>
                         </Select>
                     )} />
                 {errors.configSource && <p className="text-sm text-destructive mt-1">{errors.configSource.message}</p>}
-                 {!resolvedLlmOptions && !isWorkgroupSelected && watchedConfigSource && (
+                 {(!resolvedLlmOptions && !isWorkgroupSelected && watchedConfigSource) && (
                      <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(watchedConfigSource)}' incompleta. Revisa Ajustes o Agentes.</p>
+                )}
+                {(isWorkgroupSelected && !workgroups.find(wg => wg.id === watchedConfigSource.split(':')[1])) && (
+                    <p className="text-xs text-destructive mt-1">Grupo de trabajo '{getSourceName(watchedConfigSource)}' no encontrado o no disponible.</p>
                 )}
             </div>
           </CardContent>
@@ -423,6 +440,31 @@ export default function GenerateProjectPage() {
           </CardContent>
         </Card>
       )}
+      {detailedLogs.length > 0 && (
+          <Card className="mt-6 border-primary/30">
+              <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                  <CardTitle className="text-lg flex items-center gap-2 text-primary"><ListOrdered className="h-5 w-5"/> Logs Detallados del Grupo</CardTitle>
+                  <div className="flex items-center gap-2">
+                       <Button variant="ghost" size="icon" onClick={() => setLogsExpanded(!logsExpanded)} title={logsExpanded ? "Contraer Logs" : "Expandir Logs"}>
+                          {logsExpanded ? <Minimize className="h-4 w-4"/> : <Expand className="h-4 w-4"/>}
+                      </Button>
+                      <Button variant="ghost" size="icon" onClick={() => setDetailedLogs([])} title="Limpiar Logs">
+                          <Trash2 className="h-4 w-4 text-destructive"/>
+                      </Button>
+                  </div>
+              </CardHeader>
+              <CardContent>
+                  <ScrollArea className={`p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out ${logsExpanded ? "h-[300px]" : "h-[100px]"}`}>
+                      <pre className="text-xs text-foreground whitespace-pre-wrap">
+                          {detailedLogs.map((log, index) => (
+                              <span key={`log-${index}`} className={log.includes("[ERROR") || log.includes("Error:") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-500" : ""}>{log}\n</span>
+                          ))}
+                      </pre>
+                  </ScrollArea>
+              </CardContent>
+          </Card>
+      )}
     </div>
   );
 }
+

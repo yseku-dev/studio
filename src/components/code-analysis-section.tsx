@@ -114,13 +114,18 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
 
   const onSubmit: SubmitHandler<FormData> = async (data) => {
     const options = resolvedLlmOptions;
-     if (!options) {
+     if (!options && !data.configSource.startsWith('workgroup:')) {
         toast({
             title: "Configuración LLM Incompleta",
             description: `Configuración para '${getSourceName(data.configSource)}' incompleta. Revisa Ajustes, Agentes o Grupos.`,
             variant: "destructive", duration: 7000,
         }); return;
      }
+     if (data.configSource.startsWith('workgroup:') && !workgroups.find(wg => wg.id === data.configSource.split(':')[1])) {
+        toast({ title: "Error de Configuración", description: `Grupo de trabajo '${getSourceName(data.configSource)}' no encontrado.`, variant: "destructive", duration: 7000 });
+        return;
+     }
+
     setIsLoading(true); setAnalysisResult(null); setAnalysisError(null); setOriginalCode(data.code);
 
     if (data.configSource.startsWith('workgroup:')) {
@@ -139,7 +144,12 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
       return; // Remove this when implemented
     }
 
-    // Standard LLM call
+    // Standard LLM call (should not happen if options is null and not workgroup, but check anyway)
+    if (!options) {
+      toast({ title: "Error Interno", description: "Faltan opciones LLM para llamada directa.", variant: "destructive"});
+      setIsLoading(false);
+      return;
+    }
     const result = await handleAnalyzeCode(data.code, options.providerId, options.apiKey, options.modelName, options.apiUrl);
 
     if (result.success && result.data) {
@@ -174,6 +184,10 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
     }
     return 'Desconocido';
   };
+  
+  const isWorkgroupSelected = watchedConfigSource.startsWith('workgroup:');
+  const canSubmit = isLoading || !codeValue || (!resolvedLlmOptions && !isWorkgroupSelected) || (isWorkgroupSelected && workgroups.length === 0 && !workgroups.find(wg => wg.id === watchedConfigSource.split(':')[1]));
+
 
   return (
     <div className="space-y-6">
@@ -184,10 +198,12 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
           </CardTitle>
           <CardDescription>
             Pega código o sube archivo para obtener sugerencias usando config LLM seleccionada.
-            {!resolvedLlmOptions && watchedConfigSource ? (
+            {!resolvedLlmOptions && !isWorkgroupSelected && watchedConfigSource ? (
                  <span className="text-destructive block mt-1"> (Configuración para '{getSourceName(watchedConfigSource)}' incompleta)</span>
-             ) : resolvedLlmOptions ? (
+             ) : resolvedLlmOptions && !isWorkgroupSelected ? (
                 <span className="text-foreground block mt-1">(Usando: {getSourceName(watchedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
+             ) : isWorkgroupSelected ? (
+                <span className="text-foreground block mt-1">(Usando Grupo: {getSourceName(watchedConfigSource)})</span>
              ) : (
                  <span className="text-muted-foreground block mt-1">(Selecciona fuente de configuración)</span>
              )}
@@ -211,15 +227,20 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
                         <Select onValueChange={field.onChange} value={field.value}>
                             <SelectTrigger id="configSourceCodeAnalysis"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
                             <SelectContent>
-                                <SelectItem value="global">Ajustes Globales</SelectItem>
-                                {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
-                                {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
+                                <ScrollArea className="h-[--radix-select-content-available-height] max-h-60"> {/* Added ScrollArea */}
+                                    <SelectItem value="global">Ajustes Globales</SelectItem>
+                                    {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
+                                    {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
+                                </ScrollArea>
                             </SelectContent>
                         </Select>
                     )} />
                 {errors.configSource && <p className="text-sm text-destructive mt-1">{errors.configSource.message}</p>}
-                 {!resolvedLlmOptions && watchedConfigSource && (
-                     <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(watchedConfigSource)}' incompleta. Revisa Ajustes, Agentes o Grupos.</p>
+                 {(!resolvedLlmOptions && !isWorkgroupSelected && watchedConfigSource) && (
+                     <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(watchedConfigSource)}' incompleta. Revisa Ajustes o Agentes.</p>
+                )}
+                {(isWorkgroupSelected && !workgroups.find(wg => wg.id === watchedConfigSource.split(':')[1])) && (
+                    <p className="text-xs text-destructive mt-1">Grupo de trabajo '{getSourceName(watchedConfigSource)}' no encontrado o no disponible.</p>
                 )}
             </div>
             <div className="mt-4">
@@ -229,7 +250,7 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
             </div>
           </CardContent>
           <CardFooter>
-            <Button type="submit" disabled={isLoading || !codeValue || !resolvedLlmOptions} className="w-full md:w-auto">
+            <Button type="submit" disabled={canSubmit} className="w-full md:w-auto">
               {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Wand2 className="mr-2 h-4 w-4" />} Analizar Código
             </Button>
           </CardFooter>
@@ -282,3 +303,4 @@ export function CodeAnalysisSection({ onSaveSnapshot }: CodeAnalysisSectionProps
     </div>
   );
 }
+

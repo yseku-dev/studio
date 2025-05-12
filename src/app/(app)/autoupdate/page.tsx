@@ -58,10 +58,17 @@ type AutoUpdateStatus = "idle" | "loading_source" | "chunking_source" | "analyzi
 
 type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
 
+// Define the type for a single suggestion item from the response
+// Correctly extend the type of an element in the 'suggestions' array
 interface SingleSuggestion extends SuggestionItem {
-  id?: string;
-  area: string; 
+  id?: string; // id might not exist initially, make it optional
+  // Add other fields from the base type if needed, e.g.:
+  area: string;
+  // suggestion: string; // Already in SuggestionItem
+  // priority?: 'high' | 'medium' | 'low'; // Already in SuggestionItem
+  // suggestedFullFileContent?: string; // Already in SuggestionItem
 }
+
 
 interface SuggestionWithStatus extends SingleSuggestion {
   id: string; 
@@ -93,6 +100,8 @@ export default function AutoUpdatePage() {
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ processed: 0, total: 0 });
   const [autoFixSuggestion, setAutoFixSuggestion] = useState<SuggestErrorFixOutput | null>(null);
   const [isAutoFixModalOpen, setIsAutoFixModalOpen] = useState(false);
+  const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
+  const [logsExpanded, setLogsExpanded] = useState(false);
   
   const { addDebugLog } = useDebug();
 
@@ -163,47 +172,50 @@ export default function AutoUpdatePage() {
      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'DEBUG', message: `Opciones LLM resueltas para ${selectedConfigSource}`, data: options });
   }, [selectedConfigSource, agents, workgroups, addDebugLog]);
   
-  const addServerLogsToDebug = useCallback((serverLogs: string[] | undefined, sourcePrefix: string = 'SERVER_AUTOUDDATE') => {
-    if (isMountedRef.current && serverLogs) {
-        serverLogs.forEach(logMsg => {
-            const match = logMsg.match(/^\[(.*?)\s(.*?)\s(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/) || // Matches [SourcePrefix LEVEL TIMESTAMP] Message | Data: JSON
-                          logMsg.match(/^\[(.*?)\s(.*?)]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/) ||       // Matches [SourcePrefix TIMESTAMP] [LEVEL] Message | Data: JSON
-                          logMsg.match(/^\[(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/);             // Matches [TIMESTAMP] [LEVEL] Message | Data: JSON
-            
-            let parsedLog: Omit<DebugLogEntry, 'timestamp'>;
+  const addServerLogsToDebugAndPage = useCallback((serverLogs: string[] | undefined, sourcePrefix: string = 'SERVER_AUTOUDDATE') => {
+    if (serverLogs) {
+      setDetailedLogs(prev => [...prev, ...serverLogs]); // Add to page logs
+      if (isMountedRef.current) {
+          serverLogs.forEach(logMsg => {
+              const match = logMsg.match(/^\[(.*?)\s(.*?)\s(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/) || // Matches [SourcePrefix LEVEL TIMESTAMP] Message | Data: JSON
+                            logMsg.match(/^\[(.*?)\s(.*?)]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/) ||       // Matches [SourcePrefix TIMESTAMP] [LEVEL] Message | Data: JSON
+                            logMsg.match(/^\[(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/);             // Matches [TIMESTAMP] [LEVEL] Message | Data: JSON
+              
+              let parsedLog: Omit<DebugLogEntry, 'timestamp'>;
 
-            if (match && match.length >= 5) {
-                let source = sourcePrefix;
-                let type: DebugLogEntry['type'] = 'INFO';
-                let message = '';
-                let dataStr: string | undefined = undefined;
+              if (match && match.length >= 5) {
+                  let source = sourcePrefix;
+                  let type: DebugLogEntry['type'] = 'INFO';
+                  let message = '';
+                  let dataStr: string | undefined = undefined;
 
-                if (match[0].startsWith(`[${sourcePrefix}`)) { // First two patterns
-                    source = match[1]; // Source e.g. "SourceBundle" or "GitUpload"
-                    type = match[3].toUpperCase() as DebugLogEntry['type'];
-                    message = match[4];
-                    dataStr = match[5];
-                } else { // Last pattern
-                     type = match[2].toUpperCase() as DebugLogEntry['type'];
-                     message = match[3];
-                     dataStr = match[4];
-                }
-                
-                let data: any = undefined;
-                if (dataStr) {
-                    try {
-                        data = JSON.parse(dataStr);
-                    } catch {
-                        data = dataStr; // Keep as string if not valid JSON
-                    }
-                }
-                parsedLog = { source, type, message, data };
-            } else {
-                // Fallback for unparsed logs
-                parsedLog = { source: sourcePrefix, type: 'INFO', message: logMsg };
-            }
-            addDebugLog(parsedLog);
-        });
+                  if (match[0].startsWith(`[${sourcePrefix}`)) { // First two patterns
+                      source = match[1]; // Source e.g. "SourceBundle" or "GitUpload"
+                      type = match[3].toUpperCase() as DebugLogEntry['type'];
+                      message = match[4];
+                      dataStr = match[5];
+                  } else { // Last pattern
+                      type = match[2].toUpperCase() as DebugLogEntry['type'];
+                      message = match[3];
+                      dataStr = match[4];
+                  }
+                  
+                  let data: any = undefined;
+                  if (dataStr) {
+                      try {
+                          data = JSON.parse(dataStr);
+                      } catch {
+                          data = dataStr; // Keep as string if not valid JSON
+                      }
+                  }
+                  parsedLog = { source, type, message, data };
+              } else {
+                  // Fallback for unparsed logs
+                  parsedLog = { source: sourcePrefix, type: 'INFO', message: logMsg };
+              }
+              addDebugLog(parsedLog);
+          });
+      }
     }
   }, [addDebugLog]);
 
@@ -310,7 +322,7 @@ export default function AutoUpdatePage() {
 
     try {
         const result: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
-        addServerLogsToDebug(result.serverLogs, 'SERVER_WORKGROUP_TURN');
+        addServerLogsToDebugAndPage(result.serverLogs, 'SERVER_WORKGROUP_TURN');
 
         if (result.error) {
             addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'ERROR', message: `Error en servidor (turno ${turn}): ${result.error}` });
@@ -370,11 +382,12 @@ export default function AutoUpdatePage() {
         setStatus("error");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agents, workgroups, processAnalysisResult, status, addDebugLog, addServerLogsToDebug]); 
+  }, [agents, workgroups, processAnalysisResult, status, addDebugLog, addServerLogsToDebugAndPage]); 
 
   const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
     const options = resolvedLlmOptions;
     let workgroupForAnalysis: WorkgroupConfig | undefined;
+    setDetailedLogs([]); // Clear previous logs
 
     if (selectedConfigSource.startsWith("workgroup:")) {
         const workgroupId = selectedConfigSource.split(":")[1];
@@ -396,7 +409,6 @@ export default function AutoUpdatePage() {
 
     if (!isRetry) {
        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Iniciando nuevo Auto-Análisis. Limpiando logs previos.` });
-       // Debug logs are global, don't clear them here unless specifically requested by a debug window clear button
     } else {
         addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: "Reintentando análisis..." });
     }
@@ -408,6 +420,7 @@ export default function AutoUpdatePage() {
     setSuggestionsWithStatus([]);
     setAnalysisProgress({ processed: 0, total: 0 });
     setAutoFixSuggestion(null);
+    setWorkgroupConversationHistory([]); // Reset workgroup history
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: "Paso 1: Obteniendo código fuente de la aplicación..."});
 
     toast({
@@ -416,7 +429,7 @@ export default function AutoUpdatePage() {
     });
 
     const bundleResult = await getApplicationSourceBundle(workgroupForAnalysis ? true : false);
-    addServerLogsToDebug(bundleResult.logsBuilt, 'SERVER_SOURCE_BUNDLE');
+    addServerLogsToDebugAndPage(bundleResult.logsBuilt, 'SERVER_SOURCE_BUNDLE');
 
     if (!bundleResult.success || (!bundleResult.files && !bundleResult.concatenatedSource)) {
       const errorMsg = bundleResult.error || "No se pudo obtener el código fuente para analizar.";
@@ -455,7 +468,7 @@ export default function AutoUpdatePage() {
             options.apiUrl,
             analysisPreferences
         );
-        addServerLogsToDebug(analysisActionResult.detailedExecutionLogs, 'SERVER_AUTO_ANALYZE');
+        addServerLogsToDebugAndPage(analysisActionResult.detailedExecutionLogs, 'SERVER_AUTO_ANALYZE');
         setAnalysisProgress({ processed: analysisActionResult.chunksProcessed || 0, total: analysisActionResult.totalChunks || 0 });
 
         if (analysisActionResult.success && analysisActionResult.data) {
@@ -506,7 +519,7 @@ export default function AutoUpdatePage() {
     const fixResult = await handleGetErrorFixSuggestion(
       targetError, options.providerId, options.apiKey, options.modelName, options.apiUrl, tempLogsForAction, errorContext
     );
-    addServerLogsToDebug(tempLogsForAction, 'SERVER_ERROR_FIX');
+    addServerLogsToDebugAndPage(tempLogsForAction, 'SERVER_ERROR_FIX');
 
 
     if (fixResult.success && fixResult.data) {
@@ -547,7 +560,7 @@ export default function AutoUpdatePage() {
     const baseFilePath = suggestionToApply.area.includes(" (parte ") ? suggestionToApply.area.split(" (parte ")[0] : suggestionToApply.area;
     const tempLogsForAction: string[] = [];
     const result = await applySuggestedChange(baseFilePath, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent, tempLogsForAction);
-    addServerLogsToDebug(tempLogsForAction, 'SERVER_APPLY_SUGGESTION');
+    addServerLogsToDebugAndPage(tempLogsForAction, 'SERVER_APPLY_SUGGESTION');
 
     if (result.success && result.newContent !== undefined) {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? { ...s, status: "applied", originalContent: result.newContent! } : s));
@@ -576,7 +589,7 @@ export default function AutoUpdatePage() {
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Obteniendo el paquete de código fuente más reciente para la descarga...`});
     const tempLogsForBundle: string[] = [];
     const bundleResult = await getApplicationSourceBundle(false, tempLogsForBundle); // false for individual files for ZIP
-    addServerLogsToDebug(tempLogsForBundle, 'SERVER_DOWNLOAD_BUNDLE');
+    addServerLogsToDebugAndPage(tempLogsForBundle, 'SERVER_DOWNLOAD_BUNDLE');
 
     let filesToProcess: AppSourceFile[] = [];
     if (bundleResult.success && bundleResult.files) {
@@ -644,6 +657,7 @@ export default function AutoUpdatePage() {
     setCurrentGitError(null);
     setCurrentAnalysisError(null);
     setStatus("uploading_git");
+    setDetailedLogs(prev => [...prev, `[${new Date().toISOString()}] [INFO] Iniciando subida a Git...`]);
     
     const attemptNumber = isRetry ? gitUploadRetryCount + 1 : 1;
     if (isRetry) setGitUploadRetryCount(attemptNumber);
@@ -654,7 +668,7 @@ export default function AutoUpdatePage() {
 
     const tempLogsForAction: string[] = [];
     const result = await handleUploadToGit({ repoUrl, username, email, pat }, commitMsg, tempLogsForAction);
-    addServerLogsToDebug(tempLogsForAction, 'SERVER_GIT_UPLOAD');
+    addServerLogsToDebugAndPage(tempLogsForAction, 'SERVER_GIT_UPLOAD');
 
     if (result.success) {
       toast({ title: "Subida a Git Exitosa", description: result.message, duration: 7000 });
@@ -694,9 +708,10 @@ export default function AutoUpdatePage() {
   };
   const isProcessing = ["analyzing", "loading_source", "chunking_source", "fixing_error", "uploading_git", "fixing_git_error", "processing_workgroup_turn"].includes(status);
   const isGitConfigured = gitConfig.repoUrl && gitConfig.username && gitConfig.email && gitConfig.pat;
+  const isWorkgroupSelected = selectedConfigSource.startsWith('workgroup:');
 
   return (
-    <>
+    <> {/* Added Fragment */}
       <div className="flex flex-col gap-6">
       <Card className="shadow-lg">
         <CardHeader>
@@ -706,11 +721,11 @@ export default function AutoUpdatePage() {
           </CardTitle>
           <CardDescription className="text-lg text-foreground">
             Analiza el código fuente de CodeAlchemist usando la configuración LLM seleccionada.
-            {!resolvedLlmOptions && selectedConfigSource && !selectedConfigSource.startsWith("workgroup:") ? (
-              <span className="text-destructive block mt-1"> (Configuración LLM para '{getSourceName(selectedConfigSource)}' incompleta)</span>
-            ) : resolvedLlmOptions && !selectedConfigSource.startsWith("workgroup:") ? (
+            {!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource ? (
+              <span className="text-destructive block mt-1"> (Configuración para '{getSourceName(selectedConfigSource)}' incompleta)</span>
+            ) : resolvedLlmOptions && !isWorkgroupSelected ? (
               <span className="text-foreground block mt-1">(Usando: {getSourceName(selectedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
-            ) : selectedConfigSource.startsWith("workgroup:") ? (
+            ) : isWorkgroupSelected ? (
                  <span className="text-foreground block mt-1">(Usando Grupo: {getSourceName(selectedConfigSource)})</span>
             ) : (
               <span className="text-muted-foreground block mt-1">(Selecciona fuente de configuración)</span>
@@ -723,13 +738,18 @@ export default function AutoUpdatePage() {
             <Select onValueChange={setSelectedConfigSource} value={selectedConfigSource}>
               <SelectTrigger id="configSource" className="w-full md:w-1/2"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
               <SelectContent>
-                <SelectItem value="global">Ajustes Globales</SelectItem>
-                {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
-                {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
+                <ScrollArea className="h-[--radix-select-content-available-height] max-h-60"> {/* Added ScrollArea */}
+                    <SelectItem value="global">Ajustes Globales</SelectItem>
+                    {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
+                    {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
+                </ScrollArea>
               </SelectContent>
             </Select>
-            {!resolvedLlmOptions && selectedConfigSource && !selectedConfigSource.startsWith("workgroup:") && (
+            {(!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource) && (
               <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(selectedConfigSource)}' incompleta. Revisa Ajustes, Agentes o Grupos.</p>
+            )}
+             {(isWorkgroupSelected && !workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1])) && (
+                <p className="text-xs text-destructive mt-1">Grupo de trabajo '{getSourceName(selectedConfigSource)}' no encontrado o no disponible.</p>
             )}
           </div>
           <p className="text-muted-foreground">
@@ -743,7 +763,7 @@ export default function AutoUpdatePage() {
             <p className="text-xs text-muted-foreground">Describe qué tipo de actualizaciones o áreas te gustaría que la IA priorizara.</p>
           </div>
           <div className="flex flex-wrap gap-4">
-            <Button onClick={() => handleStartAutoAnalysis(false)} disabled={isProcessing || (!resolvedLlmOptions && !selectedConfigSource.startsWith("workgroup:"))} className="text-base py-3 px-6">
+            <Button onClick={() => handleStartAutoAnalysis(false)} disabled={isProcessing || (!resolvedLlmOptions && !isWorkgroupSelected) || (isWorkgroupSelected && workgroups.length === 0 && !workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1])) } className="text-base py-3 px-6">
               {isProcessing && (status === "analyzing" || status === "loading_source" || status === "chunking_source" || status === "processing_workgroup_turn") ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Sparkles className="mr-2 h-5 w-5" />}
               Iniciar Auto-Análisis
             </Button>
@@ -899,7 +919,33 @@ export default function AutoUpdatePage() {
             </div>
           )}
         </CardContent>
-        <CardFooter><p className="text-xs text-muted-foreground"><strong>Nota:</strong> El análisis se realiza sobre el código completo. La descarga proporciona un ZIP. La subida a Git usa el estado actual. Revisa cuidadosamente las sugerencias de IA.</p></CardFooter>
+        <CardFooter className="flex flex-col items-start gap-2">
+            <p className="text-xs text-muted-foreground"><strong>Nota:</strong> El análisis se realiza sobre el código completo. La descarga proporciona un ZIP. La subida a Git usa el estado actual. Revisa cuidadosamente las sugerencias de IA.</p>
+            {detailedLogs.length > 0 && (
+              <Card className="mt-6 border-primary/30 w-full">
+                  <CardHeader className="pb-2 flex flex-row items-center justify-between">
+                      <CardTitle className="text-lg flex items-center gap-2 text-primary"><ListOrdered className="h-5 w-5"/> Logs Detallados</CardTitle>
+                      <div className="flex items-center gap-2">
+                          <Button variant="ghost" size="icon" onClick={() => setLogsExpanded(!logsExpanded)} title={logsExpanded ? "Contraer Logs" : "Expandir Logs"}>
+                              {logsExpanded ? <Minimize className="h-4 w-4"/> : <Expand className="h-4 w-4"/>}
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => setDetailedLogs([])} title="Limpiar Logs">
+                              <Trash2 className="h-4 w-4 text-destructive"/>
+                          </Button>
+                      </div>
+                  </CardHeader>
+                  <CardContent>
+                      <ScrollArea className={cn("p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out", logsExpanded ? "h-[300px]" : "h-[100px]")}>
+                          <pre className="text-xs text-foreground whitespace-pre-wrap">
+                              {detailedLogs.map((log, index) => (
+                                  <span key={`log-${index}`} className={log.includes("[ERROR") || log.includes("Error:") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-500" : ""}>{log}\n</span>
+                              ))}
+                          </pre>
+                      </ScrollArea>
+                  </CardContent>
+              </Card>
+            )}
+        </CardFooter>
       </Card>
       <AlertDialog open={isAutoFixModalOpen} onOpenChange={setIsAutoFixModalOpen}>
         <AlertDialogContent className="max-w-2xl">
@@ -935,3 +981,4 @@ export default function AutoUpdatePage() {
     </>
   );
 }
+
