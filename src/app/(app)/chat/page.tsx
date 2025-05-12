@@ -7,9 +7,9 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, Send, User, Sparkles, AlertTriangle, Copy, Trash2, Settings2 } from 'lucide-react';
+import { Loader2, Send, User, Sparkles, AlertTriangle, Copy, Trash2, Settings2, Wand2 } from 'lucide-react'; // Added Wand2
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { handleChatCompletion, initiateWorkgroupChat } from './actions'; 
 import type { ChatMessage } from '@/services/groq';
 import {
@@ -19,12 +19,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"; // Added AlertDialog
 import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
 import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config';
 import { LLM_PROVIDERS, LOCALSTORAGE_PROVIDER_ID_KEY, getLocalStorageApiKeyName, getLocalStorageModelName, type LLMProviderId } from '@/config/llm-config';
 import { useDebug } from '@/contexts/DebugContext';
+import { handleGetErrorFixSuggestion } from '@/app/(app)/autoupdate/actions'; // Import for Auto-Fix
+import type { SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow'; // Import for Auto-Fix
 
 export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
@@ -39,6 +51,10 @@ export default function ChatPage() {
   const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
   const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global');
   const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null);
+
+  const [autoFixSuggestion, setAutoFixSuggestion] = useState<SuggestErrorFixOutput | null>(null); // For Auto-Fix
+  const [isAutoFixModalOpen, setIsAutoFixModalOpen] = useState(false); // For Auto-Fix
+  const [isAttemptingAutoFix, setIsAttemptingAutoFix] = useState(false); // For Auto-Fix loading
 
   const { toast } = useToast();
 
@@ -82,7 +98,21 @@ export default function ChatPage() {
   }, [addDebugLog]);
 
   useEffect(() => {
-    const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups);
+    const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups, {
+        [LOCALSTORAGE_PROVIDER_ID_KEY]: typeof window !== 'undefined' ? localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null : null,
+        apiKeys: LLM_PROVIDERS.reduce((acc, p) => {
+            acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(getLocalStorageApiKeyName(p.id)) : null;
+            return acc;
+        }, {} as LocalStorageSnapshot['apiKeys']),
+        modelNames: LLM_PROVIDERS.reduce((acc, p) => {
+            acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(getLocalStorageModelName(p.id)) : null;
+            return acc;
+        }, {} as LocalStorageSnapshot['modelNames']),
+        apiUrls: LLM_PROVIDERS.reduce((acc, p) => {
+            acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(`codealchemist_apiurl_${p.id}`) : null;
+            return acc;
+        }, {} as LocalStorageSnapshot['apiUrls']),
+    });
     setResolvedLlmOptions(options);
     addDebugLog({ source: 'CHAT_PAGE', type: 'DEBUG', message: `Opciones LLM resueltas para ${selectedConfigSource}`, data: options });
   }, [selectedConfigSource, agents, workgroups, addDebugLog]);
@@ -94,16 +124,21 @@ export default function ChatPage() {
     }
   }, [chatHistory]);
 
-  const handleSendMessage = async () => {
-    if (!currentMessage.trim()) return;
+  const handleSendMessage = async (retryPrompt?: string) => {
+    const messageToSend = retryPrompt || currentMessage;
+    if (!messageToSend.trim()) return;
     
     let result;
-    const newUserMessage: ChatMessage = { role: 'user', content: currentMessage };
-    setChatHistory(prev => [...prev, newUserMessage]);
+    const newUserMessage: ChatMessage = { role: 'user', content: messageToSend };
+    // Only add to history if it's not a retry of the same message
+    if (!retryPrompt) {
+        setChatHistory(prev => [...prev, newUserMessage]);
+    }
     const messagesForApi = [...chatHistory, newUserMessage]; 
-    setCurrentMessage('');
+    if (!retryPrompt) setCurrentMessage(''); // Clear input only if it's a new message
     setIsLoading(true);
     setChatError(null);
+    setAutoFixSuggestion(null); // Clear previous auto-fix suggestions
     addDebugLog({ source: 'CHAT_PAGE', type: 'INFO', message: `Enviando mensaje: "${newUserMessage.content.substring(0,50)}..." usando ${getSourceName(selectedConfigSource)}`});
 
     if (selectedConfigSource.startsWith('workgroup:')) {
@@ -113,20 +148,20 @@ export default function ChatPage() {
         toast({ title: "Error de Grupo", description: "Grupo de trabajo no encontrado.", variant: "destructive"});
         addDebugLog({ source: 'CHAT_PAGE', type: 'ERROR', message: `Grupo de trabajo ${workgroupId} no encontrado.`});
         setIsLoading(false);
-        setChatHistory(prev => prev.slice(0, -1)); // Remove user message if group not found
+        if (!retryPrompt) setChatHistory(prev => prev.slice(0, -1)); // Remove user message if group not found
         return;
       }
       
       const snapshot: LocalStorageSnapshot = {
-        [LOCALSTORAGE_PROVIDER_ID_KEY]: localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null,
+        [LOCALSTORAGE_PROVIDER_ID_KEY]: typeof window !== 'undefined' ? localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null : null,
         apiKeys: {},
         modelNames: {},
         apiUrls: {},
       };
       LLM_PROVIDERS.forEach(provider => {
-        snapshot.apiKeys[provider.id] = localStorage.getItem(getLocalStorageApiKeyName(provider.id));
-        snapshot.modelNames[provider.id] = localStorage.getItem(getLocalStorageModelName(provider.id));
-        snapshot.apiUrls[provider.id] = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
+        snapshot.apiKeys[provider.id] = typeof window !== 'undefined' ? localStorage.getItem(getLocalStorageApiKeyName(provider.id)) : null;
+        snapshot.modelNames[provider.id] = typeof window !== 'undefined' ? localStorage.getItem(getLocalStorageModelName(provider.id)) : null;
+        snapshot.apiUrls[provider.id] = typeof window !== 'undefined' ? localStorage.getItem(`codealchemist_apiurl_${provider.id}`) : null;
       });
       addDebugLog({ source: 'CHAT_PAGE', type: 'DEBUG', message: 'Snapshot de localStorage enviado para chat de grupo.'});
 
@@ -143,7 +178,7 @@ export default function ChatPage() {
             });
             addDebugLog({ source: 'CHAT_PAGE', type: 'ERROR', message: `Configuración LLM para '${getSourceName(selectedConfigSource)}' incompleta.`});
             setIsLoading(false);
-            setChatHistory(prev => prev.slice(0, -1)); // Remove user message
+            if (!retryPrompt) setChatHistory(prev => prev.slice(0, -1)); // Remove user message
             return;
         }
         result = await handleChatCompletion(messagesForApi, options.providerId, options.apiKey, options.modelName, options.apiUrl);
@@ -158,7 +193,6 @@ export default function ChatPage() {
       setChatError(result.error || 'Ocurrió un error desconocido.');
       toast({ title: 'Error en Chat', description: result.error || `No se pudo obtener respuesta.`, variant: 'destructive' });
       addDebugLog({ source: 'CHAT_PAGE', type: 'ERROR', message: `Error en chat: ${result.error || 'Desconocido'}`, data:result});
-      // Optionally remove the user message that led to an error: setChatHistory(prev => prev.slice(0, -1));
     }
     setIsLoading(false);
   };
@@ -173,8 +207,55 @@ export default function ChatPage() {
   const handleClearChat = () => {
     setChatHistory([]);
     setChatError(null);
+    setAutoFixSuggestion(null);
     toast({ title: 'Chat Borrado', description: 'Historial de chat limpiado.' });
     addDebugLog({ source: 'CHAT_PAGE', type: 'INFO', message: 'Historial de chat limpiado.'});
+  };
+
+  const handleAttemptAutoFix = async () => {
+    if (!chatError || !resolvedLlmOptions) {
+        toast({ title: "Información Faltante", description: "No hay error o configuración LLM para Auto-Fix.", variant: "destructive" });
+        return;
+    }
+    setIsAttemptingAutoFix(true);
+    setAutoFixSuggestion(null);
+    toast({ title: "Intentando Auto-Corrección", description: `Consultando a ${resolvedLlmOptions.providerId} para una posible solución...` });
+    addDebugLog({ source: 'CHAT_PAGE', type: 'INFO', message: `Consultando a ${resolvedLlmOptions.providerId} para auto-corrección de error en chat.`, data: { error: chatError } });
+    
+    const tempLogsForAction: string[] = [];
+    const fixResult = await handleGetErrorFixSuggestion(
+        chatError,
+        resolvedLlmOptions.providerId,
+        resolvedLlmOptions.apiKey,
+        resolvedLlmOptions.modelName,
+        resolvedLlmOptions.apiUrl,
+        tempLogsForAction,
+        "Error ocurrido durante una interacción de Chat con IA, posiblemente con un grupo de trabajo."
+    );
+    addServerLogsToDebug(tempLogsForAction, 'SERVER_CHAT_AUTOFIX');
+
+    if (fixResult.success && fixResult.data) {
+        setAutoFixSuggestion(fixResult.data);
+        setIsAutoFixModalOpen(true);
+        toast({ title: "Sugerencia de Corrección Recibida" });
+        addDebugLog({ source: 'CHAT_PAGE', type: 'INFO', message: `Sugerencia de corrección recibida de la IA.`, data: fixResult.data });
+    } else {
+        toast({ title: "Error en Auto-Corrección", description: fixResult.error || "No se pudo obtener sugerencia.", variant: "destructive" });
+        addDebugLog({ source: 'CHAT_PAGE', type: 'ERROR', message: `Error al obtener sugerencia de corrección: ${fixResult.error || "Desconocido"}`, data: fixResult });
+    }
+    setIsAttemptingAutoFix(false);
+  };
+
+  const handleRetryChatFromModal = () => {
+    setIsAutoFixModalOpen(false);
+    const lastUserMessage = chatHistory.findLast(msg => msg.role === 'user');
+    if (lastUserMessage) {
+        addDebugLog({ source: 'CHAT_PAGE', type: 'INFO', message: `Reintentando enviar último mensaje del usuario tras Auto-Fix: "${lastUserMessage.content.substring(0,30)}..."`});
+        // Do not add to history again, just resend
+        handleSendMessage(lastUserMessage.content);
+    } else {
+        toast({title: "Error al Reintentar", description: "No se encontró el último mensaje del usuario para reintentar.", variant: "destructive"});
+    }
   };
 
    const getSourceName = (sourceId: string): string => {
@@ -194,6 +275,7 @@ export default function ChatPage() {
   const canSubmit = isLoading || !currentMessage.trim() || (!resolvedLlmOptions && !isWorkgroupSelected) || (isWorkgroupSelected && workgroups.length === 0 && !workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1]));
 
   return (
+    <>
     <div className="flex flex-col h-[calc(100vh-8rem)] md:h-[calc(100vh-10rem)] gap-6">
       <Card className="shadow-lg flex-1 flex flex-col overflow-hidden">
         <CardHeader className="border-b">
@@ -217,7 +299,7 @@ export default function ChatPage() {
                 <Select onValueChange={setSelectedConfigSource} value={selectedConfigSource}>
                     <SelectTrigger id="configSourceChat" className="w-full md:w-1/2 h-9 text-xs"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
                     <SelectContent>
-                        <ScrollArea className="h-[--radix-select-content-available-height] max-h-60"> {/* Added ScrollArea */}
+                        <ScrollArea className="h-[--radix-select-content-available-height] max-h-60">
                             <SelectItem value="global">Ajustes Globales</SelectItem>
                             {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
                             {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
@@ -259,7 +341,14 @@ export default function ChatPage() {
           <div className="p-4 border-t border-destructive bg-destructive/10">
             <div className="flex items-center justify-between mb-1">
                 <p className="text-sm font-medium text-destructive flex items-center gap-2"><AlertTriangle className="h-5 w-5" /> Error:</p>
-                <Button variant="ghost" size="icon" onClick={() => handleCopyError(chatError)} title="Copiar Error"><Copy className="h-4 w-4 text-destructive" /></Button>
+                <div className="flex items-center gap-1">
+                  <Button variant="ghost" size="icon" onClick={() => handleCopyError(chatError)} title="Copiar Error"><Copy className="h-4 w-4 text-destructive" /></Button>
+                  {resolvedLlmOptions && (
+                    <Button variant="ghost" size="icon" onClick={handleAttemptAutoFix} disabled={isAttemptingAutoFix || !chatError} title="Intentar Auto-Corrección">
+                        {isAttemptingAutoFix ? <Loader2 className="h-4 w-4 animate-spin text-accent" /> : <Wand2 className="h-4 w-4 text-accent" />}
+                    </Button>
+                  )}
+                </div>
             </div>
             <p className="text-xs text-destructive">{chatError}</p>
           </div>
@@ -270,13 +359,13 @@ export default function ChatPage() {
             <Textarea value={currentMessage} onChange={(e) => setCurrentMessage(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }}}
               placeholder="Escribe tu mensaje... (Shift+Enter para nueva línea)" rows={1}
-              className="flex-1 resize-none min-h-[40px] max-h-[120px] text-sm bg-card" 
+              className="flex-1 resize-none min-h-[40px] max-h-[120px] text-sm bg-card text-foreground" 
               disabled={isLoading} 
             />
             <Button onClick={handleClearChat} variant="ghost" size="icon" disabled={isLoading || chatHistory.length === 0} title="Limpiar Chat">
               <Trash2 className="h-5 w-5 text-muted-foreground hover:text-destructive"/>
             </Button>
-            <Button onClick={handleSendMessage} disabled={canSubmit} className="h-10">
+            <Button onClick={() => handleSendMessage()} disabled={canSubmit} className="h-10">
               {isLoading ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
               <span className="sr-only">Enviar</span>
             </Button>
@@ -284,6 +373,31 @@ export default function ChatPage() {
         </CardFooter>
       </Card>
     </div>
+
+    <AlertDialog open={isAutoFixModalOpen} onOpenChange={setIsAutoFixModalOpen}>
+        <AlertDialogContent className="max-w-2xl">
+            <AlertDialogHeader>
+                <AlertDialogTitle className="flex items-center gap-2 text-accent"><Settings2 className="h-6 w-6 text-accent" />Sugerencia de Auto-Corrección</AlertDialogTitle>
+                <AlertDialogDescription className="text-muted-foreground">La IA ha analizado el error. Revisa antes de actuar.</AlertDialogDescription>
+            </AlertDialogHeader>
+            {autoFixSuggestion && (
+                <ScrollArea className="max-h-[60vh] p-1 -mx-1">
+                    <div className="space-y-3 p-3 border rounded-md bg-card">
+                        <div><h4 className="font-semibold text-sm mb-1 text-foreground">Posible Causa Raíz:</h4><p className="text-xs text-foreground whitespace-pre-wrap">{autoFixSuggestion.root_cause_analysis}</p></div>
+                        <hr className="my-2 border-border"/>
+                        <div><h4 className="font-semibold text-sm mb-1 text-foreground">Sugerencias de Solución:</h4><p className="text-xs text-foreground whitespace-pre-wrap">{autoFixSuggestion.solution_suggestions}</p></div>
+                    </div>
+                </ScrollArea>
+            )}
+            <AlertDialogFooter className="mt-4">
+                <AlertDialogCancel onClick={() => setIsAutoFixModalOpen(false)}>Cerrar</AlertDialogCancel>
+                <AlertDialogAction onClick={handleRetryChatFromModal} className="bg-primary hover:bg-primary/90" disabled={isLoading}>
+                    {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />} Reintentar Chat
+                </AlertDialogAction>
+            </AlertDialogFooter>
+        </AlertDialogContent>
+    </AlertDialog>
+  </>
   );
 }
 
