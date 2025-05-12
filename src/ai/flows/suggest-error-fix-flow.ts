@@ -1,3 +1,4 @@
+
 'use server';
 /**
  * @fileOverview Flujo para sugerir soluciones a mensajes de error utilizando la API LLM configurada.
@@ -8,7 +9,7 @@
  */
 
 import {z} from 'zod';
-import { chatWithLLM, type LLMOptions, type ChatMessage, ChatLLMPayload, ChatLLMResponse } from '@/services/groq'; // Use generic chat function
+import { chatWithLLM, type LLMOptions, type ChatMessage, type ChatLLMPayload } from '@/services/groq'; // Use generic chat function
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
 
 // Schema for LLMOptions, required as part of the input
@@ -55,6 +56,15 @@ Responde ÚNICAMENTE en formato JSON válido con las siguientes claves:
 - "solution_suggestions": (string) Una explicación paso a paso de cómo solucionar el error. Si implica cambios de código, sé específico sobre qué cambiar y por qué. Si implica configuraciones, detalla los pasos.
 
 Considera que el error puede estar relacionado con límites de API, configuración incorrecta, problemas de código, dependencias, etc.
+
+Si el error indica que un LLM (especialmente un agente Orquestador o un agente que debe devolver JSON) no devolvió una respuesta JSON válida cuando se esperaba (ej. "no contenía un bloque JSON reconocible", "Unexpected token '<'", "not valid JSON"):
+  - Analiza si el prompt del sistema del agente que falló (Orquestador o el agente específico) instruye CLARAMENTE sobre el formato JSON exacto requerido. Asegúrate de que el prompt especifique que la respuesta DEBE SER *EXCLUSIVAMENTE* el objeto JSON, sin texto introductorio, explicaciones adicionales, o etiquetas como "<think>".
+  - Sugiere revisar y simplificar el prompt del sistema del agente que falló para asegurar que la instrucción de formato JSON sea la más prominente y clara.
+  - Considera si el modelo LLM usado por el agente es adecuado para seguir instrucciones de formato estrictas. Algunos modelos son mejores que otros en esto. Si es un modelo menos potente, sugiere probar con uno más avanzado si es posible.
+  - Propón verificar si hay caracteres extraños o texto no JSON (como etiquetas "<think>", comentarios o explicaciones) en la respuesta cruda del LLM, y cómo el código podría intentar extraer el JSON de forma más robusta (ej. buscando el primer '{' y el último '}').
+  - Sugiere añadir reintentos con una re-instrucción más enfática sobre el formato JSON si el agente falla repetidamente, o incluso instruir al LLM para que verifique su propia salida antes de enviarla.
+  - Menciona la posibilidad de que la respuesta del LLM sea demasiado larga y se trunque antes de completar el JSON, sugiriendo pedir al LLM que sea más conciso si el problema persiste.
+
 Si el error menciona límites de API (ej. TPM, RPM, "Payload Too Large", "Rate limit exceeded"), explica qué significa el límite y cómo el usuario puede ajustar su uso o configuración para respetarlo (ej. reducir tamaño de payload, añadir reintentos con backoff, espaciar las solicitudes, considerar actualizar plan si es una opción).
 No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
 
@@ -74,17 +84,30 @@ No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
         messages: messages,
         options: llmOptions // Pass the validated and complete LLMOptions
     };
-    // Expect chatWithLLM to handle JSON parsing internally based on prompt instructions
+    
     const chatResponse = await chatWithLLM(chatPayload);
 
-    // Parse the JSON response from the content string
+    // Attempt to parse the JSON response from the content string
     let result: SuggestErrorFixOutput;
     try {
-        // Attempt to parse the response content as JSON
-        result = JSON.parse(chatResponse.content);
+        // Attempt to extract JSON even if it's embedded in other text (e.g. ```json ... ```)
+        const jsonMatch = chatResponse.content.match(/\{[\s\S]*\}/);
+        if (jsonMatch && jsonMatch[0]) {
+            result = JSON.parse(jsonMatch[0]);
+        } else {
+            // If no clear JSON block is found, try parsing the whole content
+            // This might fail if there's leading/trailing non-JSON text, which is common
+            console.warn("[SuggestErrorFix] No se encontró un bloque JSON claro en la respuesta. Intentando parsear contenido completo:", chatResponse.content.substring(0, 200) + "...");
+            try {
+                 result = JSON.parse(chatResponse.content);
+            } catch (fullParseError) {
+                 console.error("Error al parsear la respuesta JSON COMPLETA de LLM (suggestErrorFix):", fullParseError, "\nContenido recibido:", chatResponse.content);
+                 throw new Error(`La respuesta de LLM (suggestErrorFix) no es un JSON válido o está malformada (incluso sin bloques JSON explícitos). Error: ${(fullParseError as Error).message}. Respuesta parcial: ${chatResponse.content.substring(0, 200)}...`);
+            }
+        }
     } catch (parseError) {
-        console.error("Error al parsear la respuesta JSON de LLM (suggestErrorFix):", parseError, "\nContenido recibido:", chatResponse.content);
-        throw new Error(`La respuesta de LLM (suggestErrorFix) no es un JSON válido o está malformada. Error: ${(parseError as Error).message}`);
+        console.error("Error al parsear la respuesta JSON de LLM (suggestErrorFix) tras intento de extracción:", parseError, "\nContenido recibido:", chatResponse.content);
+        throw new Error(`La respuesta de LLM (suggestErrorFix) no es un JSON válido o está malformada. Error: ${(parseError as Error).message}. Respuesta parcial: ${chatResponse.content.substring(0, 200)}...`);
     }
 
     // Validate the structure received from the LLM
@@ -101,3 +124,4 @@ No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
     throw error;
   }
 }
+

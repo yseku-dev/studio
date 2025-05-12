@@ -215,6 +215,7 @@ export default function ChatPage() {
   const handleAttemptAutoFix = async () => {
     if (!chatError || !resolvedLlmOptions) {
         toast({ title: "Información Faltante", description: "No hay error o configuración LLM para Auto-Fix.", variant: "destructive" });
+        addDebugLog({ source: 'CHAT_PAGE', type: 'ERROR', message: 'Intento de Auto-Fix fallido: Información faltante (error o config LLM).'});
         return;
     }
     setIsAttemptingAutoFix(true);
@@ -230,7 +231,7 @@ export default function ChatPage() {
         resolvedLlmOptions.modelName,
         resolvedLlmOptions.apiUrl,
         tempLogsForAction,
-        "Error ocurrido durante una interacción de Chat con IA, posiblemente con un grupo de trabajo."
+        "Error ocurrido durante una interacción de Chat con IA, posiblemente con un grupo de trabajo. El agente Orquestador pudo no haber devuelto un JSON válido como se esperaba."
     );
     addServerLogsToDebug(tempLogsForAction, 'SERVER_CHAT_AUTOFIX');
 
@@ -255,6 +256,7 @@ export default function ChatPage() {
         handleSendMessage(lastUserMessage.content);
     } else {
         toast({title: "Error al Reintentar", description: "No se encontró el último mensaje del usuario para reintentar.", variant: "destructive"});
+        addDebugLog({source: 'CHAT_PAGE', type: 'ERROR', message: 'Error al reintentar chat desde modal: Último mensaje de usuario no encontrado.'});
     }
   };
 
