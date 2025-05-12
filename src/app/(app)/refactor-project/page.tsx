@@ -1,4 +1,3 @@
-
 // src/app/(app)/refactor-project/page.tsx
 'use client';
 
@@ -8,7 +7,6 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { Button } from '@/components/ui/button';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from '@/components/ui/textarea';
@@ -21,7 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from '@/hooks/use-toast';
-import { GitPullRequestDraft, UploadCloud, GitFork, Loader2, Wand2, Settings2, AlertTriangle, Copy, Trash2, ListOrdered, Eye, CheckCircle, XCircle, Minimize, Expand, Bug } from "lucide-react"; // Added Bug
+import { GitPullRequestDraft, UploadCloud, Loader2, Wand2, Settings2, AlertTriangle, Copy, Trash2, ListOrdered, Eye, CheckCircle, XCircle, Minimize, Expand, Bug } from "lucide-react";
 import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
@@ -29,7 +27,7 @@ import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGEN
 import { LLM_PROVIDERS, LOCALSTORAGE_PROVIDER_ID_KEY, getLocalStorageApiKeyName, getLocalStorageModelName, type LLMProviderId } from '@/config/llm-config';
 import { handleGetRefactoringSuggestions, handleApplyRefactoringSuggestion, type HandleGetRefactoringSuggestionsPayload } from './actions';
 import { cn } from '@/lib/utils';
-import { Badge } from '@/components/ui/badge'; 
+import { Badge } from '@/components/ui/badge';
 import { useDebug } from '@/contexts/DebugContext';
 
 const refactorParamsSchema = z.object({
@@ -39,16 +37,12 @@ const refactorParamsSchema = z.object({
 
 type RefactorParamsFormData = z.infer<typeof refactorParamsSchema>;
 
-const fileOrUrlSchema = z.object({
+const fileUploadSchema = z.object({
   configSource: z.string().min(1, 'Debes seleccionar una fuente de configuración LLM.'),
-  projectFile: z.instanceof(File).optional(),
-  gitUrl: z.string().url({ message: "URL de Git inválida." }).optional(),
-}).refine(data => data.projectFile || data.gitUrl, {
-  message: "Debes subir un archivo o proporcionar una URL de Git.",
-  path: ["projectFile"], 
+  projectFile: z.instanceof(File).refine(file => file && file.size > 0, { message: "Debes subir un archivo." }),
 });
 
-type FileOrUrlFormData = z.infer<typeof fileOrUrlSchema>;
+type FileUploadFormData = z.infer<typeof fileUploadSchema>;
 
 interface RefactoringSuggestion {
   id: string;
@@ -56,19 +50,18 @@ interface RefactoringSuggestion {
   description: string;
   priority: 'Alta' | 'Media' | 'Baja';
   suggestedSnippet?: string;
-  originalContent?: string; 
+  originalContent?: string;
   status?: 'pending' | 'applied' | 'dismissed' | 'error';
   errorMessage?: string;
 }
 
 export default function RefactorProjectPage() {
-  const [activeTab, setActiveTab] = useState<"upload" | "git">("upload");
   const [analysisStatus, setAnalysisStatus] = useState<'idle' | 'loading' | 'analyzing' | 'success' | 'error'>("idle");
   const [suggestions, setSuggestions] = useState<RefactoringSuggestion[]>([]);
   const [currentError, setCurrentError] = useState<string | null>(null);
   const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
   const [logsExpanded, setLogsExpanded] = useState(false);
-  
+
   const { addDebugLog } = useDebug();
   const isMountedRef = useRef(false);
 
@@ -78,8 +71,8 @@ export default function RefactorProjectPage() {
 
   const { toast } = useToast();
 
-  const fileForm = useForm<FileOrUrlFormData>({
-    resolver: zodResolver(fileOrUrlSchema),
+  const fileForm = useForm<FileUploadFormData>({
+    resolver: zodResolver(fileUploadSchema),
     defaultValues: { configSource: 'global' },
   });
 
@@ -92,12 +85,11 @@ export default function RefactorProjectPage() {
   useEffect(() => {
     isMountedRef.current = true;
     addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: 'Componente RefactorProjectPage montado.' });
-    return () => { 
-      isMountedRef.current = false; 
+    return () => {
+      isMountedRef.current = false;
       addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: 'Componente RefactorProjectPage desmontado.' });
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [addDebugLog]);
 
   const addServerLogsToDebugAndPage = useCallback((serverLogs: string[] | undefined, sourcePrefix: string = 'SERVER_REFACTOR') => {
     if (serverLogs) {
@@ -133,12 +125,12 @@ export default function RefactorProjectPage() {
     setResolvedLlmOptions(options);
     addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'DEBUG', message: `Opciones LLM resueltas para ${watchedConfigSource}`, data: options });
   }, [watchedConfigSource, agents, workgroups, addDebugLog]);
-  
+
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files[0]) {
       const file = event.target.files[0];
-      if (file.type === 'application/zip' || file.name.endsWith('.zip') || 
+      if (file.type === 'application/zip' || file.name.endsWith('.zip') ||
           file.type === 'application/json' || file.name.endsWith('.json') ||
           file.type.startsWith('text/')) {
         fileForm.setValue('projectFile', file);
@@ -154,13 +146,13 @@ export default function RefactorProjectPage() {
     }
   };
 
-  const handleAnalyzeRefactor: SubmitHandler<FileOrUrlFormData> = async (data) => {
+  const handleAnalyzeRefactor: SubmitHandler<FileUploadFormData> = async (data) => {
     const params = paramsForm.getValues();
     setAnalysisStatus("loading");
     setCurrentError(null);
     setSuggestions([]);
-    setDetailedLogs([]); 
-    addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: 'Iniciando análisis de refactorización...', data: { file: data.projectFile?.name, url: data.gitUrl, params }});
+    setDetailedLogs([]);
+    addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: 'Iniciando análisis de refactorización...', data: { file: data.projectFile?.name, params }});
 
     const file = data.projectFile;
     let projectFileContent: string | undefined;
@@ -176,12 +168,17 @@ export default function RefactorProjectPage() {
             projectFileContent = await file.text();
             addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'DEBUG', message: `Contenido de archivo de texto/JSON leído. Tamaño: ${projectFileContent.length} bytes.`});
         } else if (file.type === 'application/zip' || file.name.endsWith('.zip')) {
-            addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Archivo ZIP (${file.name}) seleccionado. Se enviará como string base64 (simulado) o se procesará en servidor.`});
-            // Simulate reading content for ZIP, actual unzipping/processing is complex for client-side.
-            // For a real implementation, this would likely involve sending the file to the server.
-            // This string placeholder approach needs to be handled by the server action.
-            projectFileContent = `Contenido_ZIP_Placeholder_Nombre:${file.name}_Tipo:${file.type}`; // Placeholder
-            addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'DEBUG', message: `Contenido ZIP (placeholder) preparado. Longitud: ${projectFileContent.length}`});
+            addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Archivo ZIP (${file.name}) seleccionado. Se leerá su contenido.`});
+            // For ZIP, we'll read it as text if possible (e.g. ZIP containing a single large text file or JSON bundle)
+            // Or indicate it needs server-side processing for true unzipping.
+            // For now, let's attempt to read as text, and handle potential errors if it's binary.
+             try {
+                projectFileContent = await file.text();
+                 addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'DEBUG', message: `Contenido de ZIP (leído como texto) preparado. Longitud: ${projectFileContent.length}`});
+             } catch (zipReadError) {
+                 addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'WARN', message: `No se pudo leer el ZIP como texto, usando placeholder. Error: ${(zipReadError as Error).message}`});
+                 projectFileContent = `Contenido_ZIP_Placeholder_Nombre:${file.name}_Tipo:${file.type}`; // Placeholder for binary ZIP
+             }
         } else {
             toast({ title: "Error de Archivo", description: `No se puede procesar el contenido de '${file.name}' como texto o ZIP estándar.`, variant: "destructive" });
             setAnalysisStatus("idle");
@@ -194,10 +191,13 @@ export default function RefactorProjectPage() {
         addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'ERROR', message: `Error leyendo archivo ${file.name}: ${(e as Error).message}`});
         return;
       }
-    } else if (data.gitUrl) {
-        addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Usando URL de Git: ${data.gitUrl} (Extracción de contenido es simulada).`});
+    } else {
+        toast({ title: "Archivo Faltante", description: "Por favor, selecciona un archivo para analizar.", variant: "destructive" });
+        setAnalysisStatus("idle");
+        addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'ERROR', message: `Intento de análisis sin archivo.`});
+        return;
     }
-    
+
     let snapshot: LocalStorageSnapshot | undefined = undefined;
     if (data.configSource.startsWith('workgroup:')) {
       addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'DEBUG', message: `Usando grupo de trabajo. Recopilando snapshot de localStorage...`});
@@ -226,7 +226,6 @@ export default function RefactorProjectPage() {
       projectFileContent,
       projectFileName,
       projectFileType,
-      gitUrl: data.gitUrl,
       goals: params.goals,
       priority: params.priority,
       configSource: data.configSource,
@@ -235,7 +234,7 @@ export default function RefactorProjectPage() {
       workgroups: data.configSource.startsWith('workgroup:') ? workgroups : undefined,
       localStorageSnapshot: snapshot,
     };
-    
+
     setAnalysisStatus("analyzing");
     addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Enviando solicitud de análisis al servidor...`});
     const result = await handleGetRefactoringSuggestions(actionPayload);
@@ -267,8 +266,9 @@ export default function RefactorProjectPage() {
         setSuggestions(prev => prev.map(s => s.id === suggestionId ? {...s, status: 'error', errorMessage: 'Sin contenido para aplicar.'} : s));
         return;
     }
-    toast({title: "Aplicando Sugerencia (Simulado)", description: `Aplicando cambios para ${suggestion.area}. La funcionalidad real de modificación de archivos está pendiente.`});
-    await new Promise(resolve => setTimeout(resolve, 700)); 
+    // Actual file modification is not implemented in this section.
+    toast({title: "Aplicando Sugerencia (Simulado)", description: `Marcando cambios para ${suggestion.area}. La modificación real de archivos no está implementada aquí.`});
+    await new Promise(resolve => setTimeout(resolve, 700));
     setSuggestions(prev => prev.map(s => s.id === suggestionId ? {...s, status: 'applied'} : s));
     addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Sugerencia ${suggestionId} marcada como aplicada (simulado).`});
   };
@@ -278,11 +278,11 @@ export default function RefactorProjectPage() {
     setSuggestions(prev => prev.map(s => s.id === suggestionId ? {...s, status: 'dismissed'} : s));
     toast({title: "Sugerencia Descartada"});
   };
-  
+
   const handleApplyAllSuggestions = async () => {
     addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: "Intentando aplicar todas las sugerencias pendientes (simulado)..."});
-    toast({ title: "Aplicando Todas (Simulado)", description: "Se están aplicando todas las sugerencias. La funcionalidad real está pendiente." });
-    await new Promise(resolve => setTimeout(resolve, 1000)); 
+    toast({ title: "Aplicando Todas (Simulado)", description: "Se están aplicando todas las sugerencias. La modificación real de archivos no está implementada aquí." });
+    await new Promise(resolve => setTimeout(resolve, 1000));
     let appliedCount = 0;
     setSuggestions(prev => prev.map(s => {
         if (s.status === 'pending' && s.suggestedSnippet) {
@@ -312,12 +312,12 @@ export default function RefactorProjectPage() {
     }
     return 'Desconocido';
   };
-  
+
   const isProcessing = analysisStatus === "loading" || analysisStatus === "analyzing";
   const formValues = fileForm.watch();
   const isWorkgroupSelected = watchedConfigSource.startsWith('workgroup:');
-  const canSubmit = isProcessing || 
-                    (!formValues.projectFile && !formValues.gitUrl) || 
+  const canSubmit = isProcessing ||
+                    (!formValues.projectFile) || // Removed Git URL check
                     (!resolvedLlmOptions && !isWorkgroupSelected) ||
                     (isWorkgroupSelected && workgroups.length === 0 && !workgroups.find(wg => wg.id === watchedConfigSource.split(':')[1]));
 
@@ -330,7 +330,7 @@ export default function RefactorProjectPage() {
             <GitPullRequestDraft className="h-8 w-8" /> Refactorizar Proyecto
           </CardTitle>
           <CardDescription>
-            Sube o vincula tu proyecto y obtén sugerencias de refactorización potenciadas por IA.
+            Sube tu proyecto (ZIP, JSON o archivo de texto) y obtén sugerencias de refactorización potenciadas por IA.
              {!resolvedLlmOptions && watchedConfigSource && !isWorkgroupSelected ? (
                 <span className="text-destructive block mt-1"> (Configuración para '{getSourceName(watchedConfigSource)}' incompleta)</span>
              ) : resolvedLlmOptions || isWorkgroupSelected ? (
@@ -340,7 +340,7 @@ export default function RefactorProjectPage() {
              )}
           </CardDescription>
         </CardHeader>
-        
+
         <form onSubmit={fileForm.handleSubmit(handleAnalyzeRefactor)}>
           <CardContent className="space-y-6">
             <div className="space-y-2">
@@ -354,7 +354,7 @@ export default function RefactorProjectPage() {
                       <SelectValue placeholder="Seleccionar fuente (Agente Refactorizador o Grupo)" />
                     </SelectTrigger>
                     <SelectContent>
-                      <ScrollArea className="h-[--radix-select-content-available-height] max-h-60"> {/* Added ScrollArea */}
+                      <ScrollArea className="h-[--radix-select-content-available-height] max-h-60">
                         <SelectItem value="global">Agente {REFACTOR_AGENT_NAME} (Config. Global)</SelectItem>
                         {workgroups.filter(wg => wg.agentIds.some(agentId => agents.find(a => a.id === agentId)?.name === REFACTOR_AGENT_NAME)).map(wg => (
                           <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>
@@ -376,28 +376,12 @@ export default function RefactorProjectPage() {
                 )}
             </div>
 
-            <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "upload" | "git")} className="w-full">
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="upload" className="gap-2"><UploadCloud className="h-5 w-5" /> Subir Archivo (ZIP/JSON/Texto)</TabsTrigger>
-                <TabsTrigger value="git" className="gap-2"><GitFork className="h-5 w-5" /> Desde Repositorio Git</TabsTrigger>
-              </TabsList>
-              <TabsContent value="upload" className="mt-6">
-                <div className="space-y-2">
-                  <Label htmlFor="project-file" className="text-base">Archivo del Proyecto (.zip, .json, .txt, .py, etc.)</Label>
-                  <Input id="project-file" type="file" accept=".zip,.json,application/zip,application/json,text/*,.py,.js,.ts,.java,.cs,.rb,.go,.php,.html,.css,.md" onChange={handleFileChange} className="text-base file:text-base" />
-                  {fileForm.watch('projectFile') && <p className="text-sm text-muted-foreground">Seleccionado: {fileForm.watch('projectFile.name')}</p>}
-                  {fileForm.formState.errors.projectFile && <p className="text-sm text-destructive mt-1">{fileForm.formState.errors.projectFile.message as string}</p>}
-                </div>
-              </TabsContent>
-              <TabsContent value="git" className="mt-6">
-                <div className="space-y-2">
-                  <Label htmlFor="git-url" className="text-base">URL del Repositorio Git</Label>
-                  <Input id="git-url" type="url" placeholder="https://github.com/usuario/repo.git" {...fileForm.register('gitUrl')} className="text-base" />
-                  {fileForm.formState.errors.gitUrl && <p className="text-sm text-destructive mt-1">{fileForm.formState.errors.gitUrl.message}</p>}
-                   <p className="text-xs text-muted-foreground">Funcionalidad de Git aún en desarrollo. Actualmente simulada para la extracción de contenido.</p>
-                </div>
-              </TabsContent>
-            </Tabs>
+            <div className="space-y-2">
+              <Label htmlFor="project-file" className="text-base flex items-center gap-1"><UploadCloud className="h-5 w-5" /> Archivo del Proyecto (.zip, .json, .txt, .py, etc.)</Label>
+              <Input id="project-file" type="file" accept=".zip,.json,application/zip,application/json,text/*,.py,.js,.ts,.java,.cs,.rb,.go,.php,.html,.css,.md" onChange={handleFileChange} className="text-base file:text-base" />
+              {fileForm.watch('projectFile') && <p className="text-sm text-muted-foreground">Seleccionado: {fileForm.watch('projectFile.name')}</p>}
+              {fileForm.formState.errors.projectFile && <p className="text-sm text-destructive mt-1">{fileForm.formState.errors.projectFile.message as string}</p>}
+            </div>
 
             <Card className="bg-muted/30 p-4 border border-border">
               <CardTitle className="text-md mb-2 text-foreground">Parámetros de Refactorización</CardTitle>
@@ -544,4 +528,3 @@ export default function RefactorProjectPage() {
     </div>
   );
 }
-

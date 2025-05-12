@@ -6,9 +6,9 @@ CodeAlchemist es una plataforma de desarrollo asistido por inteligencia artifici
 
 *   **Generación de Código**: Crea fragmentos de código a partir de descripciones en lenguaje natural.
 *   **Generación de Proyectos**: Define una estructura base para nuevos proyectos según tus especificaciones.
-*   **Refactorizar Proyecto**: Sube un proyecto (ZIP, JSON, archivo de texto) o proporciona una URL de Git (simulada) para obtener sugerencias de refactorización generadas por la IA. Utiliza un agente "RefactorizadorCodigoExperto" o un grupo de trabajo que lo incluya. Permite especificar metas y prioridades de refactorización.
+*   **Refactorizar Proyecto**: Sube un proyecto (ZIP, JSON, archivo de texto) para obtener sugerencias de refactorización generadas por la IA. Utiliza un agente "RefactorizadorCodigoExperto" o un grupo de trabajo que lo incluya. Permite especificar metas y prioridades de refactorización. (La carga desde URL de Git está en desarrollo).
 *   **Análisis de Código Inteligente**: Pega fragmentos de código o sube archivos para recibir análisis detallados y sugerencias de mejora generadas por IA.
-*   **Análisis de Proyecto Completo**: Sube un proyecto en formato ZIP/JSON o proporciona una URL de Git para un análisis holístico (funcionalidad Git actualmente simulada).
+*   **Análisis de Proyecto Completo**: Sube un proyecto en formato ZIP o JSON para un análisis holístico. (La carga desde URL de Git está en desarrollo).
 *   **AutoUpdate (Análisis del Propio Código)**: Permite que CodeAlchemist analice su propio código fuente (obtenido al momento). Ofrece sugerencias, permite aplicarlas directamente (modificando los archivos), descargar el código fuente completo en ZIP o JSON, o subirlo a un repositorio Git. Las comunicaciones con la IA están optimizadas para manejar grandes cantidades de código mediante fragmentación y timeouts.
 *   **Versiones Guardadas (Snapshots)**: Guarda diferentes versiones de tu código (original y sugerido) para una fácil revisión, comparación y seguimiento. Incluye la opción de guardar el estado actual completo del código fuente de CodeAlchemist.
 *   **Chat con IA**: Interactúa con un asistente IA para obtener ayuda, resolver dudas o generar ideas.
@@ -127,9 +127,8 @@ Crea una estructura base para un nuevo proyecto.
 Obtén sugerencias de refactorización para un proyecto completo.
 
 *   **Usar Configuración LLM De**: Selecciona la fuente de configuración (Global, Agente especializado como "RefactorizadorCodigoExperto", o un Grupo que incluya al Refactorizador y al Orquestador).
-*   **Pestañas para Fuente del Proyecto**:
-    *   **Subir Archivo**: Sube un archivo `.zip`, `.json` o de texto plano (ej: `.py`, `.js`) que contenga el código del proyecto.
-    *   **Desde Repositorio Git**: Ingresa la URL de un repositorio Git (esta función para obtener el código de Git es actualmente simulada; se espera que el usuario suba el código).
+*   **Fuente del Proyecto**:
+    *   **Subir Archivo**: Sube un archivo `.zip`, `.json` o de texto plano (ej: `.py`, `.js`) que contenga el código del proyecto. (La carga desde URL de Git está en desarrollo).
 *   **Parámetros de Refactorización**:
     *   **Metas (opcional)**: Describe los objetivos específicos de la refactorización (ej. "Mejorar el rendimiento de los componentes de UI", "Simplificar la lógica de negocio en los servicios").
     *   **Prioridad General (opcional)**: Selecciona un enfoque general para las sugerencias (ej. "Priorizar Seguridad", "Priorizar Legibilidad").
@@ -160,12 +159,12 @@ Obtén análisis y sugerencias para fragmentos o archivos individuales.
 
 ### 7. Analizar Proyecto Completo (Sección "Analizar Proyecto")
 
-Analiza proyectos enteros.
+Analiza proyectos enteros subiendo un archivo.
 
 *   **Usar Configuración LLM De**: Selecciona la fuente de configuración LLM.
-*   **Pestañas**: "Subir Archivo (ZIP/JSON)" o "Desde Repositorio Git".
+*   **Subir Archivo (ZIP/JSON)**: Selecciona el archivo de tu proyecto. (La carga desde URL de Git está en desarrollo).
 *   Haz clic en **"Analizar Proyecto"**.
-*   *Nota: El análisis de Git es simulado. El análisis de ZIP/JSON proveerá resultados basados en la capacidad actual del modelo.*
+*   *Nota: El análisis proveerá resultados basados en la capacidad actual del modelo y el contenido del archivo subido.*
 
 ### 8. AutoUpdate (Sección "AutoUpdate")
 
@@ -213,7 +212,7 @@ Crea y administra agentes IA personalizados.
 *   **Agente Orquestador (Obligatorio para Grupos)**: Un agente llamado `OrquestadorFlujoAgentes` es crucial. Si no existe, créalo con la siguiente configuración (o similar):
     *   **Nombre**: `OrquestadorFlujoAgentes`
     *   **Descripción**: "Agente central obligatorio en cada Grupo de Trabajo. Gestiona el flujo de interacciones, recibe todas las respuestas y decide qué agente actúa a continuación para garantizar un proceso coordinado y la toma de decisiones centralizada."
-    *   **Mensaje de Sistema**: "Eres el Orquestador del Grupo de Trabajo. Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti. Tu objetivo es asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realizas la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso. Si el usuario no propone un paso, prioriza agentes con capacidades relevantes para la tarea actual (ej. 'RefactorizadorCodigoExperto' para mejoras de código). Tu respuesta DEBE SER EXCLUSIVAMENTE un objeto JSON válido con las claves 'next_agent_name' (string, el nombre EXACTO de un agente disponible o 'COMPLETADO') y 'reason' (string, justificación concisa). No incluyas NADA más."
+    *   **Mensaje de Sistema**: "Eres el Orquestador del Grupo de Trabajo. Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti para asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realizas la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso. Si el usuario no propone un paso, prioriza agentes con capacidades relevantes para la tarea actual (ej. 'RefactorizadorCodigoExperto' para mejoras de código). Tu respuesta DEBE SER EXCLUSIVAMENTE un objeto JSON válido con las claves 'next_agent_name' (string, el nombre EXACTO de un agente disponible o 'COMPLETADO') y 'reason' (string, justificación concisa). No incluyas NADA más."
     *   **Configuración LLM**: Puede ser 'default' o personalizada.
 *   **Acciones por Agente**: Probar (chat modal), Exportar (JSON), Editar, Eliminar.
 
@@ -289,7 +288,7 @@ En la mayoría de las secciones que interactúan con un LLM, encontrarás el sel
     *   Capacidades de Agente (ejecución, lectura/escritura) son peligrosas. Habilita solo en entornos seguros.
 *   **Costes de API**: El uso de APIs LLM puede incurrir en costes.
 *   **Privacidad**: El código se procesa en servidores del proveedor LLM (o localmente). Revisa sus políticas.
-*   **Estado de Funcionalidades**: Algunas funciones (análisis detallado de Git, aplicación automática de sugerencias de grupo) pueden ser simuladas o estar en desarrollo.
+*   **Estado de Funcionalidades**: Algunas funciones (ej. aplicación automática de sugerencias de grupo, carga desde URL de Git para análisis) pueden estar en desarrollo o ser simuladas.
 
 ## Pruebas Unitarias (Conceptual)
 

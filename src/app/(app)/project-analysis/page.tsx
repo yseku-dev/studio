@@ -1,15 +1,14 @@
-
+// src/app/(app)/project-analysis/page.tsx
 'use client';
 
 import { useState, useEffect, useCallback, ChangeEvent, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { FolderSearch, UploadCloud, GitFork, Loader2, Settings2, ListOrdered, Trash2, Expand, Minimize, Bug } from "lucide-react"; // Added icons
+import { FolderSearch, UploadCloud, Loader2, Settings2, ListOrdered, Trash2, Expand, Minimize, Bug } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
-import { ScrollArea } from '@/components/ui/scroll-area'; // Added ScrollArea
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Select,
   SelectContent,
@@ -21,24 +20,23 @@ import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
 import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config';
-// TODO: import { handleAnalyzeProjectViaWorkgroup } from './actions';
-import { useDebug } from '@/contexts/DebugContext'; // Added useDebug
+// TODO: import { handleAnalyzeProjectViaWorkgroup } from './actions'; // This action would need to be created/adapted
+import { useDebug } from '@/contexts/DebugContext';
 import { LLM_PROVIDERS, LOCALSTORAGE_PROVIDER_ID_KEY, getLocalStorageApiKeyName, getLocalStorageModelName, type LLMProviderId } from '@/config/llm-config';
+import { cn } from '@/lib/utils';
 
 
 type AnalysisStatus = "idle" | "loading" | "success" | "error";
 
 export default function ProjectAnalysisPage() {
-  const [activeTab, setActiveTab] = useState<"upload" | "git">("upload");
   const [projectFile, setProjectFile] = useState<File | null>(null);
-  const [gitUrl, setGitUrl] = useState<string>("");
   const [analysisStatus, setAnalysisStatus] = useState<AnalysisStatus>("idle");
   const [analysisResult, setAnalysisResult] = useState<string | null>(null); // Keep as string for simulated result
-  const [detailedLogs, setDetailedLogs] = useState<string[]>([]); // Added for logs
-  const [logsExpanded, setLogsExpanded] = useState(false); // Added for log expansion
+  const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
+  const [logsExpanded, setLogsExpanded] = useState(false);
   const { toast } = useToast();
-  const { addDebugLog } = useDebug(); // Added addDebugLog
-  const isMountedRef = useRef(false); // Added isMountedRef
+  const { addDebugLog } = useDebug();
+  const isMountedRef = useRef(false);
 
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
@@ -60,8 +58,7 @@ export default function ProjectAnalysisPage() {
         isMountedRef.current = false;
         addDebugLog({ source: 'PROJECT_ANALYSIS_PAGE', type: 'INFO', message: 'Componente ProjectAnalysisPage desmontado.' });
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [addDebugLog]);
 
   useEffect(() => {
     const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups, {
@@ -133,8 +130,8 @@ export default function ProjectAnalysisPage() {
   };
 
   const handleAnalyzeProject = async () => {
-     setDetailedLogs([]); // Clear previous logs
-     addDebugLog({source: 'PROJECT_ANALYSIS_PAGE', type: 'INFO', message: `Iniciando análisis de proyecto. Fuente: ${activeTab}, Config: ${getSourceName(selectedConfigSource)}`});
+     setDetailedLogs([]);
+     addDebugLog({source: 'PROJECT_ANALYSIS_PAGE', type: 'INFO', message: `Iniciando análisis de proyecto. Config: ${getSourceName(selectedConfigSource)}`});
      if (selectedConfigSource.startsWith('workgroup:')) {
         const workgroupId = selectedConfigSource.split(':')[1];
         if (!workgroups.find(wg => wg.id === workgroupId)) {
@@ -150,40 +147,35 @@ export default function ProjectAnalysisPage() {
         setAnalysisStatus("success");
         return;
      }
-     
+
      if (!resolvedLlmOptions) {
         toast({
             title: "Configuración LLM Incompleta",
             description: `Configuración para '${getSourceName(selectedConfigSource)}' incompleta.`,
             variant: "destructive", duration: 7000,
-        }); 
+        });
         addDebugLog({source: 'PROJECT_ANALYSIS_PAGE', type: 'ERROR', message: `Configuración LLM incompleta para ${selectedConfigSource}.`});
         return;
      }
-    if (activeTab === "upload" && !projectFile) { toast({ title: "Archivo Faltante", description: "Selecciona ZIP/JSON.", variant: "destructive" }); addDebugLog({source: 'PROJECT_ANALYSIS_PAGE', type: 'WARN', message: `Intento de análisis sin archivo (pestaña Subir).`}); return; }
-    if (activeTab === "git" && !gitUrl) { toast({ title: "URL Faltante", description: "Ingresa URL Git.", variant: "destructive" }); addDebugLog({source: 'PROJECT_ANALYSIS_PAGE', type: 'WARN', message: `Intento de análisis sin URL Git (pestaña Git).`}); return; }
+    if (!projectFile) { toast({ title: "Archivo Faltante", description: "Selecciona un archivo ZIP o JSON.", variant: "destructive" }); addDebugLog({source: 'PROJECT_ANALYSIS_PAGE', type: 'WARN', message: `Intento de análisis sin archivo.`}); return; }
 
     setAnalysisStatus("loading"); setAnalysisResult(null);
     addDebugLog({source: 'PROJECT_ANALYSIS_PAGE', type: 'DEBUG', message: 'Simulando análisis con opciones LLM directas.', data: resolvedLlmOptions});
     await new Promise(resolve => setTimeout(resolve, 2000));
 
-    if (activeTab === "upload" && projectFile) {
+    if (projectFile) {
       setAnalysisResult(`Análisis simulado para ${projectFile.name} (usando ${resolvedLlmOptions.modelName})...`);
       addServerLogsToDebugAndPage([`[${new Date().toISOString()}] [INFO] Análisis simulado completado para archivo ${projectFile.name}.`]);
-    } else if (activeTab === "git") {
-      setAnalysisResult(`Análisis simulado para ${gitUrl} (usando ${resolvedLlmOptions.modelName})...`);
-      addServerLogsToDebugAndPage([`[${new Date().toISOString()}] [INFO] Análisis simulado completado para URL Git ${gitUrl}.`]);
     }
     setAnalysisStatus("success");
-    toast({ title: "Análisis Iniciado (Simulado)", description: `Análisis para ${activeTab === "upload" ? projectFile?.name : gitUrl} con '${getSourceName(selectedConfigSource)}'.` });
+    toast({ title: "Análisis Iniciado (Simulado)", description: `Análisis para ${projectFile?.name} con '${getSourceName(selectedConfigSource)}'.` });
   };
-  
+
   const isWorkgroupSelected = selectedConfigSource.startsWith('workgroup:');
-  const canSubmit = analysisStatus === "loading" || 
-                    (!resolvedLlmOptions && !isWorkgroupSelected) || 
+  const canSubmit = analysisStatus === "loading" ||
+                    (!resolvedLlmOptions && !isWorkgroupSelected) ||
                     (isWorkgroupSelected && workgroups.length === 0 && !workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1])) ||
-                    (activeTab === "upload" && !projectFile) || 
-                    (activeTab === "git" && !gitUrl);
+                    !projectFile;
 
 
   return (
@@ -192,7 +184,7 @@ export default function ProjectAnalysisPage() {
         <CardHeader>
           <CardTitle className="text-3xl font-bold text-primary flex items-center gap-2"><FolderSearch className="h-8 w-8" /> Analizar Proyecto Completo</CardTitle>
           <CardDescription>
-            Sube ZIP/JSON o URL Git para análisis usando config LLM seleccionada.
+            Sube un archivo ZIP o JSON para un análisis holístico usando la configuración LLM seleccionada.
              {!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource ? (
                  <span className="text-destructive block mt-1"> (Configuración para '{getSourceName(selectedConfigSource)}' incompleta)</span>
              ) : resolvedLlmOptions && !isWorkgroupSelected ? (
@@ -210,7 +202,7 @@ export default function ProjectAnalysisPage() {
                 <Select onValueChange={setSelectedConfigSource} value={selectedConfigSource}>
                     <SelectTrigger id="configSourceProject" className="w-full md:w-1/2"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
                     <SelectContent>
-                        <ScrollArea className="h-[--radix-select-content-available-height] max-h-60"> {/* Added ScrollArea */}
+                        <ScrollArea className="h-[--radix-select-content-available-height] max-h-60">
                             <SelectItem value="global">Ajustes Globales</SelectItem>
                             {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
                             {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
@@ -224,25 +216,11 @@ export default function ProjectAnalysisPage() {
                     <p className="text-xs text-destructive mt-1">Grupo de trabajo '{getSourceName(selectedConfigSource)}' no encontrado o no disponible.</p>
                 )}
             </div>
-          <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as "upload" | "git")} className="w-full">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="upload" className="gap-2"><UploadCloud className="h-5 w-5" /> Subir Archivo (ZIP/JSON)</TabsTrigger>
-              <TabsTrigger value="git" className="gap-2"><GitFork className="h-5 w-5" /> Desde Repositorio Git</TabsTrigger>
-            </TabsList>
-            <TabsContent value="upload" className="mt-6">
-              <div className="space-y-2">
-                <Label htmlFor="project-file" className="text-base">Archivo del Proyecto (.zip o .json)</Label>
-                <Input id="project-file" type="file" accept=".zip,.json,application/zip,application/json" onChange={handleFileChange} className="text-base file:text-base" />
-                {projectFile && <p className="text-sm text-muted-foreground">Seleccionado: {projectFile.name}</p>}
-              </div>
-            </TabsContent>
-            <TabsContent value="git" className="mt-6">
-              <div className="space-y-2">
-                <Label htmlFor="git-url" className="text-base">URL del Repositorio Git</Label>
-                <Input id="git-url" type="url" placeholder="https://github.com/usuario/repo.git" value={gitUrl} onChange={(e) => setGitUrl(e.target.value)} className="text-base" />
-              </div>
-            </TabsContent>
-          </Tabs>
+            <div className="space-y-2">
+              <Label htmlFor="project-file" className="text-base flex items-center gap-1"><UploadCloud className="h-5 w-5" /> Archivo del Proyecto (.zip o .json)</Label>
+              <Input id="project-file" type="file" accept=".zip,.json,application/zip,application/json" onChange={handleFileChange} className="text-base file:text-base" />
+              {projectFile && <p className="text-sm text-muted-foreground">Seleccionado: {projectFile.name}</p>}
+            </div>
           <Button onClick={handleAnalyzeProject} disabled={canSubmit} className="w-full md:w-auto text-base py-3 px-6">
             {analysisStatus === "loading" ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <FolderSearch className="mr-2 h-5 w-5" />} Analizar Proyecto
           </Button>
@@ -279,7 +257,7 @@ export default function ProjectAnalysisPage() {
                   </div>
               </CardHeader>
               <CardContent>
-                  <ScrollArea className={`p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out ${logsExpanded ? "h-[300px]" : "h-[100px]"}`}>
+                  <ScrollArea className={cn("p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out", logsExpanded ? "h-[300px]" : "h-[100px]")}>
                       <pre className="text-xs text-foreground whitespace-pre-wrap">
                           {detailedLogs.map((log, index) => (
                               <span key={`log-${index}`} className={log.includes("[ERROR") || log.includes("Error:") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-500" : ""}>{log}\n</span>
@@ -292,4 +270,3 @@ export default function ProjectAnalysisPage() {
     </div>
   );
 }
-
