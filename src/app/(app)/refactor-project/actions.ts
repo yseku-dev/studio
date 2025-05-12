@@ -5,7 +5,7 @@ import type { LLMOptions, ChatMessage } from '@/services/groq';
 // Assuming a generic service function similar to others for project-wide analysis
 import { analyzeProjectSourceChunk } from '@/services/groq'; 
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
-import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
+import type { AgentConfig, WorkgroupConfig, AgentLLMConfig } from '@/types/agent';
 import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
 import { ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS, REFACTOR_AGENT_NAME } from '@/config/agent-config';
 import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
@@ -59,8 +59,21 @@ export async function handleGetRefactoringSuggestions(
 ): Promise<HandleGetRefactoringSuggestionsResult> {
   const serverLogs: string[] = [];
   const log = (type: 'INFO' | 'ERROR' | 'DEBUG', message: string, data?: any) => {
-    const logMsg = `[RefactorProj-${type}] ${message}${data ? ' | Data: ' + JSON.stringify(data).substring(0, 300) : ''}`;
-    console.log(logMsg);
+    const timestamp = new Date().toISOString();
+    let dataStringForLogMessage = '';
+    if (data !== undefined) {
+        try {
+            const dataPreview = (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean' || data === null)
+                ? String(data)
+                : JSON.stringify(data);
+            dataStringForLogMessage = ` | Data: ${dataPreview.substring(0, 300)}${dataPreview.length > 300 ? '...' : ''}`;
+        } catch (e) {
+            dataStringForLogMessage = ' | Data: [Contenido no serializable para vista previa del log]';
+            console.warn(`[REFACTOR_LOG_SERIALIZATION_ERROR][${timestamp}] Failed to stringify data for log type ${type}, message: ${message}`, e);
+        }
+    }
+    const logMsg = `[${timestamp}] [RefactorProj-${type}] ${message}${dataStringForLogMessage}`;
+    console.log(`[${timestamp}] [RefactorProj-${type}] ${message}`, data); // Log original data to server console for full inspection
     serverLogs.push(logMsg);
   };
 
@@ -96,47 +109,42 @@ export async function handleGetRefactoringSuggestions(
   let workgroupForAnalysis: WorkgroupConfig | undefined;
   let orchestratorAgentConfig: AgentConfig | undefined;
 
+  const agentsForLookup = payload.agents || [];
+  const workgroupsForLookup = payload.workgroups || [];
+
   if (payload.configSource.startsWith('workgroup:')) {
     const workgroupId = payload.configSource.split(':')[1];
-    workgroupForAnalysis = payload.workgroups?.find(wg => wg.id === workgroupId);
+    workgroupForAnalysis = workgroupsForLookup.find(wg => wg.id === workgroupId);
     if (!workgroupForAnalysis) {
       log('ERROR', `Grupo de trabajo con ID ${workgroupId} no encontrado.`);
       return { success: false, error: `Grupo de trabajo '${workgroupId}' no encontrado.`, workgroupLogs: serverLogs };
     }
-    // Ensure the orchestrator is part of this workgroup
     const orchestratorIdInGroup = workgroupForAnalysis.agentIds.find(agentId => {
-        const agent = payload.agents?.find(a => a.id === agentId);
+        const agent = agentsForLookup.find(a => a.id === agentId);
         return agent?.name === ORCHESTRATOR_AGENT_NAME;
     });
-    orchestratorAgentConfig = payload.agents?.find(a => a.id === orchestratorIdInGroup);
+    orchestratorAgentConfig = agentsForLookup.find(a => a.id === orchestratorIdInGroup);
     
     if (!orchestratorAgentConfig) {
       log('ERROR', `Agente Orquestador no encontrado en el grupo '${workgroupForAnalysis.name}'.`);
       return { success: false, error: `Agente Orquestador no encontrado en el grupo '${workgroupForAnalysis.name}'.`, workgroupLogs: serverLogs };
     }
-     // For workgroups, LLM options are resolved internally during the turn.
-     // We don't set llmOptionsToUse here for workgroups.
   } else {
     // Direct call (global or specific agent)
     if (payload.llmOptions) {
         llmOptionsToUse = payload.llmOptions;
         log('INFO', `Usando opciones LLM pasadas directamente: ${llmOptionsToUse.providerId} - ${llmOptionsToUse.modelName}`);
     } else {
-        // This case should ideally not happen if client resolves correctly before calling
-        log('ERROR', `Opciones LLM no proporcionadas para llamada directa (configSource: ${payload.configSource}). Reintentando resolución en servidor (puede fallar si localStorage no está disponible).`);
-        if (payload.localStorageSnapshot) {
-            llmOptionsToUse = resolveLlmOptionsForSource(payload.configSource, payload.agents || [], payload.workgroups || [], payload.localStorageSnapshot);
-        }
+        log('ERROR', `Opciones LLM no proporcionadas para llamada directa (configSource: ${payload.configSource}). Intentando resolución en servidor.`);
+        llmOptionsToUse = resolveLlmOptionsForSource(payload.configSource, agentsForLookup, workgroupsForLookup, payload.localStorageSnapshot);
     }
   }
 
-  // This validation ensures that for direct calls, we have options, and for workgroups, we have a valid workgroup setup.
   if (!llmOptionsToUse && !workgroupForAnalysis) {
     log('ERROR', `Configuración LLM para '${payload.configSource}' no pudo ser resuelta o proporcionada, y no es un grupo de trabajo válido.`);
     return { success: false, error: `Configuración LLM para '${payload.configSource}' no pudo ser resuelta o proporcionada.`, workgroupLogs: serverLogs };
   }
 
-  // --- Construct Prompt / Task ---
   const refactoringGoals = payload.goals ? `Metas de refactorización: "${payload.goals}".` : "Metas de refactorización generales: mejorar claridad, eficiencia y mantenibilidad.";
   const refactoringPriority = payload.priority ? `Prioridad general: "${payload.priority}".` : "";
 
@@ -149,31 +157,35 @@ Tu respuesta DEBE ser un objeto JSON con la clave "refactoringSuggestions", que 
 - "suggestedSnippet": (string, opcional) Un fragmento de código que ilustra el cambio.
 No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
 
-  // Task for the workgroup's Orchestrator
   const taskForWorkgroup = `Analizar el siguiente proyecto para refactorización. ${refactoringGoals} ${refactoringPriority}
 El proyecto es (contenido textual):
 ${projectContent.substring(0, 15000)} ${projectContent.length > 15000 ? "\n... (contenido truncado para el prompt)" : ""}
 La respuesta final de un agente especialista en refactorización (probablemente ${REFACTOR_AGENT_NAME}) DEBE ser un objeto JSON con la clave "refactoringSuggestions" como se describe en el prompt del sistema del ${REFACTOR_AGENT_NAME}.
 El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tarea y el código para analizar.`;
 
-
-  // --- Call LLM (Directly or via Workgroup) ---
   try {
-    if (workgroupForAnalysis && orchestratorAgentConfig && payload.agents && payload.localStorageSnapshot) {
+    if (workgroupForAnalysis && orchestratorAgentConfig && payload.localStorageSnapshot) {
       log('INFO', `Usando grupo de trabajo "${workgroupForAnalysis.name}" para refactorización.`);
       
-      const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestratorAgentConfig.id}`, payload.agents, payload.workgroups || [], payload.localStorageSnapshot);
+      const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestratorAgentConfig.id}`, agentsForLookup, workgroupsForLookup, payload.localStorageSnapshot);
       if (!orchestratorLlmOptions) {
         log('ERROR', `Configuración LLM inválida para Orquestador (${orchestratorAgentConfig.name}) en grupo ${workgroupForAnalysis.name}.`);
         throw new Error(`Configuración LLM inválida para Orquestador en grupo '${workgroupForAnalysis.name}'.`);
       }
+      
+      // Override with specific options from AgentTurnConfig if available (though orchestratorAgentConfig is AgentConfig here)
+      orchestratorLlmOptions.providerId = (orchestratorAgentConfig.llmConfig !== 'default' ? orchestratorAgentConfig.llmConfig.providerId : orchestratorLlmOptions.providerId);
+      orchestratorLlmOptions.modelName = (orchestratorAgentConfig.llmConfig !== 'default' ? orchestratorAgentConfig.llmConfig.modelName : orchestratorLlmOptions.modelName);
+      orchestratorLlmOptions.apiKey = (orchestratorAgentConfig.llmConfig !== 'default' ? orchestratorAgentConfig.llmConfig.apiKey : orchestratorLlmOptions.apiKey) || '';
+      orchestratorLlmOptions.apiUrl = (orchestratorAgentConfig.llmConfig !== 'default' ? orchestratorAgentConfig.llmConfig.apiUrl : orchestratorLlmOptions.apiUrl);
+
 
       const participantAgentConfigs = workgroupForAnalysis.agentIds
         .filter(id => id !== orchestratorAgentConfig!.id)
-        .map(id => payload.agents!.find(a => a.id === id))
+        .map(id => agentsForLookup.find(a => a.id === id))
         .filter(agent => agent !== undefined)
         .reduce((acc, agent) => {
-          const options = resolveLlmOptionsForSource(`agent:${agent!.id}`, payload.agents!, payload.workgroups || [], payload.localStorageSnapshot!);
+          const options = resolveLlmOptionsForSource(`agent:${agent!.id}`, agentsForLookup, workgroupsForLookup, payload.localStorageSnapshot!);
           if (options) {
             acc[agent!.id] = {
               id: agent!.id, name: agent!.name, systemMessage: agent!.systemMessage,
@@ -229,7 +241,7 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
       let systemPromptToUse = systemPromptForDirectCallOrRefactorAgent;
       if (payload.configSource.startsWith('agent:')) {
         const agentId = payload.configSource.split(':')[1];
-        const refactorAgent = payload.agents?.find(a => a.id === agentId && a.name === REFACTOR_AGENT_NAME);
+        const refactorAgent = agentsForLookup.find(a => a.id === agentId && a.name === REFACTOR_AGENT_NAME);
         if (refactorAgent) {
             log('INFO', `Utilizando mensaje de sistema del agente ${REFACTOR_AGENT_NAME} para la llamada directa.`);
             systemPromptToUse = `${refactorAgent.systemMessage}\n${refactoringGoals} ${refactoringPriority}\nTu respuesta DEBE seguir el formato JSON con "refactoringSuggestions" como se te indicó.`;
@@ -306,3 +318,4 @@ export async function handleApplyRefactoringSuggestion(
   // For now, it's just a placeholder.
   return { success: true, updatedFileContent: "// Contenido del archivo actualizado (simulado)" };
 }
+

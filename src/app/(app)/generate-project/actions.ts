@@ -1,11 +1,11 @@
-
+// src/app/(app)/generate-project/actions.ts
 'use server';
 
 import type { LLMOptions } from '@/services/groq';
 import { generateProjectStructureFromPrompt as callLLMToGenerateProject } from '@/services/groq'; // Renamed import
 import { type GeneratedProjectResponse as GeneratedProjectLLMResponse, type ProjectFile } from '@/services/groq'; // Use generic type from service
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
-import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
+import type { AgentConfig, WorkgroupConfig, AgentLLMConfig } from '@/types/agent';
 import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
 import { ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS } from '@/config/agent-config';
 import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
@@ -86,8 +86,21 @@ export async function initiateWorkgroupProjectGeneration(
 ): Promise<HandleGenerateProjectResult> {
   const serverLogs: string[] = [];
   const log = (type: 'INFO' | 'ERROR' | 'DEBUG', message: string, data?: any) => {
-    const logMsg = `[WG_GenProj-${type}] ${message}${data ? ' | Data: ' + JSON.stringify(data) : ''}`;
-    console.log(logMsg);
+    const timestamp = new Date().toISOString();
+    let dataStringForLogMessage = '';
+    if (data !== undefined) {
+        try {
+            const dataPreview = (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean' || data === null)
+                ? String(data)
+                : JSON.stringify(data);
+            dataStringForLogMessage = ` | Data: ${dataPreview.substring(0, 300)}${dataPreview.length > 300 ? '...' : ''}`;
+        } catch (e) {
+            dataStringForLogMessage = ' | Data: [Contenido no serializable para vista previa del log]';
+            console.warn(`[GENPROJ_WG_LOG_SERIALIZATION_ERROR][${timestamp}] Failed to stringify data for log type ${type}, message: ${message}`, e);
+        }
+    }
+    const logMsg = `[${timestamp}] [WG_GenProj-${type}] ${message}${dataStringForLogMessage}`;
+    console.log(`[${timestamp}] [WG_GenProj-${type}] ${message}`, data);
     serverLogs.push(logMsg);
   };
 
@@ -110,6 +123,12 @@ export async function initiateWorkgroupProjectGeneration(
     log('ERROR', `Configuración LLM inválida para Orquestador (${orchestrator.name}) en grupo ${workgroup.name}.`);
     return { success: false, error: `Configuración LLM inválida para Orquestador.`, workgroupLogs: serverLogs };
   }
+    // Override with specific options from AgentConfig if they differ
+    orchestratorLlmOptions.providerId = (orchestrator.llmConfig !== 'default' ? orchestrator.llmConfig.providerId : orchestratorLlmOptions.providerId);
+    orchestratorLlmOptions.modelName = (orchestrator.llmConfig !== 'default' ? orchestrator.llmConfig.modelName : orchestratorLlmOptions.modelName);
+    orchestratorLlmOptions.apiKey = (orchestrator.llmConfig !== 'default' ? orchestrator.llmConfig.apiKey : orchestratorLlmOptions.apiKey) || '';
+    orchestratorLlmOptions.apiUrl = (orchestrator.llmConfig !== 'default' ? orchestrator.llmConfig.apiUrl : orchestratorLlmOptions.apiUrl);
+
 
   const participantAgentConfigs = workgroup.agentIds
     .filter(id => id !== orchestrator.id)
@@ -197,3 +216,4 @@ export async function initiateWorkgroupProjectGeneration(
     return { success: false, error: detailMessage, workgroupLogs: serverLogs };
   }
 }
+

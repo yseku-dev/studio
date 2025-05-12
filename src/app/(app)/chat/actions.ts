@@ -1,11 +1,10 @@
-
 // src/app/(app)/chat/actions.ts
 'use server';
 
 import type { LLMOptions, ChatMessage, ChatLLMPayload, ChatLLMResponse as ChatResponse } from '@/services/groq';
 import { chatWithLLM } from '@/services/groq'; 
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
-import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
+import type { AgentConfig, WorkgroupConfig, AgentLLMConfig } from '@/types/agent';
 import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
 import { ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS } from '@/config/agent-config';
 import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
@@ -89,9 +88,22 @@ export async function initiateWorkgroupChat(
 ): Promise<ChatCompletionResponse> {
   const serverLogs: string[] = [];
   const log = (type: 'INFO' | 'ERROR' | 'DEBUG', message: string, data?: any) => {
-    const logMsg = `[WG_Chat-${type}] ${message}${data ? ' | Data: ' + JSON.stringify(data).substring(0, 300) : ''}`;
-    console.log(logMsg); // Log on server
-    serverLogs.push(logMsg); // Collect for client response
+    const timestamp = new Date().toISOString();
+    let dataStringForLogMessage = '';
+    if (data !== undefined) {
+        try {
+            const dataPreview = (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean' || data === null)
+                ? String(data)
+                : JSON.stringify(data);
+            dataStringForLogMessage = ` | Data: ${dataPreview.substring(0, 300)}${dataPreview.length > 300 ? '...' : ''}`;
+        } catch (e) {
+            dataStringForLogMessage = ' | Data: [Contenido no serializable para vista previa del log]';
+            console.warn(`[CHAT_WG_LOG_SERIALIZATION_ERROR][${timestamp}] Failed to stringify data for log type ${type}, message: ${message}`, e);
+        }
+    }
+    const logMsg = `[${timestamp}] [WG_Chat-${type}] ${message}${dataStringForLogMessage}`;
+    console.log(`[${timestamp}] [WG_Chat-${type}] ${message}`, data);
+    serverLogs.push(logMsg);
   };
 
   log('INFO', `Iniciando chat con grupo de trabajo ID: ${workgroupId}`);
@@ -113,6 +125,12 @@ export async function initiateWorkgroupChat(
     log('ERROR', `Configuración LLM inválida para Orquestador (${orchestrator.name}) en grupo ${workgroup.name}.`);
     return { success: false, error: `Configuración LLM inválida para Orquestador.`, workgroupLogs: serverLogs };
   }
+    // Override with specific options from AgentConfig if they differ
+    orchestratorLlmOptions.providerId = (orchestrator.llmConfig !== 'default' ? orchestrator.llmConfig.providerId : orchestratorLlmOptions.providerId);
+    orchestratorLlmOptions.modelName = (orchestrator.llmConfig !== 'default' ? orchestrator.llmConfig.modelName : orchestratorLlmOptions.modelName);
+    orchestratorLlmOptions.apiKey = (orchestrator.llmConfig !== 'default' ? orchestrator.llmConfig.apiKey : orchestratorLlmOptions.apiKey) || '';
+    orchestratorLlmOptions.apiUrl = (orchestrator.llmConfig !== 'default' ? orchestrator.llmConfig.apiUrl : orchestratorLlmOptions.apiUrl);
+
 
   const participantAgentConfigs = workgroup.agentIds
     .filter(id => id !== orchestrator.id)
@@ -212,4 +230,5 @@ Instrucción para ESTE TURNO (Orquestador): Basado en el último mensaje y el hi
     return { success: false, error: detailMessage, workgroupLogs: serverLogs };
   }
 }
+
 

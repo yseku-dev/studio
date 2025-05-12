@@ -59,17 +59,19 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
     const log = (type: 'INFO' | 'ERROR' | 'DEBUG', message: string, data?: any) => {
         const timestamp = new Date().toISOString();
         let dataStringForLogMessage = '';
-        if (data) {
+        if (data !== undefined) {
             try {
-                // Attempt to stringify and truncate. If it's already a string, just truncate.
-                const dataPreview = (typeof data === 'string') ? data : JSON.stringify(data);
-                dataStringForLogMessage = ` | Data: ${dataPreview.substring(0, 1500)}${dataPreview.length > 1500 ? '...' : ''}`;
-            } catch {
-                // Handle cases where data might not be stringifiable (e.g. circular refs, though less common with simple objects)
-                dataStringForLogMessage = ' | Data: [Unserializable para vista previa del log]';
+                const dataPreview = (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean' || data === null)
+                    ? String(data)
+                    : JSON.stringify(data);
+                dataStringForLogMessage = ` | Data: ${dataPreview.substring(0, 300)}${dataPreview.length > 300 ? '...' : ''}`;
+            } catch (e) {
+                dataStringForLogMessage = ' | Data: [Contenido no serializable para vista previa del log]';
+                console.warn(`[WORKGROUP_LOG_SERIALIZATION_ERROR][${timestamp}] Failed to stringify data for log type ${type}, message: ${message}`, e);
             }
         }
         const logMsg = `[${timestamp}] [WG-${type}] ${message}${dataStringForLogMessage}`;
+        // Log to server console with full data object for better debugging on server
         console.log(`[${timestamp}] [WG-${type}] ${message}`, data); 
         serverLogs.push(logMsg); 
     };
@@ -86,26 +88,58 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
         // === 1. Orchestrator Decides ===
         log('INFO', `Orchestrator (${payload.orchestrator.name}) deciding next step.`);
 
-        const orchestratorOptions: LLMOptions = {
-            providerId: payload.orchestrator.llmProviderId,
-            apiKey: payload.orchestrator.llmApiKey || '',
-            modelName: payload.orchestrator.llmModelName,
-            apiUrl: payload.orchestrator.llmApiUrl,
-            timeoutMs: ORCHESTRATOR_DECISION_TIMEOUT_MS
-        };
+        const agentsForLookup = Object.values(payload.participantAgentConfigs).map(pac => ({
+            id: pac.id,
+            name: pac.name,
+            description: '', // Not strictly needed for resolveLlmOptionsForSource if llmConfig is present
+            systemMessage: pac.systemMessage,
+            llmConfig: { // Reconstruct AgentLLMConfig for resolveLlmOptionsForSource
+                providerId: pac.llmProviderId,
+                modelName: pac.llmModelName,
+                apiKey: pac.llmApiKey,
+                apiUrl: pac.llmApiUrl
+            } as AgentLLMConfig, // Cast needed as it might be 'default' in original AgentConfig
+        }));
+        agentsForLookup.push({ // Add orchestrator to the list for its own lookup
+            id: payload.orchestrator.id,
+            name: payload.orchestrator.name,
+            description: '',
+            systemMessage: payload.orchestrator.systemMessage,
+            llmConfig: {
+                providerId: payload.orchestrator.llmProviderId,
+                modelName: payload.orchestrator.llmModelName,
+                apiKey: payload.orchestrator.llmApiKey,
+                apiUrl: payload.orchestrator.llmApiUrl
+            } as AgentLLMConfig,
+        });
         
-        if (!orchestratorOptions.providerId || !orchestratorOptions.modelName) {
-            log('ERROR', `Configuración LLM inválida para Orquestrador (${payload.orchestrator.name}): Falta providerId o modelName.`);
-            // Ensure currentHistory and serverLogs are serializable before returning
+        // Resolve orchestrator's LLM options using the snapshot and constructed agent list
+        const orchestratorLlmOptions = resolveLlmOptionsForSource(
+            `agent:${payload.orchestrator.id}`,
+            agentsForLookup, 
+            [], // workgroups not directly needed here as we use agent-specific configs from payload
+            payload.localStorageSnapshot
+        );
+
+        if (!orchestratorLlmOptions) {
+            log('ERROR', `Configuración LLM inválida para Orquestrador (${payload.orchestrator.name}): Falló la resolución.`);
             return {
-                error: `Configuración LLM inválida para Orquestrador (${payload.orchestrator.name})`,
-                isComplete: true, // Stop processing on client
+                error: `Configuración LLM inválida para Orquestrador (${payload.orchestrator.name}): Falló la resolución.`,
+                isComplete: true,
                 updatedHistory: currentHistory.map(m => ({...m, content: String(m.content || '')})),
                 serverLogs: serverLogs.map(s => String(s || '')),
                 orchestratorDecision: null,
                 agentResponse: null,
             };
         }
+        
+        // Override with potentially more specific options from AgentTurnConfig if they differ
+        orchestratorLlmOptions.providerId = payload.orchestrator.llmProviderId;
+        orchestratorLlmOptions.modelName = payload.orchestrator.llmModelName;
+        orchestratorLlmOptions.apiKey = payload.orchestrator.llmApiKey || orchestratorLlmOptions.apiKey;
+        orchestratorLlmOptions.apiUrl = payload.orchestrator.llmApiUrl || orchestratorLlmOptions.apiUrl;
+        orchestratorLlmOptions.timeoutMs = ORCHESTRATOR_DECISION_TIMEOUT_MS;
+
 
         const availableAgentNames = Object.values(payload.participantAgentConfigs).map(a => a.name).join(', ');
         
@@ -134,9 +168,9 @@ JSON:`;
 
         const orchestratorPayload: ChatLLMPayload = {
             messages: [{ role: 'system', content: orchestratorSystemPrompt }],
-            options: orchestratorOptions,
+            options: orchestratorLlmOptions,
         };
-        log('DEBUG', `Llamando a LLM del Orquestrador...`, { model: orchestratorOptions.modelName, promptStart: orchestratorSystemPrompt.substring(0,500) + "..." }); 
+        log('DEBUG', `Llamando a LLM del Orquestrador...`, { model: orchestratorLlmOptions.modelName, promptStart: orchestratorSystemPrompt.substring(0,500) + "..." }); 
 
         
         let decisionJson: { next_agent_name: string; reason: string } | null = null;
@@ -186,27 +220,35 @@ JSON:`;
                 };
 
                 log('INFO', `Agente seleccionado (${nextAgentConfigFromPayload.name}) preparando respuesta.`);
-                const agentOptions: LLMOptions = {
-                    providerId: nextAgentConfigFromPayload.llmProviderId,
-                    apiKey: nextAgentConfigFromPayload.llmApiKey || '',
-                    modelName: nextAgentConfigFromPayload.llmModelName,
-                    apiUrl: nextAgentConfigFromPayload.llmApiUrl,
-                    timeoutMs: AGENT_RESPONSE_TIMEOUT_MS
-                };
+                
+                const agentLlmOptions = resolveLlmOptionsForSource(
+                    `agent:${nextAgentConfigFromPayload.id}`,
+                    agentsForLookup,
+                    [],
+                    payload.localStorageSnapshot
+                );
 
-                if (!agentOptions.providerId || !agentOptions.modelName) {
-                     log('ERROR', `Configuración LLM inválida para agente ${nextAgentConfigFromPayload.name}: Falta providerId o modelName.`);
-                     throw new Error(`Configuración LLM inválida para agente ${nextAgentConfigFromPayload.name}`);
+                if (!agentLlmOptions) {
+                    log('ERROR', `Configuración LLM inválida para agente ${nextAgentConfigFromPayload.name}: Falló la resolución.`);
+                    throw new Error(`Configuración LLM inválida para agente ${nextAgentConfigFromPayload.name}`);
                 }
+                
+                // Override with specific options from AgentTurnConfig
+                agentLlmOptions.providerId = nextAgentConfigFromPayload.llmProviderId;
+                agentLlmOptions.modelName = nextAgentConfigFromPayload.llmModelName;
+                agentLlmOptions.apiKey = nextAgentConfigFromPayload.llmApiKey || agentLlmOptions.apiKey;
+                agentLlmOptions.apiUrl = nextAgentConfigFromPayload.llmApiUrl || agentLlmOptions.apiUrl;
+                agentLlmOptions.timeoutMs = AGENT_RESPONSE_TIMEOUT_MS;
+
 
                  const agentHistoryContext = formatHistoryForPrompt(currentHistory, 10);
                  const agentSystemPrompt = `${nextAgentConfigFromPayload.systemMessage}\n\nCONTEXTO:\nTarea Principal del Grupo: ${payload.task}\nHistorial de Conversación Reciente:\n${agentHistoryContext}\n\nTU TURNO (Turno ${payload.currentTurn}):\nEl Orquestrador te ha pasado el control porque: "${orchestratorDecision.reason}".\nConsidera el historial y la tarea. Realiza tu contribución o responde. Sé conciso y directo.`;
 
                 const agentPayload: ChatLLMPayload = {
                     messages: [{ role: 'system', content: agentSystemPrompt }],
-                    options: agentOptions,
+                    options: agentLlmOptions,
                 };
-                log('DEBUG', `Llamando a LLM del Agente (${nextAgentConfigFromPayload.name})...`, { model: agentOptions.modelName, promptStart: agentSystemPrompt.substring(0,500) + "..." });
+                log('DEBUG', `Llamando a LLM del Agente (${nextAgentConfigFromPayload.name})...`, { model: agentLlmOptions.modelName, promptStart: agentSystemPrompt.substring(0,500) + "..." });
 
                 const agentLLMResponse = await chatWithLLM(agentPayload);
                 const agentResponseContent = agentLLMResponse.content;
@@ -226,7 +268,7 @@ JSON:`;
             currentHistory.push({ role: 'system', content: `[Error procesando decisión del Orquestrador (Turno ${payload.currentTurn}): ${error.message}]` , name: payload.orchestrator.name});
             // This return is for the inner catch block
             return { 
-                error: `Error del Orquestrador (fallo al procesar respuesta): ${error.message}`, 
+                error: `Error del Orquestador (fallo al procesar respuesta): ${error.message}`, 
                 isComplete: true, // Stop processing on client
                 updatedHistory: currentHistory.map(m => ({...m, content: String(m.content || '')})), 
                 serverLogs: serverLogs.map(s => String(s || '')), 
@@ -306,4 +348,5 @@ function formatHistoryForPrompt(history: ChatMessage[], maxMessages: number = 6)
         return `  [${roleName}]: ${contentString.substring(0,1000)}${contentString.length > 1000 ? '...' : ''}`; 
     }).join('\n');
 }
+
 
