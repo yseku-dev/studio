@@ -1,3 +1,4 @@
+
 import {
   LLM_PROVIDERS,
   MODELS_BY_PROVIDER,
@@ -157,7 +158,7 @@ async function fetchWithRetry(
 }
 
 // Helper to construct API request based on provider type
-async function makeLLMRequest<TResponse>(
+export async function makeLLMRequest<TResponse>(
   options: LLMOptions,
   messages: ChatMessage[],
   expectedResponseFormat: "json_object" | "text",
@@ -539,3 +540,4 @@ export type GroqResponse = CodeSuggestionResponse;
 export type ProjectAnalysisGroqResponse = ProjectAnalysisResponse; 
 export type ChatGroqPayload = ChatLLMPayload; 
 export type ChatGroqResponse = ChatLLMResponse;
+
