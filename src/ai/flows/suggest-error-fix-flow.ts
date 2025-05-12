@@ -29,7 +29,7 @@ export type SuggestErrorFixInput = z.infer<typeof SuggestErrorFixInputSchema>;
 
 const SuggestErrorFixOutputSchema = z.object({
   root_cause_analysis: z.string().describe('Un análisis de la posible causa raíz del error.'),
-  solution_suggestions: z.string().describe('Una o más sugerencias detalladas para solucionar el error, incluyendo posibles cambios de código o configuración.'),
+  solution_suggestions: z.string().describe('Una o más sugerencias detalladas para solucionar el error, incluyendo posibles cambios de código o configuración. Si hay múltiples pasos, deben estar en este mismo string, separados por saltos de línea.'),
 });
 export type SuggestErrorFixOutput = z.infer<typeof SuggestErrorFixOutputSchema>;
 
@@ -52,7 +52,7 @@ Tu objetivo es identificar la causa raíz más probable y ofrecer sugerencias cl
 
 Responde ÚNICAMENTE en formato JSON válido con las siguientes claves:
 - "root_cause_analysis": (string) Un análisis detallado de la causa raíz más probable del error.
-- "solution_suggestions": (string) Una explicación paso a paso de cómo solucionar el error. Si implica cambios de código, sé específico sobre qué cambiar y por qué. Si implica configuraciones, detalla los pasos.
+- "solution_suggestions": (string) Una explicación paso a paso de cómo solucionar el error. Si implica cambios de código, sé específico sobre qué cambiar y por qué. Si implica configuraciones, detalla los pasos. **Si la solución implica múltiples pasos o sugerencias, inclúyelas todas en este ÚNICO string, separadas por saltos de línea (\`\\n\`). NO utilices un array de strings para este campo.**
 
 Considera que el error puede estar relacionado con límites de API, configuración incorrecta, problemas de código, dependencias, timeouts, etc.
 
@@ -72,7 +72,7 @@ Si el error menciona TIMEOUTS o que una solicitud "excedió el tiempo límite" (
       4.  **Modelo LLM Lento/Sobrecargado**: El modelo LLM específico utilizado está experimentando alta latencia o está sobrecargado.
   - **Sugerencias de Solución**:
       1.  **Aumentar Timeouts (Aplicación)**: Sugiere revisar y aumentar los valores de timeout configurados para las llamadas LLM en CodeAlchemist (ej. \`ORCHESTRATOR_DECISION_TIMEOUT_MS\`, \`AGENT_RESPONSE_TIMEOUT_MS\` en \`src/app/(app)/workgroups/actions.ts\`, o valores similares en \`services/groq.ts\`). Indicar dónde se podrían encontrar estas configuraciones.
-      2.  **Simplificar Prompt/Tarea del Orquestrador**: Si el error ocurre en el turno del Orquestrador, sugiere revisar el prompt del sistema del Orquestrador para simplificar la lógica de decisión o reducir la cantidad de información que debe procesar.
+      2.  **Simplificar Prompt/Tarea del Orquestrador**: Si el error ocurre en el turno del Orquestrador, sugiere revisar el prompt del sistema del Orquestrador para simplificar la lógica de decisión o reducir la cantidad de información que debe procesar. Especialmente si el payload de la tarea es muy grande (ej. código fuente completo), considera si el Orquestrador realmente necesita todo ese detalle o si puede trabajar con un resumen/referencia, dejando el detalle para el agente especialista.
       3.  **Reducir Tamaño del Payload**: Si el historial de conversación es muy extenso, sugiere estrategias para resumirlo o truncarlo antes de enviarlo al LLM.
       4.  **Reintentos con Backoff (Reforzar)**: Aunque CodeAlchemist puede tener reintentos, recuerda al usuario verificar que la lógica de reintentos en \`services/groq.ts\` (función \`fetchWithRetry\`) está activa y manejando adecuadamente los timeouts (aunque un timeout de aborto de cliente no siempre permite reintento a nivel de fetch).
       5.  **Probar un Modelo LLM Más Rápido/Potente**: Si el modelo actual es conocido por ser lento o menos capaz, sugiere probar con un modelo más rápido o más potente (si está disponible y configurado en CodeAlchemist) para el agente/orquestrador que está fallando.
@@ -129,6 +129,23 @@ No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
     if (!outputValidation.success) {
         console.error("Salida inválida de LLM (suggestErrorFix):", outputValidation.error.format(), "\nDatos recibidos:", result);
         const formattedErrors = outputValidation.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
+        // Check if the error is specifically about solution_suggestions being an array
+        const solutionSuggestionError = outputValidation.error.errors.find(
+            e => e.path.includes('solution_suggestions') && e.message.toLowerCase().includes('expected string, received array')
+        );
+        if (solutionSuggestionError && Array.isArray((result as any).solution_suggestions)) {
+            // Attempt to fix by joining the array
+            console.warn("[SuggestErrorFix] Intentando corregir 'solution_suggestions' de array a string.");
+            (result as any).solution_suggestions = ((result as any).solution_suggestions as string[]).join('\n');
+            const reValidation = SuggestErrorFixOutputSchema.safeParse(result);
+            if (reValidation.success) {
+                console.log("[SuggestErrorFix] 'solution_suggestions' corregido exitosamente.");
+                return result as SuggestErrorFixOutput;
+            } else {
+                 console.error("Falló la re-validación después de corregir 'solution_suggestions':", reValidation.error.format());
+                 // Fall through to throw the original formatted error
+            }
+        }
         throw new Error(`Respuesta de LLM inválida para corrección de errores: ${formattedErrors}`);
     }
     return result;
@@ -138,4 +155,3 @@ No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
     throw error;
   }
 }
-
