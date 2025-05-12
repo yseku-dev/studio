@@ -1,4 +1,3 @@
-
 import {
   LLM_PROVIDERS,
   MODELS_BY_PROVIDER,
@@ -290,8 +289,6 @@ async function makeLLMRequest<TResponse>(
           throw new Error(`La respuesta de ${providerConfig.name} (${serviceNameSuffix}) no es un JSON válido o está malformada. Error: ${(parseError as Error).message}`);
         }
       } else {
-        // For "text" format, the TResponse is expected to be something like { content: string }
-        // This casting is a bit of a leap of faith, assuming ChatLLMResponse is the target for "text"
         return { content: contentToParse } as unknown as TResponse;
       }
     } else {
@@ -302,11 +299,20 @@ async function makeLLMRequest<TResponse>(
      let errorMessage: string;
      if (error instanceof Error) {
        errorMessage = error.message; 
+     } else if (typeof error === 'string') {
+       errorMessage = error;
      } else {
-       errorMessage = `Error desconocido durante la solicitud a ${providerConfig.name} (${serviceNameSuffix}).`;
+       errorMessage = `Error desconocido (tipo: ${typeof error}) durante la solicitud a ${providerConfig.name} (${serviceNameSuffix}). Intente verificar los logs del servidor.`;
+       try {
+         errorMessage += ` Detalles: ${JSON.stringify(error)}`;
+       } catch {
+         // JSON.stringify failed, do nothing more with details
+       }
      }
-     console.error(`Error procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}): ${errorMessage}`);
-     throw new Error(errorMessage); // Throw a new error with just the message string
+     // Ensure errorMessage is always a string for the new Error constructor
+     const finalErrorMessage = String(errorMessage || `Error desconocido en makeLLMRequest para ${providerConfig.name}`);
+     console.error(`Error procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}): ${finalErrorMessage}`);
+     throw new Error(finalErrorMessage);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -533,4 +539,3 @@ export type GroqResponse = CodeSuggestionResponse;
 export type ProjectAnalysisGroqResponse = ProjectAnalysisResponse; 
 export type ChatGroqPayload = ChatLLMPayload; 
 export type ChatGroqResponse = ChatLLMResponse;
-
