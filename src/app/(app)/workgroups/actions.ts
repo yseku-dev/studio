@@ -29,31 +29,29 @@ export interface WorkgroupTurnPayload {
   participantAgentConfigs: Record<string, AgentTurnConfig>; // Configs for agents the orchestrator can choose from
   currentTurn: number; // The turn number *being processed*
   maxTurns: number;
-  localStorageSnapshot: LocalStorageSnapshot; // Added parameter
+  localStorageSnapshot: LocalStorageSnapshot; 
 }
 
 // Output response from the handleWorkgroupTurn action
 export interface WorkgroupTurnResponse {
-  // success: boolean; // Implicitly successful if no error is thrown or returned
-  error?: string; // Error message if something failed
-  isComplete: boolean; // Indicates if the orchestrator determined the task is complete
-  updatedHistory: ChatMessage[]; // The conversation history including the messages from this turn
-  serverLogs: string[]; // Logs generated during the server-side processing of the turn
-  // Optional detailed outputs for logging/debugging on the client
+  error?: string; 
+  isComplete: boolean; 
+  updatedHistory: ChatMessage[]; 
+  serverLogs: string[]; 
   orchestratorDecision?: {
       nextAgentId: string;
       reason: string;
-      rawOutput?: string; // Raw LLM output for debugging
-  };
+      rawOutput?: string; 
+  } | null; // Added null
   agentResponse?: {
       agentId: string;
       content: string;
-      rawOutput?: string; // Raw LLM output for debugging
-  };
+      rawOutput?: string; 
+  } | null; // Added null
 }
 
-const ORCHESTRATOR_DECISION_TIMEOUT_MS = 45000; // 45 seconds for orchestrator decision
-const AGENT_RESPONSE_TIMEOUT_MS = 90000; // 90 seconds for agent response
+const ORCHESTRATOR_DECISION_TIMEOUT_MS = 45000; 
+const AGENT_RESPONSE_TIMEOUT_MS = 90000; 
 
 // --- Server Action ---
 
@@ -61,28 +59,28 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
     const serverLogs: string[] = [];
     const log = (type: 'INFO' | 'ERROR' | 'DEBUG', message: string, data?: any) => {
         const timestamp = new Date().toISOString();
-        let logMsg = `[${timestamp}] [${type}] ${message}`;
+        let dataStringForLogMessage = '';
         if (data) {
             try {
-                // Attempt to pretty-print JSON if it's an object, otherwise stringify directly
-                const dataString = (typeof data === 'object' && data !== null) 
-                    ? JSON.stringify(data, null, 2) 
+                const previewData = (typeof data === 'object' && data !== null) 
+                    ? JSON.stringify(data) 
                     : String(data);
-                logMsg += ` | Data: ${dataString}`; // No truncation for server logs
+                dataStringForLogMessage = ` | Data: ${previewData.substring(0, 200)}${previewData.length > 200 ? '...' : ''}`;
             } catch {
-                logMsg += ` | Data: [Unserializable]`;
+                dataStringForLogMessage = ' | Data: [Unserializable for log preview]';
             }
         }
-        console.log(logMsg); // Log on server console
-        serverLogs.push(logMsg); // Collect for client
+        const logMsg = `[${timestamp}] [WG-${type}] ${message}${dataStringForLogMessage}`;
+        console.log(`[${timestamp}] [WG-${type}] ${message}`, data); 
+        serverLogs.push(logMsg); 
     };
 
     log('INFO', `Handling turn ${payload.currentTurn} for workgroup "${payload.workgroupName}"`);
 
-    let currentHistory = [...payload.conversationHistory]; // Use a local copy for this turn's processing
+    let currentHistory = [...payload.conversationHistory]; 
     let isComplete = false;
-    let orchestratorDecision: WorkgroupTurnResponse['orchestratorDecision'] | undefined;
-    let agentResponse: WorkgroupTurnResponse['agentResponse'] | undefined;
+    let orchestratorDecision: WorkgroupTurnResponse['orchestratorDecision'] = null;
+    let agentResponse: WorkgroupTurnResponse['agentResponse'] = null;
 
     try {
         // === 1. Orchestrator Decides ===
@@ -95,6 +93,19 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
             apiUrl: payload.orchestrator.llmApiUrl,
             timeoutMs: ORCHESTRATOR_DECISION_TIMEOUT_MS
         };
+        
+        if (!orchestratorOptions.providerId || !orchestratorOptions.modelName) {
+            log('ERROR', `Configuración LLM inválida para Orquestrador (${payload.orchestrator.name}): Falta providerId o modelName.`);
+            return {
+                error: `Configuración LLM inválida para Orquestrador (${payload.orchestrator.name})`,
+                isComplete: false,
+                updatedHistory: currentHistory,
+                serverLogs,
+                orchestratorDecision: null,
+                agentResponse: null,
+            };
+        }
+
 
         const availableAgentNames = Object.values(payload.participantAgentConfigs).map(a => a.name).join(', ');
         const orchestratorSystemPrompt = `${payload.orchestrator.systemMessage}
@@ -163,43 +174,49 @@ JSON:`;
                  };
                 log('INFO', `Orquestador determinó que la tarea está completa en el turno ${payload.currentTurn}.`);
             } else {
-                const nextAgentConfig = Object.values(payload.participantAgentConfigs).find(a => a.name === decisionJson?.next_agent_name);
-                if (!nextAgentConfig) {
+                const nextAgentConfigFromPayload = Object.values(payload.participantAgentConfigs).find(a => a.name === decisionJson?.next_agent_name);
+
+                if (!nextAgentConfigFromPayload) {
                     log('ERROR', `Orquestrador eligió un agente inválido o no disponible: ${decisionJson?.next_agent_name}. Agentes disponibles: ${availableAgentNames}`);
                     throw new Error(`Orquestrador eligió un agente inválido o no disponible: ${decisionJson?.next_agent_name}`);
                 }
                  orchestratorDecision = {
-                    nextAgentId: nextAgentConfig.id,
+                    nextAgentId: nextAgentConfigFromPayload.id,
                     reason: decisionJson.reason,
                     rawOutput: orchestratorRawResponse,
                 };
 
-                log('INFO', `Agente seleccionado (${nextAgentConfig.name}) preparando respuesta.`);
+                log('INFO', `Agente seleccionado (${nextAgentConfigFromPayload.name}) preparando respuesta.`);
                 const agentOptions: LLMOptions = {
-                    providerId: nextAgentConfig.llmProviderId,
-                    apiKey: nextAgentConfig.llmApiKey || '',
-                    modelName: nextAgentConfig.llmModelName,
-                    apiUrl: nextAgentConfig.llmApiUrl,
+                    providerId: nextAgentConfigFromPayload.llmProviderId,
+                    apiKey: nextAgentConfigFromPayload.llmApiKey || '',
+                    modelName: nextAgentConfigFromPayload.llmModelName,
+                    apiUrl: nextAgentConfigFromPayload.llmApiUrl,
                     timeoutMs: AGENT_RESPONSE_TIMEOUT_MS
                 };
 
+                if (!agentOptions.providerId || !agentOptions.modelName) {
+                     log('ERROR', `Configuración LLM inválida para agente ${nextAgentConfigFromPayload.name}: Falta providerId o modelName.`);
+                     throw new Error(`Configuración LLM inválida para agente ${nextAgentConfigFromPayload.name}`);
+                }
+
                  const agentHistoryContext = formatHistoryForPrompt(currentHistory, 10);
-                 const agentSystemPrompt = `${nextAgentConfig.systemMessage}\n\nCONTEXTO:\nTarea Principal: ${payload.task}\nHistorial de Conversación Reciente:\n${agentHistoryContext}\n\nTU TURNO (Turno ${payload.currentTurn}):\nEl Orquestrador te ha pasado el control porque: "${orchestratorDecision.reason}".\nConsidera el historial y la tarea. Realiza tu contribución o responde. Sé conciso y directo.`;
+                 const agentSystemPrompt = `${nextAgentConfigFromPayload.systemMessage}\n\nCONTEXTO:\nTarea Principal: ${payload.task}\nHistorial de Conversación Reciente:\n${agentHistoryContext}\n\nTU TURNO (Turno ${payload.currentTurn}):\nEl Orquestrador te ha pasado el control porque: "${orchestratorDecision.reason}".\nConsidera el historial y la tarea. Realiza tu contribución o responde. Sé conciso y directo.`;
 
                 const agentPayload: ChatLLMPayload = {
                     messages: [{ role: 'system', content: agentSystemPrompt }],
                     options: agentOptions,
                 };
-                log('DEBUG', `Llamando a LLM del Agente (${nextAgentConfig.name})...`, { model: agentOptions.modelName, promptStart: agentSystemPrompt.substring(0,500) + "..." });
+                log('DEBUG', `Llamando a LLM del Agente (${nextAgentConfigFromPayload.name})...`, { model: agentOptions.modelName, promptStart: agentSystemPrompt.substring(0,500) + "..." });
 
                 const agentLLMResponse = await chatWithLLM(agentPayload);
                 const agentResponseContent = agentLLMResponse.content;
 
-                log('INFO', `Respuesta recibida del Agente (${nextAgentConfig.name})`, { length: agentResponseContent.length, contentStart: agentResponseContent }); 
-                currentHistory.push({ role: 'assistant', content: agentResponseContent, name: nextAgentConfig.name }); 
+                log('INFO', `Respuesta recibida del Agente (${nextAgentConfigFromPayload.name})`, { length: agentResponseContent.length, contentStart: agentResponseContent.substring(0,100) }); 
+                currentHistory.push({ role: 'assistant', content: agentResponseContent, name: nextAgentConfigFromPayload.name }); 
 
                 agentResponse = {
-                    agentId: nextAgentConfig.id,
+                    agentId: nextAgentConfigFromPayload.id,
                     content: agentResponseContent,
                     rawOutput: agentResponseContent, 
                 };
@@ -218,15 +235,30 @@ JSON:`;
             detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación del grupo de trabajo.";
         }
         if (!detailMessage || detailMessage.trim() === "") {
-            detailMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
+            detailMessage = "Error desconocido o el servidor no proporcionó detalles.";
         }
-        log('ERROR', `Error general en handleWorkgroupTurn (Turno ${payload.currentTurn}): ${detailMessage}`, { stack: (error as Error).stack });
-        return { error: detailMessage, isComplete: false, updatedHistory: currentHistory, serverLogs };
+        log('ERROR', `Error general en handleWorkgroupTurn (Turno ${payload.currentTurn}): ${detailMessage}`, { stack: (error as Error)?.stack });
+        
+        const safeServerLogs = serverLogs.map(logEntry => String(logEntry));
+        const safeUpdatedHistory = currentHistory.map(msg => ({
+            role: msg.role,
+            content: String(msg.content), // Ensure content is a string
+            name: msg.name ? String(msg.name) : undefined
+        }));
+
+        return {
+            error: detailMessage,
+            isComplete: false,
+            updatedHistory: safeUpdatedHistory,
+            serverLogs: safeServerLogs,
+            orchestratorDecision: null, // Explicitly null on general error
+            agentResponse: null, // Explicitly null on general error
+        };
     }
 
     if (payload.currentTurn >= payload.maxTurns && !isComplete) {
         log('INFO', `Se alcanzó el límite máximo de turnos (${payload.maxTurns}). Finalizando ejecución.`);
-        isComplete = true; // Mark as complete due to max turns
+        isComplete = true; 
         currentHistory.push({ role: 'system', content: `[Sistema: Se alcanzó el límite de ${payload.maxTurns} turnos. Ejecución finalizada.]` });
     } else if (isComplete && payload.currentTurn < payload.maxTurns) {
         log('INFO', `Orquestador marcó la tarea como completada en el turno ${payload.currentTurn}. Finalizando ejecución.`);
@@ -255,3 +287,4 @@ declare module '@/services/groq' {
         name?: string; // Optional agent name
     }
 }
+

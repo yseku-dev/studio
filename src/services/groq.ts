@@ -205,12 +205,11 @@ async function makeLLMRequest<TResponse>(
     };
   } else if (providerConfig.isGoogleGenerativeAICompatible) {
     endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/${options.modelName}:generateContent?key=${options.apiKey}`;
-    // No Authorization header for Gemini if key is in URL
     const systemMsg = messages.find(m => m.role === 'system');
     const chatContents = messages
         .filter(m => m.role !== 'system')
         .map(m => ({ 
-            role: m.role === 'assistant' ? 'model' : m.role, // Gemini uses 'model' for assistant
+            role: m.role === 'assistant' ? 'model' : m.role, 
             parts: [{ text: m.content }] 
         }));
     
@@ -219,9 +218,6 @@ async function makeLLMRequest<TResponse>(
         generationConfig: {
             temperature: temperature,
             maxOutputTokens: max_tokens,
-            // Gemini doesn't have a direct JSON mode like OpenAI, rely on prompt.
-            // However, for Gemini 1.5 Pro, we can specify response_mime_type for JSON output
-            // For older models, we must rely on prompt engineering for JSON.
             responseMimeType: expectedResponseFormat === "json_object" && options.modelName.includes("gemini-1.5") ? "application/json" : undefined,
         }
     };
@@ -294,6 +290,8 @@ async function makeLLMRequest<TResponse>(
           throw new Error(`La respuesta de ${providerConfig.name} (${serviceNameSuffix}) no es un JSON válido o está malformada. Error: ${(parseError as Error).message}`);
         }
       } else {
+        // For "text" format, the TResponse is expected to be something like { content: string }
+        // This casting is a bit of a leap of faith, assuming ChatLLMResponse is the target for "text"
         return { content: contentToParse } as unknown as TResponse;
       }
     } else {
@@ -301,13 +299,14 @@ async function makeLLMRequest<TResponse>(
       throw new Error(`Respuesta inesperada de la API de ${providerConfig.name} (${serviceNameSuffix}). No se encontró contenido interpretable.`);
     }
   } catch (error) {
+     let errorMessage: string;
      if (error instanceof Error) {
-       console.error(`Error procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}): ${error.message}`);
-       throw error;
+       errorMessage = error.message; 
      } else {
-       console.error(`Error desconocido procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}):`, error);
-       throw new Error(`Error desconocido durante la solicitud a ${providerConfig.name} (${serviceNameSuffix}).`);
+       errorMessage = `Error desconocido durante la solicitud a ${providerConfig.name} (${serviceNameSuffix}).`;
      }
+     console.error(`Error procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}): ${errorMessage}`);
+     throw new Error(errorMessage); // Throw a new error with just the message string
   } finally {
     clearTimeout(timeoutId);
   }
@@ -534,3 +533,4 @@ export type GroqResponse = CodeSuggestionResponse;
 export type ProjectAnalysisGroqResponse = ProjectAnalysisResponse; 
 export type ChatGroqPayload = ChatLLMPayload; 
 export type ChatGroqResponse = ChatLLMResponse;
+
