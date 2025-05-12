@@ -51,7 +51,7 @@ import {
 } from '@/config/llm-config';
 import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
 import type { ChatMessage } from '@/services/groq';
-import { useDebug } from '@/contexts/DebugContext';
+import { useDebug, type DebugLogEntry } from '@/contexts/DebugContext';
 
 
 type AutoUpdateStatus = "idle" | "loading_source" | "chunking_source" | "analyzing" | "processing_workgroup_turn" | "success" | "error" | "fixing_error" | "uploading_git" | "fixing_git_error";
@@ -118,7 +118,7 @@ export default function AutoUpdatePage() {
   const workgroupExecutionControllerRef = useRef<AbortController | null>(null);
   const isMountedRef = useRef(false);
   const [currentWorkgroupTurn, setCurrentWorkgroupTurn] = useState(0); 
-  const [workgroupConversationHistory, setWorkgroupConversationHistory] = useState<ChatMessage[]>([]);
+  const [workgroupConversationHistory, setWorkgroupConversationHistoryState] = useState<ChatMessage[]>([]);
 
 
   const { toast } = useToast();
@@ -332,7 +332,7 @@ export default function AutoUpdatePage() {
         }
         
         const newHistory = result.updatedHistory || history;
-        setWorkgroupConversationHistory(newHistory);
+        setWorkgroupConversationHistoryState(newHistory);
 
         if (result.orchestratorDecision) {
             const nextAgentConfig = agents.find(a => a.id === result.orchestratorDecision?.nextAgentId);
@@ -382,7 +382,7 @@ export default function AutoUpdatePage() {
         setStatus("error");
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agents, workgroups, processAnalysisResult, status, addDebugLog, addServerLogsToDebugAndPage]); 
+  }, [agents, workgroups, processAnalysisResult, status, addDebugLog, addServerLogsToDebugAndPage, setWorkgroupConversationHistoryState]); 
 
   const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
     const options = resolvedLlmOptions;
@@ -420,7 +420,7 @@ export default function AutoUpdatePage() {
     setSuggestionsWithStatus([]);
     setAnalysisProgress({ processed: 0, total: 0 });
     setAutoFixSuggestion(null);
-    setWorkgroupConversationHistory([]); // Reset workgroup history
+    setWorkgroupConversationHistoryState([]); // Reset workgroup history
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: "Paso 1: Obteniendo código fuente de la aplicación..."});
 
     toast({
@@ -937,9 +937,24 @@ export default function AutoUpdatePage() {
                   <CardContent>
                       <ScrollArea className={cn("p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out", logsExpanded ? "h-[300px]" : "h-[100px]")}>
                           <pre className="text-xs text-foreground whitespace-pre-wrap">
-                              {detailedLogs.map((log, index) => (
-                                  <span key={`log-${index}`} className={log.includes("[ERROR") || log.includes("Error:") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-500" : ""}>{log}\n</span>
-                              ))}
+                              {detailedLogs.map((log, index) => {
+                                const isError = log.includes("[ERROR") || log.includes("Error:");
+                                const isWarn = log.includes("[WARN");
+                                const isDetail = log.includes("[DETAIL");
+                                const isChunkAnalysis = log.includes("[CHUNK_ANALYSIS");
+                                
+                                return (
+                                  <span key={`log-${index}`} className={cn(
+                                      isError ? "text-destructive" 
+                                      : isWarn ? "text-yellow-500 dark:text-yellow-400" 
+                                      : isChunkAnalysis ? "text-sky-600 dark:text-sky-400"
+                                      : isDetail ? "text-gray-500 dark:text-gray-400" 
+                                      : ""
+                                  )}>
+                                      {log}\n
+                                  </span>
+                                );
+                              })}
                           </pre>
                       </ScrollArea>
                   </CardContent>
@@ -981,4 +996,5 @@ export default function AutoUpdatePage() {
     </>
   );
 }
+
 

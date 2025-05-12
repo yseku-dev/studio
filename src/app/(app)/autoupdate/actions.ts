@@ -22,7 +22,7 @@ interface AutoUpdateAnalysisResult {
 
 const MAX_CHARS_PER_CHUNK = 3500;
 const LLM_API_TIMEOUT_MS_AUTOUPDATE = 60000 * 1; // 1 minute per chunk analysis
-const INTER_CHUNK_PROCESSING_DELAY_MS = 5000; // 5 seconds between chunks
+const INTER_CHUNK_PROCESSING_DELAY_MS = 7000; // Increased delay to 7 seconds
 
 // Modified to accept AppSourceFile[] directly
 export async function handleAutoAnalyzeAppSource(
@@ -91,7 +91,7 @@ export async function handleAutoAnalyzeAppSource(
     logError(errorMsg);
     return { success: false, error: `${errorMsg} Por favor, configúralo en ajustes.`, detailedExecutionLogs: executionLogs };
   }
-  log(`Usando modelo: ${modelName}. Preferencias de análisis: ${analysisPreferences || 'Ninguna'}.`);
+  log(`Usando modelo: ${modelName}. Preferencias de análisis: ${analysisPreferences || 'Ninguna'}. Timeout por fragmento: ${LLM_API_TIMEOUT_MS_AUTOUPDATE / 1000}s. Retraso entre fragmentos: ${INTER_CHUNK_PROCESSING_DELAY_MS / 1000}s.`);
 
   // Files are now passed as a parameter
   if (!sourceFiles || sourceFiles.length === 0) {
@@ -127,7 +127,7 @@ export async function handleAutoAnalyzeAppSource(
       logDetail(`Archivo ${baseFileName} es demasiado grande (${fileEffectiveContent.length} caracteres) para un solo fragmento, se dividirá.`);
       if (currentChunk.length > 0) {
         chunks.push(currentChunk);
-        logDetail(`Fragmento parcial anterior (${currentChunk.length} caracteres) añadido antes de dividir archivo grande: '${currentChunk.substring(0,100)}...'`);
+        logDetail(`Fragmento parcial anterior (${currentChunk.length} caracteres) añadido antes de dividir archivo grande. Contenido (inicio): '${currentChunk.substring(0,100)}...'`);
         currentChunk = "";
         currentChunkChars = 0;
       }
@@ -145,7 +145,7 @@ export async function handleAutoAnalyzeAppSource(
         }
         const part = fileEffectiveContent.substring(offset, offset + charsToTake);
         chunks.push(partMarker + part);
-        logDetail(`Archivo ${baseFileName}${partInfo} creado como fragmento. Tamaño de contenido: ${part.length} caracteres. Contenido (inicio): '${part.substring(0,100)}...'`);
+        logDetail(`Archivo ${baseFileName}${partInfo} creado como fragmento No. ${chunks.length}. Tamaño de contenido: ${part.length} caracteres. Contenido (inicio): '${part.substring(0,100)}...'`);
         offset += part.length;
         partIndex++;
       }
@@ -157,7 +157,7 @@ export async function handleAutoAnalyzeAppSource(
     if (currentChunkChars + fileEffectiveContent.length + fileContentMarker.length > MAX_CHARS_PER_CHUNK) {
       if (currentChunk.length > 0) {
         chunks.push(currentChunk);
-        logDetail(`Fragmento actual (${currentChunk.length} caracteres) añadido. Contenido (inicio): '${currentChunk.substring(0,100)}...'. Iniciando nuevo fragmento con ${baseFileName}.`);
+        logDetail(`Fragmento actual No. ${chunks.length} (${currentChunk.length} caracteres) añadido. Contenido (inicio): '${currentChunk.substring(0,100)}...'. Iniciando nuevo fragmento con ${baseFileName}.`);
       }
       currentChunk = fileContentMarker + fileEffectiveContent;
       currentChunkChars = fileEffectiveContent.length + fileContentMarker.length;
@@ -165,18 +165,18 @@ export async function handleAutoAnalyzeAppSource(
       currentChunk += fileContentMarker + fileEffectiveContent;
       currentChunkChars += fileEffectiveContent.length + fileContentMarker.length;
     }
-    logDetail(`Archivo ${baseFileName} (${fileEffectiveContent.length} caracteres) añadido al fragmento actual. Tamaño actual del fragmento: ${currentChunkChars}. Fragmento (inicio): '${currentChunk.substring(0,100)}...'`);
+    logDetail(`Archivo ${baseFileName} (${fileEffectiveContent.length} caracteres) añadido al fragmento actual. Tamaño actual del fragmento: ${currentChunkChars}. Contenido (inicio): '${currentChunk.substring(0,100)}...'`);
   }
 
   if (currentChunk.length > 0) {
     chunks.push(currentChunk);
-    logDetail(`Fragmento restante (${currentChunk.length} caracteres) añadido. Contenido (inicio): '${currentChunk.substring(0,100)}...'`);
+    logDetail(`Fragmento restante No. ${chunks.length} (${currentChunk.length} caracteres) añadido. Contenido (inicio): '${currentChunk.substring(0,100)}...'`);
   }
 
   const totalChunks = chunks.length;
   log(`División del código fuente completada. Total de fragmentos generados: ${totalChunks}.`);
   if (chunks.length > 0) {
-    chunks.forEach((c, i) => logDetail(`Fragmento ${i+1}/${totalChunks} - Tamaño: ${c.length} caracteres. Contenido (inicio): '${c.substring(0,100)}...'`));
+    chunks.forEach((c, i) => logDetail(`Vista previa Fragmento ${i+1}/${totalChunks} - Tamaño: ${c.length} caracteres. Contenido (inicio): '${c.substring(0,100)}...'`));
   }
 
 
@@ -204,18 +204,19 @@ export async function handleAutoAnalyzeAppSource(
 
   for (const chunk of chunks) {
     const currentChunkNum = processedChunks + 1;
-    log(`Iniciando análisis del fragmento ${currentChunkNum} de ${totalChunks}... (Tamaño: ${chunk.length} caracteres). Timeout: ${LLM_API_TIMEOUT_MS_AUTOUPDATE / 1000}s.`);
+    log(`[CHUNK_ANALYSIS] Iniciando análisis del fragmento ${currentChunkNum} de ${totalChunks}. Tamaño: ${chunk.length} caracteres.`);
+    logDetail(`[CHUNK_ANALYSIS_CONTENT ${currentChunkNum}/${totalChunks}] Contenido del fragmento (primeros 200 caracteres): ${chunk.substring(0,200)}...`);
 
     try {
       // This is the primary LLM call per chunk
       const result = await analyzeProjectSourceChunk(chunk, llmAPIOptions, analysisPreferences);
       allResults.push(result);
       processedChunks++;
-      log(`Fragmento ${currentChunkNum}/${totalChunks} procesado exitosamente.`);
-      logDetail(`Respuesta del fragmento ${currentChunkNum}: ${JSON.stringify(result).substring(0,200)}...`);
+      log(`[CHUNK_ANALYSIS_SUCCESS] Fragmento ${currentChunkNum}/${totalChunks} procesado exitosamente.`);
+      logDetail(`[CHUNK_ANALYSIS_RESPONSE ${currentChunkNum}/${totalChunks}] Respuesta del LLM (primeros 200 caracteres): ${JSON.stringify(result).substring(0,200)}...`);
 
       if (processedChunks < totalChunks) {
-        log(`Esperando ${INTER_CHUNK_PROCESSING_DELAY_MS}ms antes del siguiente fragmento para gestionar los límites de TPM/RPM.`);
+        log(`[CHUNK_DELAY] Esperando ${INTER_CHUNK_PROCESSING_DELAY_MS / 1000}s antes del siguiente fragmento para gestionar los límites de TPM/RPM.`);
         await new Promise(resolve => setTimeout(resolve, INTER_CHUNK_PROCESSING_DELAY_MS));
       }
 
@@ -229,7 +230,7 @@ export async function handleAutoAnalyzeAppSource(
       if (!errorMessage || errorMessage.trim() === "") {
           errorMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles durante el análisis de un fragmento.";
       }
-      logError(`Error analizando el fragmento ${currentChunkNum}/${totalChunks}.`, error);
+      logError(`[CHUNK_ANALYSIS_ERROR] Error analizando el fragmento ${currentChunkNum}/${totalChunks}.`, error);
       return {
         success: false,
         error: `Falló el análisis del fragmento ${currentChunkNum}: ${errorMessage}`,
@@ -745,3 +746,4 @@ export async function handleUploadToGit(
         }
     }
 }
+
