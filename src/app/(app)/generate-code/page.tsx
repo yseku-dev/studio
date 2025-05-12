@@ -10,9 +10,9 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, CodeXml, Wand2, AlertTriangle, Copy, CheckCircle, Settings2 } from 'lucide-react';
+import { Loader2, CodeXml, Wand2, AlertTriangle, Copy, CheckCircle, Settings2, ListOrdered, Trash2, Expand, Minimize } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { handleGenerateCode, initiateWorkgroupCodeGeneration } from './actions'; // Import new action
+import { handleGenerateCode, initiateWorkgroupCodeGeneration } from './actions';
 import type { HandleGenerateCodeResult } from './actions';
 import {
   AlertDialog,
@@ -37,6 +37,8 @@ import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm
 import type { LLMOptions } from '@/services/groq';
 import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config';
 import { LLM_PROVIDERS, LOCALSTORAGE_PROVIDER_ID_KEY, getLocalStorageApiKeyName, getLocalStorageModelName, type LLMProviderId } from '@/config/llm-config';
+import { Separator } from '@/components/ui/separator';
+import { cn } from '@/lib/utils';
 
 
 const formSchema = z.object({
@@ -52,10 +54,15 @@ export default function GenerateCodePage() {
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [isConfirming, setIsConfirming] = useState(false);
   const [promptToConfirm, setPromptToConfirm] = useState<string>("");
-  const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null); // Still useful for direct LLM calls
+  const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null); 
 
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
+  
+  const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
+  const [logsExpanded, setLogsExpanded] = useState(false);
+  const isMountedRef = React.useRef(false);
+
 
   const { toast } = useToast();
 
@@ -76,6 +83,25 @@ export default function GenerateCodePage() {
 
   const currentPrompt = watch('prompt');
   const watchedConfigSource = watch('configSource');
+  
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
+
+  const addLog = useCallback((message: string, isClientLog: boolean = true) => {
+    if (isMountedRef.current) {
+      const prefix = isClientLog ? `[CLIENT ${new Date().toISOString()}]` : '';
+      setDetailedLogs(prev => [...prev, `${prefix} ${message}`]);
+    }
+  }, []);
+
+  const addServerLogs = useCallback((serverLogs: string[] | undefined) => {
+    if (isMountedRef.current && serverLogs) {
+        setDetailedLogs(prev => [...prev, ...serverLogs]);
+    }
+  }, []);
+
 
   useEffect(() => {
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
@@ -90,15 +116,12 @@ export default function GenerateCodePage() {
   }, [setValue]);
 
   useEffect(() => {
-    // For direct LLM calls, we still need resolvedLlmOptions.
-    // For workgroups, the server action will handle resolving internal agent LLM options.
     const options = resolveLlmOptionsForSource(watchedConfigSource, agents, workgroups);
     setResolvedLlmOptions(options);
   }, [watchedConfigSource, agents, workgroups]);
 
 
   const onSubmit: SubmitHandler<FormData> = async (data) => {
-    // If it's not a workgroup, we need resolved LLM options.
     if (!data.configSource.startsWith('workgroup:')) {
         const options = resolveLlmOptionsForSource(data.configSource, agents, workgroups);
         if (!options) {
@@ -110,9 +133,9 @@ export default function GenerateCodePage() {
             });
             return;
         }
-        setResolvedLlmOptions(options); // Store for direct call
+        setResolvedLlmOptions(options); 
     } else {
-        setResolvedLlmOptions(null); // Not needed for workgroup call directly here
+        setResolvedLlmOptions(null); 
     }
     setPromptToConfirm(data.prompt);
     setIsConfirming(true);
@@ -128,16 +151,22 @@ export default function GenerateCodePage() {
     setIsLoading(true);
     setGenerationResult(null);
     setGenerationError(null);
+    setDetailedLogs([]); // Clear logs for new generation
+    addLog(`Iniciando generación de código con prompt: "${promptToConfirm.substring(0, 50)}..."`);
+    addLog(`Fuente de configuración LLM seleccionada: ${getSourceName(watchedConfigSource)}`);
+
 
     let result: HandleGenerateCodeResult;
 
     if (watchedConfigSource.startsWith('workgroup:')) {
         const workgroupId = watchedConfigSource.split(':')[1];
         if (!workgroups.find(wg => wg.id === workgroupId) || agents.length === 0) {
+            addLog(`Error: Grupo de trabajo ${workgroupId} no encontrado o agentes no cargados.`);
             toast({ title: "Error de Configuración de Grupo", description: "Grupo de trabajo no encontrado o agentes no cargados.", variant: "destructive"});
             setIsLoading(false);
             return;
         }
+        addLog(`Utilizando grupo de trabajo: ${getSourceName(watchedConfigSource)}`);
         
         const snapshot: LocalStorageSnapshot = {
             [LOCALSTORAGE_PROVIDER_ID_KEY]: localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null,
@@ -150,14 +179,18 @@ export default function GenerateCodePage() {
             snapshot.modelNames[provider.id] = localStorage.getItem(getLocalStorageModelName(provider.id));
             snapshot.apiUrls[provider.id] = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
         });
+        addLog(`Snapshot de localStorage enviado al servidor para el grupo de trabajo.`);
 
         result = await initiateWorkgroupCodeGeneration(promptToConfirm, workgroupId, agents, workgroups, snapshot);
+        addServerLogs(result.workgroupLogs);
     } else {
         if (!resolvedLlmOptions) {
+            addLog(`Error: Faltan opciones LLM resueltas para llamada directa.`);
             toast({ title: "Error Interno", description: "Faltan opciones LLM para llamada directa.", variant: "destructive" });
             setIsLoading(false);
             return;
         }
+        addLog(`Utilizando configuración LLM directa: ${resolvedLlmOptions.providerId} - ${resolvedLlmOptions.modelName}`);
         result = await handleGenerateCode(
             promptToConfirm,
             resolvedLlmOptions.providerId,
@@ -170,9 +203,11 @@ export default function GenerateCodePage() {
 
     if (result.success && result.data) {
       setGenerationResult(result.data);
+      addLog(`Generación completada exitosamente.`);
       toast({ title: 'Generación Completa', description: 'Código generado.', action: <CheckCircle className="text-green-500" /> });
     } else {
       setGenerationError(result.error || 'Ocurrió un error desconocido.');
+      addLog(`Error en la generación: ${result.error || 'Desconocido'}`);
       toast({ title: 'Generación Fallida', description: result.error || `No se pudo generar código.`, variant: 'destructive' });
     }
     setIsLoading(false);
@@ -207,6 +242,22 @@ export default function GenerateCodePage() {
   
   const isWorkgroupSelected = watchedConfigSource.startsWith('workgroup:');
   const canSubmit = isLoading || !currentPrompt || (!resolvedLlmOptions && !isWorkgroupSelected) || (isWorkgroupSelected && workgroups.length === 0);
+
+  const handleCopyLogsToClipboard = (logContent: string[] | string | undefined) => {
+    if (!logContent) return;
+    const textToCopy = Array.isArray(logContent) ? logContent.join('\n') : logContent;
+    navigator.clipboard.writeText(textToCopy)
+      .then(() => toast({ title: 'Copiado', description: 'El contenido ha sido copiado al portapapeles.' }))
+      .catch(err => {
+        console.error('Error al copiar:', err);
+        toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el contenido.', variant: 'destructive' });
+      });
+  };
+  const handleClearLogs = () => {
+    setDetailedLogs(["[CLIENT INFO] Logs borrados por el usuario."]);
+    toast({ title: "Logs Borrados", description: "Los logs de ejecución han sido borrados." });
+  };
+  const handleToggleLogsExpansion = () => setLogsExpanded(prev => !prev);
 
 
   return (
@@ -252,7 +303,7 @@ export default function GenerateCodePage() {
                     )} />
                 {errors.configSource && <p className="text-sm text-destructive mt-1">{errors.configSource.message}</p>}
                  {!resolvedLlmOptions && !isWorkgroupSelected && watchedConfigSource && (
-                     <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(watchedConfigSource)}' incompleta. Revisa Ajustes o Agentes.</p>
+                     <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(watchedConfigSource)}' incompleta. Revisa Ajustes, Agentes o Grupos.</p>
                 )}
             </div>
           </CardContent>
@@ -335,6 +386,31 @@ export default function GenerateCodePage() {
           </CardContent>
         </Card>
       )}
+      
+      {detailedLogs.length > 0 && (
+         <Card className="mt-6 border-primary/30">
+            <CardHeader className="pb-2 flex flex-row items-center justify-between">
+              <CardTitle className="text-lg flex items-center gap-2 text-primary"><ListOrdered className="h-5 w-5" /> Logs de Generación</CardTitle>
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="icon" onClick={handleToggleLogsExpansion} title={logsExpanded ? "Contraer Logs" : "Expandir Logs"}>
+                    {logsExpanded ? <Minimize className="h-4 w-4" /> : <Expand className="h-4 w-4" />}
+                </Button>
+                <Button variant="ghost" size="icon" onClick={handleClearLogs} title="Borrar Logs"><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                <Button variant="ghost" size="icon" onClick={() => handleCopyLogsToClipboard(detailedLogs)} title="Copiar Logs"><Copy className="h-4 w-4" /></Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <ScrollArea className={cn("p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out", logsExpanded ? "h-[300px]" : "h-[150px]")}>
+                <pre className="text-xs text-foreground whitespace-pre-wrap">
+                  {detailedLogs.map((log, index) => (
+                    <span key={`detail-${index}`} className={log.includes("[ERROR") || log.includes("Error:") || log.includes("Falló") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-600 dark:text-yellow-400" : log.includes("[CLIENT") ? "text-muted-foreground" : ""}>{log}\n</span>
+                  ))}
+                </pre>
+              </ScrollArea>
+            </CardContent>
+         </Card>
+       )}
     </div>
   );
 }
+

@@ -85,13 +85,13 @@ export async function initiateWorkgroupCodeGeneration(
   workgroupId: string,
   allAgents: AgentConfig[],
   allWorkgroups: WorkgroupConfig[],
-  localStorageSnapshot: LocalStorageSnapshot // Added parameter
+  localStorageSnapshot: LocalStorageSnapshot 
 ): Promise<HandleGenerateCodeResult> {
   const serverLogs: string[] = [];
   const log = (type: 'INFO' | 'ERROR' | 'DEBUG', message: string, data?: any) => {
-    const logMsg = `[WG_GenCode-${type}] ${message}${data ? ' | Data: ' + JSON.stringify(data) : ''}`;
-    console.log(logMsg);
-    serverLogs.push(logMsg);
+    const logMsg = `[WG_GenCode-${type}] ${message}${data ? ' | Data: ' + JSON.stringify(data).substring(0, 300) : ''}`;
+    console.log(logMsg); // Log on server
+    serverLogs.push(logMsg); // Collect for client response
   };
 
   log('INFO', `Iniciando generación de código con grupo de trabajo ID: ${workgroupId}`);
@@ -149,7 +149,7 @@ export async function initiateWorkgroupCodeGeneration(
       participantAgentConfigs,
       currentTurn: turn,
       maxTurns: MAX_WORKGROUP_TURNS,
-      localStorageSnapshot, // Pass snapshot
+      localStorageSnapshot, 
     };
 
     const turnResult: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
@@ -167,7 +167,7 @@ export async function initiateWorkgroupCodeGeneration(
       const finalResponseContent = turnResult.agentResponse?.content || conversationHistory.findLast(m => m.role === 'assistant')?.content;
       if (finalResponseContent) {
         try {
-          // Clean potential markdown code block fences
+          
           const cleanedContent = finalResponseContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
           const parsedData = JSON.parse(cleanedContent) as GeneratedCodeData;
           if (typeof parsedData.generatedCode === 'string') {
@@ -190,3 +190,4 @@ export async function initiateWorkgroupCodeGeneration(
   log('ERROR', `Grupo de trabajo alcanzó el máximo de turnos (${MAX_WORKGROUP_TURNS}) sin completar la generación de código.`);
   return { success: false, error: `El grupo de trabajo no completó la generación en ${MAX_WORKGROUP_TURNS} turnos.`, workgroupLogs: serverLogs };
 }
+
