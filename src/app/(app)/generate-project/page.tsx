@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useForm, SubmitHandler, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -10,7 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { useToast } from '@/hooks/use-toast';
-import { Loader2, FolderPlus, Wand2, AlertTriangle, DownloadCloud, CheckCircle, FileText, ListTree, Copy, Settings2 } from 'lucide-react';
+import { Loader2, FolderPlus, Wand2, AlertTriangle, DownloadCloud, CheckCircle, FileText, ListTree, Copy, Settings2, ListOrdered, Trash2, Expand, Minimize } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { handleGenerateProject, initiateWorkgroupProjectGeneration } from './actions'; 
 import type { HandleGenerateProjectResult, ProjectFile } from './actions';
@@ -39,6 +39,8 @@ import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm
 import type { LLMOptions } from '@/services/groq';
 import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config';
 import { LLM_PROVIDERS, LOCALSTORAGE_PROVIDER_ID_KEY, getLocalStorageApiKeyName, getLocalStorageModelName, type LLMProviderId } from '@/config/llm-config';
+import { Separator } from '@/components/ui/separator';
+import { cn } from '@/lib/utils';
 
 
 const formSchema = z.object({
@@ -60,6 +62,10 @@ export default function GenerateProjectPage() {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
 
+  const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
+  const [logsExpanded, setLogsExpanded] = useState(false);
+  const isMountedRef = useRef(false);
+
   const { toast } = useToast();
 
   const {
@@ -79,6 +85,24 @@ export default function GenerateProjectPage() {
 
   const currentPrompt = watch('prompt');
   const watchedConfigSource = watch('configSource');
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
+
+  const addLog = useCallback((message: string, isClientLog: boolean = true) => {
+    if (isMountedRef.current) {
+      const prefix = isClientLog ? `[CLIENT ${new Date().toISOString()}]` : '';
+      setDetailedLogs(prev => [...prev, `${prefix} ${message}`]);
+    }
+  }, []);
+
+  const addServerLogs = useCallback((serverLogs: string[] | undefined) => {
+    if (isMountedRef.current && serverLogs) {
+        setDetailedLogs(prev => [...prev, ...serverLogs]);
+    }
+  }, []);
 
   useEffect(() => {
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
@@ -127,16 +151,21 @@ export default function GenerateProjectPage() {
     setIsLoading(true);
     setGenerationResult(null);
     setGenerationError(null);
+    setDetailedLogs([]);
+    addLog(`Iniciando generación de proyecto con prompt: "${promptToConfirm.substring(0, 50)}..."`);
+    addLog(`Fuente de configuración LLM seleccionada: ${getSourceName(watchedConfigSource)}`);
 
     let result: HandleGenerateProjectResult;
 
     if (watchedConfigSource.startsWith('workgroup:')) {
       const workgroupId = watchedConfigSource.split(':')[1];
        if (!workgroups.find(wg => wg.id === workgroupId) || agents.length === 0) {
+            addLog(`Error: Grupo de trabajo ${workgroupId} no encontrado o agentes no cargados.`);
             toast({ title: "Error de Configuración de Grupo", description: "Grupo de trabajo no encontrado o agentes no cargados.", variant: "destructive"});
             setIsLoading(false);
             return;
         }
+      addLog(`Utilizando grupo de trabajo: ${getSourceName(watchedConfigSource)}`);
 
       const snapshot: LocalStorageSnapshot = {
         [LOCALSTORAGE_PROVIDER_ID_KEY]: localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null,
@@ -149,14 +178,18 @@ export default function GenerateProjectPage() {
         snapshot.modelNames[provider.id] = localStorage.getItem(getLocalStorageModelName(provider.id));
         snapshot.apiUrls[provider.id] = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
       });
+      addLog(`Snapshot de localStorage enviado al servidor para el grupo de trabajo.`);
 
       result = await initiateWorkgroupProjectGeneration(promptToConfirm, workgroupId, agents, workgroups, snapshot);
+      addServerLogs(result.workgroupLogs);
     } else {
       if (!resolvedLlmOptions) {
+        addLog(`Error: Faltan opciones LLM resueltas para llamada directa.`);
         toast({ title: "Error Interno", description: "Faltan opciones LLM para llamada directa.", variant: "destructive" });
         setIsLoading(false);
         return;
       }
+      addLog(`Utilizando configuración LLM directa: ${resolvedLlmOptions.providerId} - ${resolvedLlmOptions.modelName}`);
       result = await handleGenerateProject(
           promptToConfirm,
           resolvedLlmOptions.providerId,
@@ -168,9 +201,11 @@ export default function GenerateProjectPage() {
 
     if (result.success && result.data) {
       setGenerationResult(result.data);
+      addLog(`Generación de proyecto completada exitosamente.`);
       toast({ title: 'Generación de Proyecto Completa', description: 'Estructura generada.', action: <CheckCircle className="text-green-500" /> });
     } else {
       setGenerationError(result.error || 'Ocurrió un error desconocido.');
+      addLog(`Error en la generación de proyecto: ${result.error || 'Desconocido'}`);
       toast({ title: 'Generación de Proyecto Fallida', description: result.error || `No se pudo generar estructura.`, variant: 'destructive' });
     }
     setIsLoading(false);
@@ -182,6 +217,7 @@ export default function GenerateProjectPage() {
       return;
     }
     setIsDownloading(true);
+    addLog(`Preparando descarga del proyecto: ${generationResult.projectStructure.projectName || 'proyecto_generado'}.zip`);
     toast({ title: 'Preparando Descarga', description: 'Creando ZIP del proyecto...' });
 
     try {
@@ -198,9 +234,11 @@ export default function GenerateProjectPage() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+      addLog(`Descarga del proyecto ${a.download} iniciada.`);
       toast({ title: "Descarga Iniciada", description: `El proyecto ${a.download} se está descargando.` });
     } catch (e) {
       const error = e instanceof Error ? e.message : "Error desconocido";
+      addLog(`Error al crear ZIP para descarga: ${error}`);
       toast({ title: "Error al Crear ZIP", description: `No se pudo crear ZIP: ${error}`, variant: "destructive" });
     }
     setIsDownloading(false);
@@ -228,6 +266,22 @@ export default function GenerateProjectPage() {
   
   const isWorkgroupSelected = watchedConfigSource.startsWith('workgroup:');
   const canSubmit = isLoading || !currentPrompt || (!resolvedLlmOptions && !isWorkgroupSelected) || (isWorkgroupSelected && workgroups.length === 0);
+
+  const handleCopyLogsToClipboard = (logContent: string[] | string | undefined) => {
+    if (!logContent) return;
+    const textToCopy = Array.isArray(logContent) ? logContent.join('\n') : logContent;
+    navigator.clipboard.writeText(textToCopy)
+      .then(() => toast({ title: 'Copiado', description: 'El contenido ha sido copiado al portapapeles.' }))
+      .catch(err => {
+        console.error('Error al copiar:', err);
+        toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el contenido.', variant: 'destructive' });
+      });
+  };
+  const handleClearLogs = () => {
+    setDetailedLogs(["[CLIENT INFO] Logs borrados por el usuario."]);
+    toast({ title: "Logs Borrados", description: "Los logs de ejecución han sido borrados." });
+  };
+  const handleToggleLogsExpansion = () => setLogsExpanded(prev => !prev);
 
 
   return (
@@ -288,7 +342,7 @@ export default function GenerateProjectPage() {
                 <AlertDialogHeader>
                   <AlertDialogTitle>Confirmar Generación de Proyecto</AlertDialogTitle>
                    <AlertDialogDescription>
-                    Generar estructura con '{getSourceName(watchedConfigSource)}'?
+                    <p>Generar estructura con '{getSourceName(watchedConfigSource)}'?</p>
                     {!isWorkgroupSelected && resolvedLlmOptions && (
                         <div className="mt-1 text-xs text-muted-foreground">(Proveedor: {resolvedLlmOptions?.providerId}, Modelo: {resolvedLlmOptions?.modelName})</div>
                     )}
@@ -375,6 +429,31 @@ export default function GenerateProjectPage() {
           </CardContent>
         </Card>
       )}
+
+      {detailedLogs.length > 0 && (
+        <Card className="mt-6 border-primary/30">
+          <CardHeader className="pb-2 flex flex-row items-center justify-between">
+            <CardTitle className="text-lg flex items-center gap-2 text-primary"><ListOrdered className="h-5 w-5" /> Logs de Generación</CardTitle>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="icon" onClick={handleToggleLogsExpansion} title={logsExpanded ? "Contraer Logs" : "Expandir Logs"}>
+                  {logsExpanded ? <Minimize className="h-4 w-4" /> : <Expand className="h-4 w-4" />}
+              </Button>
+              <Button variant="ghost" size="icon" onClick={handleClearLogs} title="Borrar Logs"><Trash2 className="h-4 w-4 text-destructive" /></Button>
+              <Button variant="ghost" size="icon" onClick={() => handleCopyLogsToClipboard(detailedLogs)} title="Copiar Logs"><Copy className="h-4 w-4" /></Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <ScrollArea className={cn("p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out", logsExpanded ? "h-[300px]" : "h-[150px]")}>
+              <pre className="text-xs text-foreground whitespace-pre-wrap">
+                {detailedLogs.map((log, index) => (
+                  <span key={`detail-${index}`} className={log.includes("[ERROR") || log.includes("Error:") || log.includes("Falló") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-600 dark:text-yellow-400" : log.includes("[CLIENT") ? "text-muted-foreground" : ""}>{log}\n</span>
+                ))}
+              </pre>
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
+

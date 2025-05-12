@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useForm, SubmitHandler, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -61,7 +61,7 @@ export default function GenerateCodePage() {
   
   const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
   const [logsExpanded, setLogsExpanded] = useState(false);
-  const isMountedRef = React.useRef(false);
+  const isMountedRef = useRef(false);
 
 
   const { toast } = useToast();
@@ -318,7 +318,7 @@ export default function GenerateCodePage() {
                 <AlertDialogHeader>
                   <AlertDialogTitle>Confirmar Generación</AlertDialogTitle>
                   <AlertDialogDescription>
-                    Generar código con '{getSourceName(watchedConfigSource)}'?
+                    <p>Generar código con '{getSourceName(watchedConfigSource)}'?</p>
                     {!isWorkgroupSelected && resolvedLlmOptions && (
                         <div className="mt-1 text-xs text-muted-foreground">(Proveedor: {resolvedLlmOptions?.providerId}, Modelo: {resolvedLlmOptions?.modelName})</div>
                     )}

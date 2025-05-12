@@ -1,7 +1,8 @@
+
 // src/app/(app)/refactor-project/page.tsx
 'use client';
 
-import { useState, useEffect, useCallback, ChangeEvent } from 'react';
+import { useState, useEffect, useCallback, ChangeEvent, useRef } from 'react';
 import { useForm, Controller, SubmitHandler } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
@@ -28,7 +29,7 @@ import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGEN
 import { LLM_PROVIDERS, LOCALSTORAGE_PROVIDER_ID_KEY, getLocalStorageApiKeyName, getLocalStorageModelName, type LLMProviderId } from '@/config/llm-config';
 import { handleGetRefactoringSuggestions, handleApplyRefactoringSuggestion, type HandleGetRefactoringSuggestionsPayload } from './actions';
 import { cn } from '@/lib/utils';
-import { Badge } from '@/components/ui/badge'; // Added import for Badge
+import { Badge } from '@/components/ui/badge'; 
 
 const refactorParamsSchema = z.object({
   goals: z.string().optional(),
@@ -66,6 +67,7 @@ export default function RefactorProjectPage() {
   const [currentError, setCurrentError] = useState<string | null>(null);
   const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
   const [logsExpanded, setLogsExpanded] = useState(false);
+  const isMountedRef = useRef(false);
 
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
@@ -85,6 +87,24 @@ export default function RefactorProjectPage() {
   const watchedConfigSource = fileForm.watch('configSource');
 
   useEffect(() => {
+    isMountedRef.current = true;
+    return () => { isMountedRef.current = false; };
+  }, []);
+
+  const addLog = useCallback((message: string, isClientLog: boolean = true) => {
+    if (isMountedRef.current) {
+      const prefix = isClientLog ? `[CLIENT ${new Date().toISOString()}]` : '';
+      setDetailedLogs(prev => [...prev, `${prefix} ${message}`]);
+    }
+  }, []);
+
+  const addServerLogs = useCallback((serverLogs: string[] | undefined) => {
+    if (isMountedRef.current && serverLogs) {
+        setDetailedLogs(prev => [...prev, ...serverLogs]);
+    }
+  }, []);
+
+  useEffect(() => {
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
     if (storedAgents) try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing agents", e); }
     const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
@@ -97,14 +117,10 @@ export default function RefactorProjectPage() {
     setResolvedLlmOptions(options);
   }, [watchedConfigSource, agents, workgroups]);
   
-  const addLog = useCallback((message: string) => {
-    setDetailedLogs(prev => [...prev, `[${new Date().toISOString()}] ${message}`]);
-  }, []);
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files[0]) {
       const file = event.target.files[0];
-      // Allow more general text files in addition to zip/json for content reading
       if (file.type === 'application/zip' || file.name.endsWith('.zip') || 
           file.type === 'application/json' || file.name.endsWith('.json') ||
           file.type.startsWith('text/')) {
@@ -124,7 +140,7 @@ export default function RefactorProjectPage() {
     setAnalysisStatus("loading");
     setCurrentError(null);
     setSuggestions([]);
-    setDetailedLogs([]); // Clear previous logs
+    setDetailedLogs([]); 
     addLog("Iniciando análisis de refactorización...");
 
     const file = data.projectFile;
@@ -142,11 +158,6 @@ export default function RefactorProjectPage() {
             addLog(`Contenido de archivo de texto/JSON leído. Tamaño: ${projectFileContent.length} bytes.`);
         } else if (file.type === 'application/zip' || file.name.endsWith('.zip')) {
             addLog(`Archivo ZIP (${file.name}) seleccionado. Se enviará como string base64 (simulado) o se procesará en servidor.`);
-            // Simulating base64 for now; server would handle actual ZIP processing.
-            // For a real implementation, you might read as ArrayBuffer and convert to base64.
-            // const arrayBuffer = await file.arrayBuffer();
-            // projectFileContent = Buffer.from(arrayBuffer).toString('base64'); 
-            // This is a placeholder since direct content reading of ZIP isn't straightforward in browser for text.
             projectFileContent = `Contenido_ZIP_Placeholder_Nombre:${file.name}_Tipo:${file.type}`;
             addLog(`Contenido ZIP (placeholder) preparado. Longitud: ${projectFileContent.length}`);
         } else {
@@ -207,7 +218,7 @@ export default function RefactorProjectPage() {
     setAnalysisStatus("analyzing");
     addLog(`Enviando solicitud de análisis al servidor...`);
     const result = await handleGetRefactoringSuggestions(actionPayload);
-    (result.workgroupLogs || []).forEach(logMsg => addLog(`[SERVER_WG] ${logMsg}`)); // Log workgroup-specific logs
+    addServerLogs(result.workgroupLogs);
 
     if (result.success && result.data) {
       setSuggestions(result.data.map(s => ({...s, id: crypto.randomUUID(), status: 'pending'})));
@@ -235,12 +246,8 @@ export default function RefactorProjectPage() {
         setSuggestions(prev => prev.map(s => s.id === suggestionId ? {...s, status: 'error', errorMessage: 'Sin contenido para aplicar.'} : s));
         return;
     }
-
-    // SIMULATED: In a real scenario, this would involve updating files.
-    // For this simulation, we'll just mark it as applied.
-    // The server action `handleApplyRefactoringSuggestion` is a placeholder.
     toast({title: "Aplicando Sugerencia (Simulado)", description: `Aplicando cambios para ${suggestion.area}. La funcionalidad real de modificación de archivos está pendiente.`});
-    await new Promise(resolve => setTimeout(resolve, 700)); // Simulate network delay
+    await new Promise(resolve => setTimeout(resolve, 700)); 
     setSuggestions(prev => prev.map(s => s.id === suggestionId ? {...s, status: 'applied'} : s));
     addLog(`Sugerencia ${suggestionId} marcada como aplicada (simulado).`);
   };
@@ -254,7 +261,7 @@ export default function RefactorProjectPage() {
   const handleApplyAllSuggestions = async () => {
     addLog("Intentando aplicar todas las sugerencias pendientes (simulado)...");
     toast({ title: "Aplicando Todas (Simulado)", description: "Se están aplicando todas las sugerencias. La funcionalidad real está pendiente." });
-    await new Promise(resolve => setTimeout(resolve, 1000)); // Simulate delay
+    await new Promise(resolve => setTimeout(resolve, 1000)); 
     let appliedCount = 0;
     setSuggestions(prev => prev.map(s => {
         if (s.status === 'pending' && s.suggestedSnippet) {
@@ -276,7 +283,6 @@ export default function RefactorProjectPage() {
     if (sourceId.startsWith(agentPrefix)) {
       const agentId = sourceId.substring(agentPrefix.length);
       const agent = agents.find(a => a.id === agentId);
-      // Use REFACTOR_AGENT_NAME if the specific agent matches it
       return agent ? (agent.name === REFACTOR_AGENT_NAME ? REFACTOR_AGENT_NAME : `Agente: ${agent.name}`) : `Agente ${agentId.substring(0, 6)}...`;
     }
     if (sourceId.startsWith(workgroupPrefix)) {
@@ -292,6 +298,22 @@ export default function RefactorProjectPage() {
   const canSubmit = isProcessing || 
                     (!formValues.projectFile && !formValues.gitUrl) || 
                     (!resolvedLlmOptions && !watchedConfigSource.startsWith("workgroup:"));
+
+  const handleCopyLogsToClipboard = (logContent: string[] | string | undefined) => {
+    if (!logContent) return;
+    const textToCopy = Array.isArray(logContent) ? logContent.join('\n') : logContent;
+    navigator.clipboard.writeText(textToCopy)
+      .then(() => toast({ title: 'Copiado', description: 'El contenido ha sido copiado al portapapeles.' }))
+      .catch(err => {
+        console.error('Error al copiar:', err);
+        toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el contenido.', variant: 'destructive' });
+      });
+  };
+  const handleClearLogs = () => {
+    setDetailedLogs(["[CLIENT INFO] Logs borrados por el usuario."]);
+    toast({ title: "Logs Borrados", description: "Los logs de ejecución han sido borrados." });
+  };
+  const handleToggleLogsExpansion = () => setLogsExpanded(prev => !prev);
 
 
   return (
@@ -487,11 +509,11 @@ export default function RefactorProjectPage() {
           <CardHeader className="pb-2 flex flex-row items-center justify-between">
             <CardTitle className="text-lg flex items-center gap-2 text-primary"><ListOrdered className="h-5 w-5" /> Logs de Ejecución</CardTitle>
             <div className="flex items-center gap-2">
-              <Button variant="ghost" size="icon" onClick={() => setLogsExpanded(!logsExpanded)} title={logsExpanded ? "Contraer Logs" : "Expandir Logs"}>
+              <Button variant="ghost" size="icon" onClick={handleToggleLogsExpansion} title={logsExpanded ? "Contraer Logs" : "Expandir Logs"}>
                   {logsExpanded ? <Minimize className="h-4 w-4" /> : <Expand className="h-4 w-4" />}
               </Button>
-              <Button variant="ghost" size="icon" onClick={() => setDetailedLogs([])} title="Limpiar Logs"><Trash2 className="h-4 w-4 text-destructive" /></Button>
-              <Button variant="ghost" size="icon" onClick={() => navigator.clipboard.writeText(detailedLogs.join("\n"))} title="Copiar Logs"><Copy className="h-4 w-4" /></Button>
+              <Button variant="ghost" size="icon" onClick={handleClearLogs} title="Limpiar Logs"><Trash2 className="h-4 w-4 text-destructive" /></Button>
+              <Button variant="ghost" size="icon" onClick={() => handleCopyLogsToClipboard(detailedLogs)} title="Copiar Logs"><Copy className="h-4 w-4" /></Button>
             </div>
           </CardHeader>
           <CardContent>

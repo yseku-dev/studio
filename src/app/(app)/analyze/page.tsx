@@ -1,6 +1,7 @@
 
 'use client';
-import { useState, useCallback, useEffect } from 'react'; // Added useEffect
+
+import { useState, useCallback, useEffect } from 'react'; 
 import { CodeAnalysisSection } from '@/components/code-analysis-section';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
@@ -14,36 +15,12 @@ import {
 } from "@/components/ui/select";
 import { Label } from '@/components/ui/label';
 import { Settings2 } from 'lucide-react';
-import type { AgentConfig, WorkgroupConfig } from '@/types/agent'; 
-import { resolveLlmOptionsForSource } from '@/lib/llm-utils';
-import type { LLMOptions } from '@/services/groq';
-import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY } from '@/config/agent-config'; 
+
 
 export default function AnalyzePage() {
   const { toast } = useToast();
   const router = useRouter();
 
-  // These states are effectively unused now as CodeAnalysisSection manages its own LLM source selection
-  // const [agents, setAgents] = useState<AgentConfig[]>([]);
-  // const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
-  // const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global');
-  // const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null);
-
-  // useEffect(() => {
-  //   const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
-  //   if (storedAgents) {
-  //     try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing stored agents:", e); setAgents([]); }
-  //   }
-  //   const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY); 
-  //   if (storedWorkgroups) {
-  //     try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); }
-  //   }
-  // }, []);
-
-  // useEffect(() => {
-  //   const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups); 
-  //   setResolvedLlmOptions(options);
-  // }, [selectedConfigSource, agents, workgroups]); 
 
   const handleSaveSnapshot = (code: string, nameSuffix: string) => {
     try {
@@ -67,26 +44,13 @@ export default function AnalyzePage() {
     }
   };
   
-  // const getSourceName = (sourceId: string): string => {
-  //   if (sourceId === 'global') return 'Global';
-  //   if (sourceId.startsWith('agent:')) {
-  //     const agentId = sourceId.split(':')[1];
-  //     return agents.find(a => a.id === agentId)?.name || `Agente ${agentId.substring(0,6)}...`;
-  //   }
-  //   if (sourceId.startsWith('workgroup:')) { 
-  //     const workgroupId = sourceId.split(':')[1];
-  //     return workgroups.find(wg => wg.id === workgroupId)?.name || `Grupo ${workgroupId.substring(0,6)}...`;
-  //   }
-  //   return 'Desconocido';
-  // };
 
   return (
      <div className="space-y-6">
-        {/* Selector is now part of CodeAnalysisSection */}
         <CodeAnalysisSection
             onSaveSnapshot={handleSaveSnapshot}
-            // CodeAnalysisSection will fetch its own agents and workgroups for its selector
         />
     </div>
   );
 }
+
