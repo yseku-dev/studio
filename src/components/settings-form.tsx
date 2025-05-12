@@ -10,7 +10,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { Save, Settings as SettingsIcon, Zap, Loader2, GitFork, CheckCircle, XCircle } from 'lucide-react';
+import { Save, Settings as SettingsIcon, Zap, Loader2, GitFork, CheckCircle, XCircle, Bug } from 'lucide-react';
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -20,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { handleTestLLMConnection, handleTestGitConnection } from '@/app/(app)/settings/actions';
 import { Separator } from '@/components/ui/separator';
+import { useDebug } from '@/contexts/DebugContext';
 import {
   LLM_PROVIDERS,
   DEFAULT_LLM_PROVIDER,
@@ -39,19 +41,21 @@ const settingsSchema = z.object({
   llmProviderId: z.custom<LLMProviderId>(val => LLM_PROVIDERS.some(p => p.id === val), {
     message: "Debes seleccionar un proveedor de LLM válido."
   }),
-  apiKey: z.string().optional(), // API key is optional at schema level, required based on provider
+  apiKey: z.string().optional(),
   llmModelName: z.string().min(1, 'El nombre del modelo es obligatorio.'),
-  apiUrl: z.string().url({message: "URL de API inválida"}).optional(), // For providers like LMStudio/Ollama where URL might be user-set
+  apiUrl: z.string().url({message: "URL de API inválida"}).optional().or(z.literal('')),
   gitRepositoryUrl: z.string().url({ message: "Por favor, introduce una URL válida para el repositorio Git." }).optional().or(z.literal('')),
   gitUsername: z.string().optional(),
   gitEmail: z.string().email({ message: "Por favor, introduce un email válido." }).optional().or(z.literal('')),
   gitPat: z.string().optional(),
+  isDebugModeActive: z.boolean().optional(),
 });
 
 type SettingsFormData = z.infer<typeof settingsSchema>;
 
 export function SettingsForm() {
   const { toast } = useToast();
+  const { isDebugModeActive, setIsDebugModeActive, addDebugLog } = useDebug();
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [isTestingGitConnection, setIsTestingGitConnection] = useState(false);
   
@@ -65,19 +69,28 @@ export function SettingsForm() {
     handleSubmit,
     setValue,
     watch,
-    formState: { errors, isDirty, dirtyFields },
+    formState: { errors, isDirty: formIsDirty, dirtyFields }, // Renamed isDirty to formIsDirty
     reset,
     getValues,
     trigger,
+    control,
   } = useForm<SettingsFormData>({
     resolver: zodResolver(settingsSchema),
-    // Default values will be set by useEffect based on localStorage and currentProvider
+    defaultValues: {
+        isDebugModeActive: isDebugModeActive,
+    }
   });
   
   const watchedProviderId = watch('llmProviderId');
   const watchedApiKey = watch('apiKey');
   const watchedModelName = watch('llmModelName');
   const watchedApiUrl = watch('apiUrl');
+  const watchedDebugMode = watch('isDebugModeActive');
+
+  useEffect(() => {
+    // Sync form state with context state for debug mode
+    setValue('isDebugModeActive', isDebugModeActive, { shouldDirty: false });
+  }, [isDebugModeActive, setValue]);
 
   const updateModelsForProvider = useCallback((providerId: LLMProviderId | undefined) => {
     if (!providerId) {
@@ -88,18 +101,17 @@ export function SettingsForm() {
     const modelNames = Object.keys(models).sort((a, b) => {
       const tpmA = models[a].tpm || 0;
       const tpmB = models[b].tpm || 0;
-      if (tpmA !== tpmB) return tpmB - tpmA; // Sort by TPM desc
+      if (tpmA !== tpmB) return tpmB - tpmA;
       const tokensA = models[a].tokens || 0;
       const tokensB = models[b].tokens || 0;
-      if (tokensA !== tokensB) return tokensB - tokensA; // Then by Tokens desc
-      return a.localeCompare(b); // Then by name asc
+      if (tokensA !== tokensB) return tokensB - tokensA; 
+      return a.localeCompare(b);
     });
     setAvailableModels(modelNames);
   }, []);
 
-
-  // Effect to load settings from localStorage and initialize form
   useEffect(() => {
+    addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: 'Montando formulario de configuración.'});
     const storedProviderId = localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null;
     const initialProviderId = storedProviderId || DEFAULT_LLM_PROVIDER;
     const provider = LLM_PROVIDERS.find(p => p.id === initialProviderId) || LLM_PROVIDERS.find(p => p.id === DEFAULT_LLM_PROVIDER)!;
@@ -111,51 +123,45 @@ export function SettingsForm() {
     setValue('apiKey', apiKeyFromStorage, { shouldDirty: false });
 
     const modelNameFromStorage = localStorage.getItem(getLocalStorageModelName(provider.id));
-    updateModelsForProvider(provider.id); // Update available models first
+    updateModelsForProvider(provider.id); 
 
-    // Set modelName after availableModels is populated
-    // Need a slight delay or ensure updateModelsForProvider is synchronous enough
-    // For now, assuming models are available for the default/stored provider
     const providerModels = MODELS_BY_PROVIDER[provider.id] || {};
     const providerModelKeys = Object.keys(providerModels);
     if (modelNameFromStorage && providerModelKeys.includes(modelNameFromStorage)) {
       setValue('llmModelName', modelNameFromStorage, { shouldDirty: false });
     } else if (providerModelKeys.length > 0) {
-      // Default to first sorted model if stored one is invalid or not found
       const sortedModels = Object.keys(providerModels).sort((a,b) => (providerModels[b].tpm || 0) - (providerModels[a].tpm || 0) || a.localeCompare(b) );
       setValue('llmModelName', sortedModels[0], { shouldDirty: false });
     } else {
       setValue('llmModelName', '', {shouldDirty: false});
     }
     
-    // API URL (primarily for local LLMs)
     const storedApiUrl = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
     setValue('apiUrl', storedApiUrl || provider.apiUrl, { shouldDirty: false });
 
-
-    // Git settings
     setValue('gitRepositoryUrl', localStorage.getItem(LOCALSTORAGE_GIT_REPO_URL_KEY) || '', { shouldDirty: false });
     setValue('gitUsername', localStorage.getItem(LOCALSTORAGE_GIT_USERNAME_KEY) || '', { shouldDirty: false });
     setValue('gitEmail', localStorage.getItem(LOCALSTORAGE_GIT_EMAIL_KEY) || '', { shouldDirty: false });
     setValue('gitPat', localStorage.getItem(LOCALSTORAGE_GIT_PAT_KEY) || '', { shouldDirty: false });
+    
+    setValue('isDebugModeActive', isDebugModeActive, { shouldDirty: false });
 
-    reset(getValues(), {keepValues: true, keepDirty:false}); // Reset dirty state after initial load
+    reset(getValues(), {keepValues: true, keepDirty:false}); 
+    addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: 'Formulario de configuración inicializado desde localStorage.'});
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setValue, updateModelsForProvider]); // updateModelsForProvider is memoized
+  }, [setValue, updateModelsForProvider, isDebugModeActive]); // isDebugModeActive is a dependency
 
-  // Effect to handle provider change
   useEffect(() => {
     const newProvider = LLM_PROVIDERS.find(p => p.id === watchedProviderId);
     if (newProvider && newProvider.id !== currentProvider?.id) {
+      addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: `Proveedor LLM cambiado a: ${newProvider.name}`});
       setCurrentProvider(newProvider);
       updateModelsForProvider(newProvider.id);
 
-      // Load API key for the new provider
       const apiKeyFromStorage = localStorage.getItem(getLocalStorageApiKeyName(newProvider.id)) || '';
-      setValue('apiKey', apiKeyFromStorage, { shouldDirty: dirtyFields.apiKey }); // Keep dirty if user was editing
+      setValue('apiKey', apiKeyFromStorage, { shouldDirty: dirtyFields.apiKey });
 
-      // Set model to first available for new provider or clear if none
       const newProviderModels = MODELS_BY_PROVIDER[newProvider.id] || {};
       const newProviderModelKeys = Object.keys(newProviderModels);
       if (newProviderModelKeys.length > 0) {
@@ -165,7 +171,6 @@ export function SettingsForm() {
         setValue('llmModelName', '', { shouldDirty: dirtyFields.llmModelName });
       }
       
-      // Set API URL for new provider
       const storedApiUrl = localStorage.getItem(`codealchemist_apiurl_${newProvider.id}`);
       setValue('apiUrl', storedApiUrl || newProvider.apiUrl, { shouldDirty: dirtyFields.apiUrl });
     }
@@ -174,8 +179,10 @@ export function SettingsForm() {
 
 
   const onSubmit: SubmitHandler<SettingsFormData> = (data) => {
+    addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: 'Intentando guardar configuración.', data });
     if (!currentProvider) {
         toast({title: "Error", description: "Proveedor LLM no seleccionado.", variant: "destructive"});
+        addDebugLog({ source: 'SETTINGS_FORM', type: 'ERROR', message: 'Intento de guardado fallido: Proveedor LLM no seleccionado.'});
         return;
     }
     
@@ -187,7 +194,6 @@ export function SettingsForm() {
     }
     localStorage.setItem(getLocalStorageModelName(data.llmProviderId), data.llmModelName);
     
-    // Save API URL if it's different from default (for local LLMs)
     const providerConfig = LLM_PROVIDERS.find(p => p.id === data.llmProviderId);
     if (data.apiUrl && data.apiUrl !== providerConfig?.apiUrl) {
         localStorage.setItem(`codealchemist_apiurl_${data.llmProviderId}`, data.apiUrl);
@@ -195,7 +201,6 @@ export function SettingsForm() {
         localStorage.removeItem(`codealchemist_apiurl_${data.llmProviderId}`);
     }
 
-    // Git settings
     if (data.gitRepositoryUrl) localStorage.setItem(LOCALSTORAGE_GIT_REPO_URL_KEY, data.gitRepositoryUrl);
     else localStorage.removeItem(LOCALSTORAGE_GIT_REPO_URL_KEY);
     
@@ -208,42 +213,51 @@ export function SettingsForm() {
     if (data.gitPat) localStorage.setItem(LOCALSTORAGE_GIT_PAT_KEY, data.gitPat);
     else localStorage.removeItem(LOCALSTORAGE_GIT_PAT_KEY);
     
+    if (data.isDebugModeActive !== undefined) {
+        setIsDebugModeActive(data.isDebugModeActive); // Update context and localStorage
+    }
+
     toast({
       title: 'Configuración Guardada',
       description: 'Tus configuraciones han sido actualizadas.',
     });
+    addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: 'Configuración guardada exitosamente.'});
     reset(data, { keepValues: true, keepDirty: false }); 
   };
 
   const onTestLLMConnection = async () => {
-    await trigger(["llmProviderId", "apiKey", "llmModelName", "apiUrl"]); // Validate before test
+    addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: 'Iniciando prueba de conexión LLM.'});
+    await trigger(["llmProviderId", "apiKey", "llmModelName", "apiUrl"]);
     const currentValues = getValues();
     const provider = LLM_PROVIDERS.find(p => p.id === currentValues.llmProviderId);
 
     if (!provider) {
       toast({ title: 'Error', description: 'Proveedor LLM no seleccionado.', variant: 'destructive' });
+      addDebugLog({ source: 'SETTINGS_FORM', type: 'ERROR', message: 'Prueba de conexión LLM fallida: Proveedor no seleccionado.'});
       return;
     }
     if (provider.requiresApiKey && !currentValues.apiKey) {
       toast({ title: 'Campos incompletos', description: `Por favor, introduce la Clave API para ${provider.name}.`, variant: 'destructive' });
+      addDebugLog({ source: 'SETTINGS_FORM', type: 'ERROR', message: `Prueba de conexión LLM fallida: Falta API Key para ${provider.name}.`});
       return;
     }
     if (!currentValues.llmModelName) {
       toast({ title: 'Campos incompletos', description: 'Por favor, selecciona un Modelo.', variant: 'destructive' });
+      addDebugLog({ source: 'SETTINGS_FORM', type: 'ERROR', message: 'Prueba de conexión LLM fallida: Modelo no seleccionado.'});
       return;
     }
      if (!currentValues.apiUrl && (provider.id === 'lmstudio' || provider.id === 'ollama')) {
       toast({ title: 'Campos incompletos', description: `Por favor, introduce la URL de API para ${provider.name}.`, variant: 'destructive' });
+      addDebugLog({ source: 'SETTINGS_FORM', type: 'ERROR', message: `Prueba de conexión LLM fallida: Falta API URL para ${provider.name}.`});
       return;
     }
-
 
     setIsTestingConnection(true);
     const result = await handleTestLLMConnection(
       provider.id,
       currentValues.apiKey || "",
       currentValues.llmModelName,
-      currentValues.apiUrl || provider.apiUrl // Use form value if present, else provider default
+      currentValues.apiUrl || provider.apiUrl
     );
     setIsTestingConnection(false);
 
@@ -253,6 +267,7 @@ export function SettingsForm() {
         description: `Conectado correctamente con el modelo ${currentValues.llmModelName}. ${result.data ? "Respuesta: " + String(result.data).substring(0,50) + "..." : ""}`,
         action: <CheckCircle className="text-green-500" />,
       });
+      addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: `Prueba de conexión LLM para ${provider.name} exitosa.`, data: { model: currentValues.llmModelName, response: result.data } });
     } else {
       toast({
         title: `Error de Conexión ${provider.name}`,
@@ -260,10 +275,12 @@ export function SettingsForm() {
         variant: 'destructive',
         action: <XCircle className="text-white" />,
       });
+      addDebugLog({ source: 'SETTINGS_FORM', type: 'ERROR', message: `Prueba de conexión LLM para ${provider.name} fallida: ${result.message}`, data: { model: currentValues.llmModelName, errorResponse: result.data } });
     }
   };
 
   const onTestGitConnection = async () => {
+    addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: 'Iniciando prueba de conexión Git.'});
     await trigger(["gitRepositoryUrl", "gitUsername", "gitPat"]);
     const { gitRepositoryUrl, gitUsername, gitPat } = getValues();
      if (!gitRepositoryUrl || !gitUsername || !gitPat) {
@@ -272,6 +289,7 @@ export function SettingsForm() {
         description: 'Por favor, introduce la URL del Repositorio, Nombre de Usuario Git y Token de Acceso Personal (PAT) antes de probar la conexión Git.',
         variant: 'destructive',
       });
+      addDebugLog({ source: 'SETTINGS_FORM', type: 'ERROR', message: 'Prueba de conexión Git fallida: Campos incompletos.'});
       return;
     }
     setIsTestingGitConnection(true);
@@ -288,6 +306,7 @@ export function SettingsForm() {
         description: result.message,
         action: <CheckCircle className="text-green-500" />,
       });
+      addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: `Prueba de conexión Git exitosa para ${gitRepositoryUrl}.`, data: result });
     } else {
       toast({
         title: 'Error de Conexión Git',
@@ -296,9 +315,9 @@ export function SettingsForm() {
         duration: 7000,
         action: <XCircle className="text-white" />,
       });
+      addDebugLog({ source: 'SETTINGS_FORM', type: 'ERROR', message: `Prueba de conexión Git fallida para ${gitRepositoryUrl}: ${result.message}`, data: result });
     }
   };
-
 
   return (
     <Card className="w-full max-w-2xl mx-auto shadow-lg">
@@ -338,7 +357,7 @@ export function SettingsForm() {
                 )}
               </div>
               
-              {currentProvider && (currentProvider.id === 'lmstudio' || currentProvider.id === 'ollama' || currentProvider.id === 'openai' || currentProvider.id === 'groq' || currentProvider.id === 'anthropic') && (
+              {currentProvider && (currentProvider.id === 'lmstudio' || currentProvider.id === 'ollama' || currentProvider.id === 'openai' || currentProvider.id === 'groq' || currentProvider.id === 'anthropic' || currentProvider.isGoogleGenerativeAICompatible) && (
                 <div className="space-y-2">
                   <Label htmlFor="apiUrl" className="text-foreground">URL del Endpoint de API ({currentProvider.name})</Label>
                   <Input
@@ -357,7 +376,6 @@ export function SettingsForm() {
                   </p>
                 </div>
               )}
-
 
               {currentProvider && currentProvider.requiresApiKey && (
                 <div className="space-y-2">
@@ -516,11 +534,37 @@ export function SettingsForm() {
             </div>
           </div>
 
+          <Separator />
+
+          <div>
+            <h3 className="text-lg font-medium text-primary mb-2 flex items-center gap-2">
+                <Bug className="h-5 w-5" />
+                Modo Depuración
+            </h3>
+            <div className="flex items-center space-x-2">
+                <Switch
+                    id="debug-mode"
+                    checked={watchedDebugMode}
+                    onCheckedChange={(checked) => {
+                        setValue('isDebugModeActive', checked, { shouldDirty: true });
+                        // No es necesario llamar a setIsDebugModeActive aquí, se hará en el submit
+                    }}
+                />
+                <Label htmlFor="debug-mode" className="text-foreground">Activar modo Debug</Label>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+                Muestra una ventana de logs detallados en la parte inferior de la pantalla.
+            </p>
+            {errors.isDebugModeActive && (
+                <p className="text-sm text-destructive">{errors.isDebugModeActive.message}</p>
+            )}
+          </div>
+
         </CardContent>
         <CardFooter>
           <Button 
             type="submit" 
-            disabled={!isDirty} 
+            disabled={!formIsDirty} 
             className="w-full md:w-auto"
           >
             <Save className="mr-2 h-4 w-4" />

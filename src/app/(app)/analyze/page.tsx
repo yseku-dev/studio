@@ -6,23 +6,25 @@ import { CodeAnalysisSection } from '@/components/code-analysis-section';
 import { useToast } from '@/hooks/use-toast';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Label } from '@/components/ui/label';
-import { Settings2 } from 'lucide-react';
+import { useDebug } from '@/contexts/DebugContext';
 
 
 export default function AnalyzePage() {
   const { toast } = useToast();
   const router = useRouter();
+  const { addDebugLog } = useDebug();
+
+  useEffect(() => {
+    addDebugLog({ source: 'ANALYZE_PAGE', type: 'INFO', message: 'Componente AnalyzePage montado.' });
+    return () => {
+      addDebugLog({ source: 'ANALYZE_PAGE', type: 'INFO', message: 'Componente AnalyzePage desmontado.' });
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
 
   const handleSaveSnapshot = (code: string, nameSuffix: string) => {
+    addDebugLog({ source: 'ANALYZE_PAGE', type: 'INFO', message: `Intentando guardar snapshot: ${nameSuffix}`, data: { codeLength: code.length } });
     try {
       const snapshotsRaw = localStorage.getItem('codealchemist_snapshots');
       const snapshots = snapshotsRaw ? JSON.parse(snapshotsRaw) : [];
@@ -39,8 +41,10 @@ export default function AnalyzePage() {
         description: `${newSnapshot.name} ha sido guardada.`,
         action: (<Button onClick={() => router.push('/versions')} variant="outline" size="sm">Ver Versiones</Button>),
       });
+      addDebugLog({ source: 'ANALYZE_PAGE', type: 'INFO', message: 'Snapshot guardado exitosamente.', data: newSnapshot });
     } catch (error) {
       toast({ title: 'Error al Guardar', description: 'No se pudo guardar la versión.', variant: 'destructive' });
+      addDebugLog({ source: 'ANALYZE_PAGE', type: 'ERROR', message: 'Error al guardar snapshot.', data: error });
     }
   };
   
@@ -53,4 +57,3 @@ export default function AnalyzePage() {
     </div>
   );
 }
-

@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork, Trash2, Expand, Minimize, Workflow } from "lucide-react";
+import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork, Trash2, Expand, Minimize, Workflow, Bug } from "lucide-react"; // Added Bug
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion, handleUploadToGit } from './actions';
 import type { AppSourceFile } from './actions';
@@ -51,30 +51,24 @@ import {
 } from '@/config/llm-config';
 import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
 import type { ChatMessage } from '@/services/groq';
+import { useDebug } from '@/contexts/DebugContext';
 
 
 type AutoUpdateStatus = "idle" | "loading_source" | "chunking_source" | "analyzing" | "processing_workgroup_turn" | "success" | "error" | "fixing_error" | "uploading_git" | "fixing_git_error";
 
 type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
 
-
-// Define the type for a single suggestion item from the response
-// Correctly extend the type of an element in the 'suggestions' array
-// The type ProjectAnalysisResponse['suggestions'][number] is equivalent to SuggestionItem
 interface SingleSuggestion extends SuggestionItem {
-  id?: string; // id might not exist initially, make it optional
-  // Fields like 'area', 'suggestion', 'priority', 'suggestedFullFileContent'
-  // are inherited from SuggestionItem and do not need to be re-declared here.
+  id?: string;
+  area: string; 
 }
 
-
 interface SuggestionWithStatus extends SingleSuggestion {
-  id: string; // Ensure id is always present after processing
+  id: string; 
   status: SuggestionStatus;
   errorMessage?: string;
   originalContent?: string;
 }
-
 
 interface AnalysisProgress {
   processed: number;
@@ -88,16 +82,6 @@ interface GitConfig {
   pat: string | null;
 }
 
-type LogEntry = {
-    timestamp: string;
-    type: 'info' | 'agent' | 'error' | 'orchestrator' | 'system' | 'debug';
-    agentName?: string;
-    message: string;
-    llmRequest?: any;
-    llmResponse?: any;
-};
-
-
 export default function AutoUpdatePage() {
   const [status, setStatus] = useState<AutoUpdateStatus>("idle");
   const [analysisResult, setAnalysisResult] = useState<ProjectAnalysisResponse | null>(null);
@@ -109,8 +93,8 @@ export default function AutoUpdatePage() {
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ processed: 0, total: 0 });
   const [autoFixSuggestion, setAutoFixSuggestion] = useState<SuggestErrorFixOutput | null>(null);
   const [isAutoFixModalOpen, setIsAutoFixModalOpen] = useState(false);
-  const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
-  const [logsExpanded, setLogsExpanded] = useState(false);
+  
+  const { addDebugLog } = useDebug();
 
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
@@ -122,10 +106,9 @@ export default function AutoUpdatePage() {
   const MAX_GIT_UPLOAD_RETRIES = 5;
   const [currentGitError, setCurrentGitError] = useState<string | null>(null);
 
-  const [workgroupAnalysisLogs, setWorkgroupAnalysisLogs] = useState<LogEntry[]>([]);
   const workgroupExecutionControllerRef = useRef<AbortController | null>(null);
   const isMountedRef = useRef(false);
-  const [currentWorkgroupTurn, setCurrentWorkgroupTurn] = useState(0); // For workgroup status
+  const [currentWorkgroupTurn, setCurrentWorkgroupTurn] = useState(0); 
   const [workgroupConversationHistory, setWorkgroupConversationHistory] = useState<ChatMessage[]>([]);
 
 
@@ -133,13 +116,14 @@ export default function AutoUpdatePage() {
 
   useEffect(() => {
     isMountedRef.current = true;
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Componente AutoUpdatePage montado.' });
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
     if (storedAgents) {
-      try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing stored agents:", e); setAgents([]); }
+      try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing stored agents:", e); setAgents([]); addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: 'Error al parsear agentes de localStorage.', data: e });}
     }
     const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
     if (storedWorkgroups) {
-      try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); }
+      try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: 'Error al parsear grupos de localStorage.', data: e });}
     }
     setGitConfig({
       repoUrl: localStorage.getItem(LOCALSTORAGE_GIT_REPO_URL_KEY),
@@ -147,15 +131,13 @@ export default function AutoUpdatePage() {
       email: localStorage.getItem(LOCALSTORAGE_GIT_EMAIL_KEY),
       pat: localStorage.getItem(LOCALSTORAGE_GIT_PAT_KEY),
     });
-
-    // Initial log entry
-    const initialClientLog = `[CLIENT ${new Date().toISOString()}] AutoUpdatePage montado.`;
-    setDetailedLogs(prev => [...prev, initialClientLog]);
     
     return () => {
       isMountedRef.current = false;
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Componente AutoUpdatePage desmontado.' });
       if (workgroupExecutionControllerRef.current) {
         workgroupExecutionControllerRef.current.abort();
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'WARN', message: 'Ejecución de grupo abortada en desmontaje.' });
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -178,29 +160,52 @@ export default function AutoUpdatePage() {
       }, {} as LocalStorageSnapshot['apiUrls']),
     });
     setResolvedLlmOptions(options);
-  }, [selectedConfigSource, agents, workgroups]);
-
-  const addDetailedLog = useCallback((message: string, isClientLog: boolean = true) => {
-    if (isMountedRef.current) {
-      const prefix = isClientLog ? `[CLIENT ${new Date().toISOString()}]` : '';
-      setDetailedLogs(prev => [...prev, `${prefix} ${message}`]);
-    }
-  }, []);
+     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'DEBUG', message: `Opciones LLM resueltas para ${selectedConfigSource}`, data: options });
+  }, [selectedConfigSource, agents, workgroups, addDebugLog]);
   
-  const addServerLogs = useCallback((serverLogs: string[] | undefined) => {
+  const addServerLogsToDebug = useCallback((serverLogs: string[] | undefined, sourcePrefix: string = 'SERVER_AUTOUDDATE') => {
     if (isMountedRef.current && serverLogs) {
-        // Server logs already have timestamps and prefixes
-        setDetailedLogs(prev => [...prev, ...serverLogs]);
-    }
-  }, []);
+        serverLogs.forEach(logMsg => {
+            const match = logMsg.match(/^\[(.*?)\s(.*?)\s(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/) || // Matches [SourcePrefix LEVEL TIMESTAMP] Message | Data: JSON
+                          logMsg.match(/^\[(.*?)\s(.*?)]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/) ||       // Matches [SourcePrefix TIMESTAMP] [LEVEL] Message | Data: JSON
+                          logMsg.match(/^\[(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/);             // Matches [TIMESTAMP] [LEVEL] Message | Data: JSON
+            
+            let parsedLog: Omit<DebugLogEntry, 'timestamp'>;
 
+            if (match && match.length >= 5) {
+                let source = sourcePrefix;
+                let type: DebugLogEntry['type'] = 'INFO';
+                let message = '';
+                let dataStr: string | undefined = undefined;
 
-  const addWorkgroupLog = useCallback((logEntry: Omit<LogEntry, 'timestamp'>) => {
-    if (isMountedRef.current) {
-      const timestamp = new Date().toLocaleTimeString('es-ES', { hour12: false });
-      setWorkgroupAnalysisLogs(prev => [...prev, { ...logEntry, timestamp }]);
+                if (match[0].startsWith(`[${sourcePrefix}`)) { // First two patterns
+                    source = match[1]; // Source e.g. "SourceBundle" or "GitUpload"
+                    type = match[3].toUpperCase() as DebugLogEntry['type'];
+                    message = match[4];
+                    dataStr = match[5];
+                } else { // Last pattern
+                     type = match[2].toUpperCase() as DebugLogEntry['type'];
+                     message = match[3];
+                     dataStr = match[4];
+                }
+                
+                let data: any = undefined;
+                if (dataStr) {
+                    try {
+                        data = JSON.parse(dataStr);
+                    } catch {
+                        data = dataStr; // Keep as string if not valid JSON
+                    }
+                }
+                parsedLog = { source, type, message, data };
+            } else {
+                // Fallback for unparsed logs
+                parsedLog = { source: sourcePrefix, type: 'INFO', message: logMsg };
+            }
+            addDebugLog(parsedLog);
+        });
     }
-  }, []);
+  }, [addDebugLog]);
 
 
   const processAnalysisResult = useCallback((data: ProjectAnalysisResponse) => {
@@ -223,29 +228,28 @@ export default function AutoUpdatePage() {
     setSuggestionsWithStatus(initialSuggestions as SuggestionWithStatus[]); 
     setStatus("success");
     toast({ title: "Análisis Completado", description: `Se han generado sugerencias.` });
-    addDetailedLog(`Análisis completado y resultados procesados en UI.`);
-  }, [projectFiles, toast, addDetailedLog]);
-
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Análisis completado y resultados procesados en UI.', data });
+  }, [projectFiles, toast, addDebugLog]);
 
   const runWorkgroupAnalysisTurn = useCallback(async (
     turn: number,
     history: ChatMessage[],
-    signal: AbortSignal,
+    signal: AbortControllerSignal,
     workgroup: WorkgroupConfig,
-    task: string // Task for the workgroup (e.g., concatenated source code + preferences)
+    task: string
   ) => {
     if (!isMountedRef.current || signal.aborted) {
-        addWorkgroupLog({ type: 'system', message: 'Ejecución de análisis de grupo detenida.' });
+        addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'WARN', message: 'Ejecución de análisis de grupo detenida (componente desmontado o señal abortada).'});
         if (status === "processing_workgroup_turn") setStatus("idle"); 
         return;
     }
-    addWorkgroupLog({ type: 'system', message: `Iniciando turno de análisis ${turn}/${MAX_WORKGROUP_TURNS} para el grupo ${workgroup.name}...` });
+    addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'SYSTEM', message: `Iniciando turno de análisis ${turn}/${MAX_WORKGROUP_TURNS} para el grupo ${workgroup.name}...` });
     setCurrentWorkgroupTurn(turn);
     setStatus("processing_workgroup_turn");
 
     const orchestratorAgent = agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME && workgroup.agentIds.includes(a.id));
     if (!orchestratorAgent) {
-        addWorkgroupLog({ type: 'error', message: 'Error crítico: Agente Orquestador no encontrado en el grupo.' });
+        addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'ERROR', message: 'Error crítico: Agente Orquestador no encontrado en el grupo.'});
         setCurrentAnalysisError("Orquestrador no encontrado en el grupo.");
         setStatus("error");
         return;
@@ -267,7 +271,7 @@ export default function AutoUpdatePage() {
 
     const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestratorAgent.id}`, agents, workgroups, localStorageSnapshotForServer);
     if (!orchestratorLlmOptions) {
-        addWorkgroupLog({ type: 'error', message: `Configuración LLM inválida para Orquestrador (${orchestratorAgent.name})`});
+        addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'ERROR', message: `Configuración LLM inválida para Orquestrador (${orchestratorAgent.name})`});
         setCurrentAnalysisError(`Configuración LLM inválida para Orquestrador.`);
         setStatus("error");
         return;
@@ -302,27 +306,14 @@ export default function AutoUpdatePage() {
         localStorageSnapshot: localStorageSnapshotForServer,
     };
 
-    addWorkgroupLog({ type: 'debug', message: `Enviando payload a handleWorkgroupTurn para el turno ${turn}. Tarea (inicio): ${task.substring(0,500)}...`, llmRequest: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
+    addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'DEBUG', message: `Enviando payload a handleWorkgroupTurn para el turno ${turn}. Tarea (inicio): ${task.substring(0,100)}...`, data: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
 
     try {
         const result: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
-        (result.serverLogs || []).forEach(serverLogMsg => {
-             const match = serverLogMsg.match(/^\[(.*?)\] \[(.*?)\] (.*)$/);
-             if (match) {
-                 const [, timestamp, type, messageData] = match;
-                 let message = messageData;
-                 let data;
-                 if(messageData.includes(' | Data: ')) {
-                    [message, data] = messageData.split(' | Data: ');
-                 }
-                 addWorkgroupLog({ timestamp, type: type.toLowerCase() as LogEntry['type'] || 'debug', message, llmResponse: data ? {raw: data} : undefined });
-             } else {
-                 addWorkgroupLog({ type: 'debug', message: `[SERVER] ${serverLogMsg}` });
-             }
-        });
+        addServerLogsToDebug(result.serverLogs, 'SERVER_WORKGROUP_TURN');
 
         if (result.error) {
-            addWorkgroupLog({ type: 'error', message: `Error en servidor (turno ${turn}): ${result.error}` });
+            addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'ERROR', message: `Error en servidor (turno ${turn}): ${result.error}` });
             setCurrentAnalysisError(result.error);
             setStatus("error");
             return;
@@ -331,27 +322,26 @@ export default function AutoUpdatePage() {
         const newHistory = result.updatedHistory || history;
         setWorkgroupConversationHistory(newHistory);
 
-
         if (result.orchestratorDecision) {
             const nextAgentConfig = agents.find(a => a.id === result.orchestratorDecision?.nextAgentId);
-            addWorkgroupLog({ type: 'orchestrator', agentName: orchestratorAgent.name, message: `Decisión: ${result.orchestratorDecision.reason}. Próximo: ${nextAgentConfig?.name || result.orchestratorDecision.nextAgentId}`, llmResponse: {raw: result.orchestratorDecision.rawOutput} });
+            addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'ORCHESTRATOR', agentName: orchestratorAgent.name, message: `Decisión: ${result.orchestratorDecision.reason}. Próximo: ${nextAgentConfig?.name || result.orchestratorDecision.nextAgentId}`, data: {raw: result.orchestratorDecision.rawOutput} });
         }
         if (result.agentResponse) {
             const respondingAgent = agents.find(a => a.id === result.agentResponse?.agentId);
-            addWorkgroupLog({ type: 'agent', agentName: respondingAgent?.name || result.agentResponse.agentId, message: `Respuesta (inicio): ${result.agentResponse.content.substring(0, 500)}...`, llmResponse: {raw: result.agentResponse.rawOutput} });
+            addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'AGENT', agentName: respondingAgent?.name || result.agentResponse.agentId, message: `Respuesta (inicio): ${result.agentResponse.content.substring(0, 100)}...`, data: {raw: result.agentResponse.rawOutput} });
            
             if (result.isComplete || result.orchestratorDecision?.nextAgentId === "COMPLETADO") {
                 try {
                     const finalAnalysis = JSON.parse(result.agentResponse.content) as ProjectAnalysisResponse;
                     if (finalAnalysis && finalAnalysis.analysisTitle && Array.isArray(finalAnalysis.suggestions)) {
                          processAnalysisResult(finalAnalysis);
-                         addWorkgroupLog({ type: 'system', message: `Análisis del grupo de trabajo completado y procesado.`});
+                         addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'SYSTEM', message: `Análisis del grupo de trabajo completado y procesado.`});
                          return; 
                     } else {
                          throw new Error("La respuesta final del agente no tiene el formato ProjectAnalysisResponse esperado.");
                     }
                 } catch (parseError) {
-                    addWorkgroupLog({ type: 'error', message: `Error al parsear la respuesta final del agente como JSON para ProjectAnalysisResponse: ${(parseError as Error).message}. Contenido completo en logs del servidor.`});
+                    addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'ERROR', message: `Error al parsear la respuesta final del agente como JSON para ProjectAnalysisResponse: ${(parseError as Error).message}. Contenido completo en logs del servidor.`});
                     setCurrentAnalysisError("La respuesta final del grupo de trabajo no pudo ser interpretada como un análisis de proyecto válido.");
                     setStatus("error");
                     return;
@@ -360,7 +350,7 @@ export default function AutoUpdatePage() {
         }
 
         if (result.isComplete || turn >= MAX_WORKGROUP_TURNS) {
-            addWorkgroupLog({ type: 'system', message: `Ejecución del análisis de grupo ${result.isComplete ? 'marcada como completada' : 'alcanzó el límite de turnos'}.` });
+            addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'SYSTEM', message: `Ejecución del análisis de grupo ${result.isComplete ? 'marcada como completada' : 'alcanzó el límite de turnos'}.` });
              if (!analysisResult && !(result.agentResponse && result.orchestratorDecision?.nextAgentId === "COMPLETADO")) { 
                 setCurrentAnalysisError("El grupo de trabajo finalizó pero no se obtuvo un resultado de análisis claro.");
                 setStatus("error");
@@ -375,11 +365,12 @@ export default function AutoUpdatePage() {
         }
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Error desconocido en cliente procesando turno de grupo.';
-        addWorkgroupLog({ type: 'error', message: `Error en cliente (turno ${turn}): ${errorMsg}` });
+        addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'ERROR', message: `Error en cliente (turno ${turn}): ${errorMsg}` });
         setCurrentAnalysisError(errorMsg);
         setStatus("error");
     }
-  }, [addWorkgroupLog, agents, workgroups, processAnalysisResult, status]); 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agents, workgroups, processAnalysisResult, status, addDebugLog, addServerLogsToDebug]); 
 
   const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
     const options = resolvedLlmOptions;
@@ -390,6 +381,7 @@ export default function AutoUpdatePage() {
         workgroupForAnalysis = workgroups.find(wg => wg.id === workgroupId);
         if (!workgroupForAnalysis) {
             toast({ title: "Error de Configuración", description: "Grupo de trabajo seleccionado no encontrado.", variant: "destructive" });
+            addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Grupo de trabajo con ID ${workgroupId} no encontrado.` });
             return;
         }
     } else if (!options) {
@@ -398,16 +390,15 @@ export default function AutoUpdatePage() {
             description: `Configuración LLM para '${getSourceName(selectedConfigSource)}' incompleta.`,
             variant: "destructive", duration: 7000,
         });
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Configuración LLM para '${getSourceName(selectedConfigSource)}' incompleta.` });
         return;
     }
 
     if (!isRetry) {
-        setDetailedLogs([]);
-        setWorkgroupAnalysisLogs([]);
-        setWorkgroupConversationHistory([]);
-        setCurrentWorkgroupTurn(0);
+       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Iniciando nuevo Auto-Análisis. Limpiando logs previos.` });
+       // Debug logs are global, don't clear them here unless specifically requested by a debug window clear button
     } else {
-        addDetailedLog("Reintentando análisis...", true);
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: "Reintentando análisis..." });
     }
 
     setStatus("loading_source");
@@ -417,7 +408,7 @@ export default function AutoUpdatePage() {
     setSuggestionsWithStatus([]);
     setAnalysisProgress({ processed: 0, total: 0 });
     setAutoFixSuggestion(null);
-    addDetailedLog("Paso 1: Obteniendo código fuente de la aplicación...", true);
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: "Paso 1: Obteniendo código fuente de la aplicación..."});
 
     toast({
       title: isRetry ? "Reintentando Auto-Análisis" : "Auto-Análisis Iniciado",
@@ -425,25 +416,25 @@ export default function AutoUpdatePage() {
     });
 
     const bundleResult = await getApplicationSourceBundle(workgroupForAnalysis ? true : false);
-    addServerLogs(bundleResult.logsBuilt);
+    addServerLogsToDebug(bundleResult.logsBuilt, 'SERVER_SOURCE_BUNDLE');
 
     if (!bundleResult.success || (!bundleResult.files && !bundleResult.concatenatedSource)) {
       const errorMsg = bundleResult.error || "No se pudo obtener el código fuente para analizar.";
-      addDetailedLog(`Error en Paso 1: ${errorMsg}`, true);
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Error en Paso 1: ${errorMsg}`});
       handleAnalysisError(errorMsg);
       return;
     }
     if (bundleResult.files) setProjectFiles(bundleResult.files);
-    addDetailedLog(`Paso 1 completado. ${bundleResult.files?.length || 'Varios'} archivos obtenidos.`, true);
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Paso 1 completado. ${bundleResult.files?.length || 'Varios'} archivos obtenidos.`});
 
 
     if (workgroupForAnalysis) {
-        addDetailedLog(`Análisis iniciado usando el grupo de trabajo: ${workgroupForAnalysis.name}.`, true);
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Análisis iniciado usando el grupo de trabajo: ${workgroupForAnalysis.name}.`});
         setStatus("processing_workgroup_turn");
         workgroupExecutionControllerRef.current = new AbortController();
 
         if (!bundleResult.concatenatedSource) {
-            addDetailedLog(`Error: No se pudo obtener el código fuente concatenado para el grupo de trabajo.`, true);
+            addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Error: No se pudo obtener el código fuente concatenado para el grupo de trabajo.`});
             setStatus("error");
             setCurrentAnalysisError("Error al obtener código fuente para el grupo.");
             return;
@@ -453,7 +444,7 @@ export default function AutoUpdatePage() {
         await runWorkgroupAnalysisTurn(1, [], workgroupExecutionControllerRef.current.signal, workgroupForAnalysis, taskForWorkgroup);
 
     } else if (options && bundleResult.files) {
-        addDetailedLog(`Paso 2: Enviando ${bundleResult.files.length} archivos al servidor para análisis y fragmentación...`, true);
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Paso 2: Enviando ${bundleResult.files.length} archivos al servidor para análisis y fragmentación...`});
         setStatus("analyzing");
 
         const analysisActionResult = await handleAutoAnalyzeAppSource(
@@ -464,7 +455,7 @@ export default function AutoUpdatePage() {
             options.apiUrl,
             analysisPreferences
         );
-        addServerLogs(analysisActionResult.detailedExecutionLogs);
+        addServerLogsToDebug(analysisActionResult.detailedExecutionLogs, 'SERVER_AUTO_ANALYZE');
         setAnalysisProgress({ processed: analysisActionResult.chunksProcessed || 0, total: analysisActionResult.totalChunks || 0 });
 
         if (analysisActionResult.success && analysisActionResult.data) {
@@ -474,55 +465,58 @@ export default function AutoUpdatePage() {
         }
     } else {
         const errMsg = "Error de lógica interna: No se pudo determinar el flujo de análisis.";
-        addDetailedLog(errMsg, true);
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: errMsg });
         handleAnalysisError(errMsg);
     }
   };
   
   const handleAnalysisError = (errorMsg: string | undefined) => {
     setStatus("error");
-    setCurrentAnalysisError(errorMsg || "Ocurrió un error desconocido durante el auto-análisis.");
+    const finalErrorMsg = errorMsg || "Ocurrió un error desconocido durante el auto-análisis.";
+    setCurrentAnalysisError(finalErrorMsg);
     setCurrentGitError(null);
-    toast({ title: "Error en Auto-Análisis", description: errorMsg || "Ocurrió un error desconocido.", variant: "destructive", duration: 10000 });
-    addDetailedLog(`Error en auto-análisis: ${errorMsg || "Desconocido"}`, true);
+    toast({ title: "Error en Auto-Análisis", description: finalErrorMsg, variant: "destructive", duration: 10000 });
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Error en auto-análisis: ${finalErrorMsg}` });
   };
 
 
   const handleAttemptAutoFix = async (errorToFix?: string | null, errorContext?: string) => {
     const targetError = errorToFix || currentAnalysisError || currentGitError;
     const options = resolvedLlmOptions;
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Intentando auto-corrección.', data: { error: targetError, context: errorContext }});
     if (!options) {
       toast({ title: "Configuración Faltante", description: "La configuración LLM seleccionada está incompleta para Auto-Fix.", variant: "destructive" });
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: 'Auto-corrección fallida: Configuración LLM incompleta.'});
       return;
     }
     if (!targetError) {
       toast({ title: "Información Faltante", description: "No hay error actual para corregir.", variant: "destructive" });
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'WARN', message: 'Auto-corrección solicitada sin error activo.'});
       return;
     }
-    
-    const currentLogs = [...detailedLogs];
-    currentLogs.push(`[CLIENT ${new Date().toISOString()}] Intentando auto-corrección para el error: ${targetError.substring(0, 100)}... con ${options.providerId}`);
-    
+        
     const prevStatus = status;
     let fixingStatus: AutoUpdateStatus = currentGitError ? "fixing_git_error" : "fixing_error";
     setStatus(fixingStatus);
     setAutoFixSuggestion(null);
     toast({ title: "Intentando Auto-Corrección", description: `Consultando a ${options.providerId} para una posible solución...` });
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Consultando a ${options.providerId} para auto-corrección.`});
 
+    const tempLogsForAction: string[] = [];
     const fixResult = await handleGetErrorFixSuggestion(
-      targetError, options.providerId, options.apiKey, options.modelName, options.apiUrl, currentLogs, errorContext
+      targetError, options.providerId, options.apiKey, options.modelName, options.apiUrl, tempLogsForAction, errorContext
     );
-    addServerLogs(fixResult.data?.solution_suggestions ? [fixResult.data.solution_suggestions] : fixResult.error ? [fixResult.error] : []);
+    addServerLogsToDebug(tempLogsForAction, 'SERVER_ERROR_FIX');
 
 
     if (fixResult.success && fixResult.data) {
       setAutoFixSuggestion(fixResult.data);
       setIsAutoFixModalOpen(true);
       toast({ title: "Sugerencia de Corrección Recibida", description: `La IA (${options.providerId}) ha proporcionado una sugerencia.` });
-      addDetailedLog(`Sugerencia de corrección recibida de la IA.`, true);
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Sugerencia de corrección recibida de la IA.`, data: fixResult.data });
     } else {
       toast({ title: "Error en Auto-Corrección", description: fixResult.error || `No se pudo obtener sugerencia.`, variant: "destructive" });
-      addDetailedLog(`Error al obtener sugerencia de corrección: ${fixResult.error || "Desconocido"}`, true);
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Error al obtener sugerencia de corrección: ${fixResult.error || "Desconocido"}`, data: fixResult });
     }
     setStatus(prevStatus === "fixing_error" || prevStatus === "fixing_git_error" 
         ? (currentAnalysisError || currentGitError ? "error" : (analysisResult ? "success" : "idle")) 
@@ -530,40 +524,39 @@ export default function AutoUpdatePage() {
   };
 
   const handleApplySuggestion = async (suggestionId: string) => {
-    const currentLogsCopy = [...detailedLogs];
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Intentando aplicar sugerencia ID: ${suggestionId}`});
     const suggestionIndex = suggestionsWithStatus.findIndex(s => s.id === suggestionId);
     if (suggestionIndex === -1) {
-      currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] No se encontró la sugerencia con ID: ${suggestionId}`);
-      setDetailedLogs(currentLogsCopy);
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `No se encontró la sugerencia con ID: ${suggestionId}`});
       return;
     }
     const suggestionToApply = suggestionsWithStatus[suggestionIndex];
-    currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Iniciando aplicación de sugerencia a: ${suggestionToApply.area || 'área desconocida'}`);
-
+    
     if (!suggestionToApply.area || !suggestionToApply.originalContent || !suggestionToApply.suggestedFullFileContent) {
       const missingField = !suggestionToApply.area ? "nombre de archivo" : !suggestionToApply.originalContent ? "contenido original" : "contenido sugerido";
       toast({ title: "Error de Aplicación", description: `Falta ${missingField} para ${suggestionToApply.area || 'esta sugerencia'}.`, variant: "destructive" });
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? { ...s, status: "error_applying", errorMessage: `Falta ${missingField}.` } : s));
-      currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Falta ${missingField} para sugerencia ID: ${suggestionId}`);
-      setDetailedLogs(currentLogsCopy);
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Falta ${missingField} para sugerencia ID: ${suggestionId}`});
       return;
     }
 
     setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? { ...s, status: "applying" } : s));
     toast({ title: "Aplicando Sugerencia...", description: `Aplicando cambio a ${suggestionToApply.area}` });
-    currentLogsCopy.push(`[CLIENT ${new Date().toISOString()}] Estado: 'applying'. Llamando a applySuggestedChange para ${suggestionToApply.area}.`);
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Estado: 'applying'. Llamando a applySuggestedChange para ${suggestionToApply.area}.`});
 
     const baseFilePath = suggestionToApply.area.includes(" (parte ") ? suggestionToApply.area.split(" (parte ")[0] : suggestionToApply.area;
-    const result = await applySuggestedChange(baseFilePath, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent, currentLogsCopy);
+    const tempLogsForAction: string[] = [];
+    const result = await applySuggestedChange(baseFilePath, suggestionToApply.originalContent, suggestionToApply.suggestedFullFileContent, tempLogsForAction);
+    addServerLogsToDebug(tempLogsForAction, 'SERVER_APPLY_SUGGESTION');
 
     if (result.success && result.newContent !== undefined) {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? { ...s, status: "applied", originalContent: result.newContent! } : s));
       toast({ title: "Sugerencia Aplicada", description: `El cambio para ${baseFilePath} se ha aplicado.` });
-      currentLogsCopy.push(`[CLIENT SUCCESS ${new Date().toISOString()}] Sugerencia aplicada a ${baseFilePath}.`);
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Sugerencia aplicada a ${baseFilePath}.`, data: { newContentLength: result.newContent.length } });
       setProjectFiles(prevFiles => (prevFiles || []).map(pf => {
         const normalizePath = (p: string) => p.replace(/^\.\//, '').replace(/^src\//, '');
         if (normalizePath(pf.fileName.toLowerCase()) === normalizePath(baseFilePath.toLowerCase())) {
-          currentLogsCopy.push(`[CLIENT DETAIL ${new Date().toISOString()}] Actualizando contenido en projectFiles para ${pf.fileName}.`);
+          addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'DEBUG', message: `Actualizando contenido en projectFiles para ${pf.fileName}.`});
           return { ...pf, content: result.newContent! };
         }
         return pf;
@@ -571,48 +564,28 @@ export default function AutoUpdatePage() {
     } else {
       setSuggestionsWithStatus(prev => prev.map(s => s.id === suggestionId ? { ...s, status: "error_applying", errorMessage: result.error } : s));
       toast({ title: "Error al Aplicar", description: result.error || `No se pudo aplicar el cambio a ${baseFilePath}.`, variant: "destructive" });
-      currentLogsCopy.push(`[CLIENT ERROR ${new Date().toISOString()}] Error al aplicar sugerencia a ${baseFilePath}: ${result.error}`);
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Error al aplicar sugerencia a ${baseFilePath}: ${result.error}`});
     }
-    addServerLogs(result.error ? [result.error] : []);
-    setDetailedLogs(currentLogsCopy);
   };
-
-  const handleCopyLogsToClipboard = (logContent: string[] | string | undefined) => {
-    if (!logContent) return;
-    const textToCopy = Array.isArray(logContent) ? logContent.join('\n') : logContent;
-    navigator.clipboard.writeText(textToCopy)
-      .then(() => toast({ title: 'Copiado', description: 'El contenido ha sido copiado al portapapeles.' }))
-      .catch(err => {
-        console.error('Error al copiar:', err);
-        toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el contenido.', variant: 'destructive' });
-      });
-  };
-  const handleClearLogs = () => {
-    setDetailedLogs(["[CLIENT INFO] Logs borrados por el usuario."]);
-    setWorkgroupAnalysisLogs([]);
-    toast({ title: "Logs Borrados", description: "Los logs de ejecución han sido borrados." });
-  };
-  const handleToggleLogsExpansion = () => setLogsExpanded(prev => !prev);
 
  const handleDownloadSource = async (format: 'zip' | 'json' = 'zip') => {
     setIsDownloading(true);
-    let currentLogsCopy = [...detailedLogs];
-    addDetailedLog(`Iniciando preparación para descarga de código fuente en formato ${format.toUpperCase()}.`, true);
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Iniciando preparación para descarga de código fuente en formato ${format.toUpperCase()}.`});
     toast({ title: "Preparando Descarga", description: `Recopilando archivos fuente para formato ${format.toUpperCase()}...` });
 
-    addDetailedLog(`Obteniendo el paquete de código fuente más reciente para la descarga...`, true);
-    const bundleResult = await getApplicationSourceBundle(false);
-    addServerLogs(bundleResult.logsBuilt);
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Obteniendo el paquete de código fuente más reciente para la descarga...`});
+    const tempLogsForBundle: string[] = [];
+    const bundleResult = await getApplicationSourceBundle(false, tempLogsForBundle); // false for individual files for ZIP
+    addServerLogsToDebug(tempLogsForBundle, 'SERVER_DOWNLOAD_BUNDLE');
 
     let filesToProcess: AppSourceFile[] = [];
     if (bundleResult.success && bundleResult.files) {
       filesToProcess = bundleResult.files;
-      // setProjectFiles(filesToProcess); // No need to set projectFiles here, it's just for download
-      addDetailedLog(`Paquete de código fuente más reciente obtenido con ${filesToProcess.length} archivos.`, true);
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Paquete de código fuente más reciente obtenido con ${filesToProcess.length} archivos.`});
     } else {
       toast({ title: "Error al Obtener Código", description: bundleResult.error || "No se pudo obtener el código fuente actualizado.", variant: "destructive" });
       setIsDownloading(false);
-      addDetailedLog(`Error al obtener código para ${format.toUpperCase()}: ${bundleResult.error}`, true);
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Error al obtener código para ${format.toUpperCase()}: ${bundleResult.error}`});
       return;
     }
 
@@ -626,9 +599,8 @@ export default function AutoUpdatePage() {
           filesToProcess.forEach(file => {
             if (file.fileName && file.fileName.trim() !== "" && !file.content.startsWith("// Archivo binario") && !file.content.startsWith("// Error:")) {
               zip.file(file.fileName, file.content);
-              currentLogsCopy.push(`[CLIENT DETAIL ${new Date().toISOString()}] Añadido al ZIP: ${file.fileName}`);
             } else {
-              currentLogsCopy.push(`[CLIENT WARN ${new Date().toISOString()}] Omitido en ZIP (nombre vacío, binario o error): ${file.fileName}`);
+              addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'WARN', message: `Omitido en ZIP (nombre vacío, binario o error): ${file.fileName}`});
             }
           });
           blob = await zip.generateAsync({ type: "blob" });
@@ -648,24 +620,24 @@ export default function AutoUpdatePage() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         toast({ title: "Descarga Iniciada", description: `El paquete de código fuente (${format.toUpperCase()}) se está descargando.` });
-        addDetailedLog(`Descarga ${format.toUpperCase()} iniciada.`, true);
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Descarga ${format.toUpperCase()} iniciada.`});
       } catch (e) {
         const error = e instanceof Error ? e.message : "Error desconocido";
         toast({ title: `Error al Crear Descarga ${format.toUpperCase()}`, description: `No se pudo crear el archivo ${format.toUpperCase()}: ${error}`, variant: "destructive" });
-        addDetailedLog(`Error al crear ${format.toUpperCase()}: ${error}`, true);
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Error al crear ${format.toUpperCase()}: ${error}`});
       }
     } else {
       toast({ title: "Error al Obtener Código", description: "No se encontraron archivos para empaquetar.", variant: "destructive" });
-      addDetailedLog(`Error: No se encontraron archivos para ${format.toUpperCase()}.`, true);
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Error: No se encontraron archivos para ${format.toUpperCase()}.`});
     }
     setIsDownloading(false);
-    setDetailedLogs(currentLogsCopy);
   };
 
   const performGitUpload = async (isRetry: boolean = false) => {
     const { repoUrl, username, email, pat } = gitConfig;
     if (!repoUrl || !username || !email || !pat) {
       toast({ title: "Configuración Git Incompleta", description: "Completa la configuración en Ajustes.", variant: "destructive" });
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: 'Subida a Git fallida: Configuración incompleta.'});
       setStatus(analysisResult ? "success" : "idle");
       return;
     }
@@ -677,14 +649,16 @@ export default function AutoUpdatePage() {
     if (isRetry) setGitUploadRetryCount(attemptNumber);
     
     const commitMsg = `CodeAlchemist: AutoUpdate Sync (Attempt ${attemptNumber} - ${new Date().toISOString()})`;
-    addDetailedLog(`${isRetry ? `Reintentando (${attemptNumber}/${MAX_GIT_UPLOAD_RETRIES})` : 'Iniciando'} subida a Git...`, true);
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `${isRetry ? `Reintentando (${attemptNumber}/${MAX_GIT_UPLOAD_RETRIES})` : 'Iniciando'} subida a Git...`, data: { repoUrl, commitMsg }});
     toast({ title: `${isRetry ? `Reintentando Subida Git (${attemptNumber})` : "Subiendo a Git..."}`, description: `Intentando subir a ${repoUrl.split('/').pop()?.replace('.git', ' ')}` });
 
-    const result = await handleUploadToGit({ repoUrl, username, email, pat }, commitMsg);
-    addServerLogs(result.logs);
+    const tempLogsForAction: string[] = [];
+    const result = await handleUploadToGit({ repoUrl, username, email, pat }, commitMsg, tempLogsForAction);
+    addServerLogsToDebug(tempLogsForAction, 'SERVER_GIT_UPLOAD');
 
     if (result.success) {
       toast({ title: "Subida a Git Exitosa", description: result.message, duration: 7000 });
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Subida a Git exitosa.', data: result });
       setGitUploadRetryCount(0);
       setStatus(analysisResult ? "success" : "idle");
     } else {
@@ -699,6 +673,7 @@ export default function AutoUpdatePage() {
           </Button>
         ) : undefined
       });
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Error en subida a Git: ${result.message}`, data: result });
       setStatus("error");
     }
   };
@@ -720,9 +695,8 @@ export default function AutoUpdatePage() {
   const isProcessing = ["analyzing", "loading_source", "chunking_source", "fixing_error", "uploading_git", "fixing_git_error", "processing_workgroup_turn"].includes(status);
   const isGitConfigured = gitConfig.repoUrl && gitConfig.username && gitConfig.email && gitConfig.pat;
 
-
   return (
-    <> {/* Added Fragment */}
+    <>
       <div className="flex flex-col gap-6">
       <Card className="shadow-lg">
         <CardHeader>
@@ -808,42 +782,7 @@ export default function AutoUpdatePage() {
               } className="w-full h-3" />
             </div>
           )}
-           {(detailedLogs.length > 0 || workgroupAnalysisLogs.length > 0) && (
-             <Card className="mt-6 border-primary/30">
-                <CardHeader className="pb-2 flex flex-row items-center justify-between">
-                  <CardTitle className="text-lg flex items-center gap-2 text-primary"><ListOrdered className="h-5 w-5" /> Logs de Ejecución</CardTitle>
-                  <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="icon" onClick={handleToggleLogsExpansion} title={logsExpanded ? "Contraer Logs" : "Expandir Logs"}>
-                        {logsExpanded ? <Minimize className="h-4 w-4" /> : <Expand className="h-4 w-4" />}
-                    </Button>
-                    <Button variant="ghost" size="icon" onClick={handleClearLogs} title="Borrar Logs"><Trash2 className="h-4 w-4 text-destructive" /></Button>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <ScrollArea className={cn("p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out", logsExpanded ? "h-[500px]" : "h-[250px]")}>
-                    <pre className="text-xs text-foreground whitespace-pre-wrap">
-                      {detailedLogs.map((log, index) => (
-                        <span key={`detail-${index}`} className={log.includes("[ERROR") || log.includes("Error:") || log.includes("Falló") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-600 dark:text-yellow-400" : log.includes("[CLIENT") ? "text-muted-foreground" : ""}>{log}\n</span>
-                      ))}
-                      {workgroupAnalysisLogs.length > 0 && <Separator className="my-2" />}
-                      {workgroupAnalysisLogs.map((log, index) => (
-                        <div key={`wg-${index}`} className={cn("mb-1 p-0.5 rounded-sm", log.type === 'orchestrator' && "bg-accent/10", log.type === 'agent' && "bg-primary/5", log.type === 'error' && "bg-destructive/10 text-destructive", log.type === 'system' && "bg-muted/50 italic", log.type === 'debug' && "opacity-60")}>
-                          <span className="font-mono text-muted-foreground mr-1">{log.timestamp}</span>
-                          <span className={cn("font-semibold", log.type === 'orchestrator' && "text-accent", log.type === 'agent' && "text-primary", log.type === 'error' && "text-destructive", log.type === 'system' && "text-muted-foreground")}>
-                            {log.type.toUpperCase()}{log.agentName ? ` (${log.agentName})` : ''}:
-                          </span>
-                          <span className="ml-1">{log.message}</span>
-                        </div>
-                      ))}
-                    </pre>
-                  </ScrollArea>
-                  <Button variant="outline" size="sm" onClick={() => handleCopyLogsToClipboard([...detailedLogs, ...workgroupAnalysisLogs.map(l => `[${l.timestamp}] [WG-${l.type.toUpperCase()}] ${l.agentName ? `(${l.agentName}) ` : ''}${l.message}`)].join('\n'))} className="mt-2 text-foreground">
-                    <Copy className="mr-2 h-4 w-4" /> Copiar Logs
-                  </Button>
-                </CardContent>
-             </Card>
-           )}
-
+          
           {analysisResult && status === "success" && (
             <Card className="mt-6 border-accent bg-accent/5">
               <CardHeader className="pb-3">
@@ -882,7 +821,7 @@ export default function AutoUpdatePage() {
                             {s.status === "error_applying" && s.errorMessage && (
                               <div className="p-2 my-1 bg-destructive/10 border border-destructive/30 rounded-md">
                                 <p className="text-xs text-destructive ">Error al aplicar: {s.errorMessage}</p>
-                                <Button variant="ghost" size="sm" onClick={() => handleCopyLogsToClipboard(s.errorMessage)} className="mt-1 h-6 px-1.5 text-xs text-destructive hover:bg-destructive/20"><Copy className="mr-1 h-3 w-3" /> Copiar Error</Button>
+                                <Button variant="ghost" size="sm" onClick={() => addDebugLog({ source: 'AUTOUPDATE_UI', type: 'ERROR', message: `Error copiado de sugerencia ${s.id}`, data: s.errorMessage})} className="mt-1 h-6 px-1.5 text-xs text-destructive hover:bg-destructive/20"><Copy className="mr-1 h-3 w-3" /> Copiar Error</Button>
                               </div>
                             )}
                             {s.status === "not_applicable" && <p className="text-xs text-muted-foreground mt-1 mb-1">No aplicable directamente. {s.suggestedFullFileContent === undefined ? 'No se proporcionó contenido modificado.' : !s.originalContent ? 'Falta contenido original.' : ''}</p>}
@@ -944,7 +883,7 @@ export default function AutoUpdatePage() {
                 <p className="text-destructive font-medium">Ocurrió un error:</p>
                 <ScrollArea className="h-[100px] p-2 border border-destructive/30 rounded bg-background/50"><pre className="text-xs text-foreground whitespace-pre-wrap">{currentAnalysisError || currentGitError}</pre></ScrollArea>
                 <div className="flex gap-2 mt-2">
-                  <Button variant="outline" size="sm" onClick={() => handleCopyLogsToClipboard(currentAnalysisError || currentGitError)} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground"><Copy className="mr-2 h-4 w-4" /> Copiar Error</Button>
+                  <Button variant="outline" size="sm" onClick={() => addDebugLog({ source: 'AUTOUPDATE_UI', type: 'ERROR', message: `Error copiado de UI: ${currentAnalysisError || currentGitError}`})} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground"><Copy className="mr-2 h-4 w-4" /> Copiar Error</Button>
                   <Button variant="outline" size="sm" onClick={() => handleAttemptAutoFix(currentAnalysisError || currentGitError, currentGitError ? "Error en subida Git." : "Error en auto-análisis.")}
                     disabled={status === "fixing_error" || status === "fixing_git_error" || (!resolvedLlmOptions && !selectedConfigSource.startsWith("workgroup:"))} 
                     className="text-accent border-accent/50 hover:bg-accent/20 hover:text-accent-foreground">
@@ -996,4 +935,3 @@ export default function AutoUpdatePage() {
     </>
   );
 }
-

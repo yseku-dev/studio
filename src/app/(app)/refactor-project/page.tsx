@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from '@/hooks/use-toast';
-import { GitPullRequestDraft, UploadCloud, GitFork, Loader2, Wand2, Settings2, AlertTriangle, Copy, Trash2, ListOrdered, Eye, CheckCircle, XCircle, Minimize, Expand } from "lucide-react";
+import { GitPullRequestDraft, UploadCloud, GitFork, Loader2, Wand2, Settings2, AlertTriangle, Copy, Trash2, ListOrdered, Eye, CheckCircle, XCircle, Minimize, Expand, Bug } from "lucide-react"; // Added Bug
 import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
 import type { LLMOptions } from '@/services/groq';
@@ -30,6 +30,7 @@ import { LLM_PROVIDERS, LOCALSTORAGE_PROVIDER_ID_KEY, getLocalStorageApiKeyName,
 import { handleGetRefactoringSuggestions, handleApplyRefactoringSuggestion, type HandleGetRefactoringSuggestionsPayload } from './actions';
 import { cn } from '@/lib/utils';
 import { Badge } from '@/components/ui/badge'; 
+import { useDebug } from '@/contexts/DebugContext';
 
 const refactorParamsSchema = z.object({
   goals: z.string().optional(),
@@ -65,8 +66,8 @@ export default function RefactorProjectPage() {
   const [analysisStatus, setAnalysisStatus] = useState<'idle' | 'loading' | 'analyzing' | 'success' | 'error'>("idle");
   const [suggestions, setSuggestions] = useState<RefactoringSuggestion[]>([]);
   const [currentError, setCurrentError] = useState<string | null>(null);
-  const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
-  const [logsExpanded, setLogsExpanded] = useState(false);
+  
+  const { addDebugLog } = useDebug();
   const isMountedRef = useRef(false);
 
   const [agents, setAgents] = useState<AgentConfig[]>([]);
@@ -88,34 +89,45 @@ export default function RefactorProjectPage() {
 
   useEffect(() => {
     isMountedRef.current = true;
-    return () => { isMountedRef.current = false; };
+    addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: 'Componente RefactorProjectPage montado.' });
+    return () => { 
+      isMountedRef.current = false; 
+      addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: 'Componente RefactorProjectPage desmontado.' });
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const addLog = useCallback((message: string, isClientLog: boolean = true) => {
-    if (isMountedRef.current) {
-      const prefix = isClientLog ? `[CLIENT ${new Date().toISOString()}]` : '';
-      setDetailedLogs(prev => [...prev, `${prefix} ${message}`]);
-    }
-  }, []);
-
-  const addServerLogs = useCallback((serverLogs: string[] | undefined) => {
+  const addServerLogsToDebug = useCallback((serverLogs: string[] | undefined, sourcePrefix: string = 'SERVER_REFACTOR') => {
     if (isMountedRef.current && serverLogs) {
-        setDetailedLogs(prev => [...prev, ...serverLogs]);
+        serverLogs.forEach(logMsg => {
+            const match = logMsg.match(/^\[(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/);
+            if (match) {
+                const [, timestamp, type, message, dataStr] = match;
+                let data: any = undefined;
+                if (dataStr) {
+                    try { data = JSON.parse(dataStr); } catch { data = dataStr; }
+                }
+                addDebugLog({ source: sourcePrefix, type: type.toUpperCase() as any, message, data });
+            } else {
+                addDebugLog({ source: sourcePrefix, type: 'INFO', message: logMsg });
+            }
+        });
     }
-  }, []);
+  }, [addDebugLog]);
 
   useEffect(() => {
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
-    if (storedAgents) try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing agents", e); }
+    if (storedAgents) try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing agents", e); addDebugLog({source: 'REFACTOR_PROJECT_PAGE', type: 'ERROR', message: 'Error al parsear agentes de localStorage.', data: e}); }
     const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
-    if (storedWorkgroups) try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing workgroups", e); }
+    if (storedWorkgroups) try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing workgroups", e); addDebugLog({source: 'REFACTOR_PROJECT_PAGE', type: 'ERROR', message: 'Error al parsear grupos de localStorage.', data: e}); }
     fileForm.setValue('configSource', 'global');
-  }, [fileForm]);
+  }, [fileForm, addDebugLog]);
 
   useEffect(() => {
     const options = resolveLlmOptionsForSource(watchedConfigSource, agents, workgroups);
     setResolvedLlmOptions(options);
-  }, [watchedConfigSource, agents, workgroups]);
+    addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'DEBUG', message: `Opciones LLM resueltas para ${watchedConfigSource}`, data: options });
+  }, [watchedConfigSource, agents, workgroups, addDebugLog]);
   
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -127,10 +139,12 @@ export default function RefactorProjectPage() {
         fileForm.setValue('projectFile', file);
         fileForm.clearErrors('projectFile');
         toast({ title: "Archivo Seleccionado", description: file.name });
+        addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Archivo seleccionado: ${file.name}`});
       } else {
         toast({ title: "Tipo de Archivo Inválido", description: "Por favor, selecciona un archivo .zip, .json o de texto.", variant: "destructive" });
         fileForm.setValue('projectFile', undefined);
         event.target.value = '';
+        addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'WARN', message: `Intento de carga de archivo inválido: ${file.name}`});
       }
     }
   };
@@ -140,8 +154,7 @@ export default function RefactorProjectPage() {
     setAnalysisStatus("loading");
     setCurrentError(null);
     setSuggestions([]);
-    setDetailedLogs([]); 
-    addLog("Iniciando análisis de refactorización...");
+    addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: 'Iniciando análisis de refactorización...', data: { file: data.projectFile?.name, url: data.gitUrl, params }});
 
     const file = data.projectFile;
     let projectFileContent: string | undefined;
@@ -151,34 +164,34 @@ export default function RefactorProjectPage() {
     if (file) {
       projectFileName = file.name;
       projectFileType = file.type;
-      addLog(`Procesando archivo: ${projectFileName} (Tipo: ${projectFileType || 'desconocido'})`);
+      addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Procesando archivo: ${projectFileName} (Tipo: ${projectFileType || 'desconocido'})`});
       try {
         if (file.type === 'application/json' || file.type.startsWith('text/')) {
             projectFileContent = await file.text();
-            addLog(`Contenido de archivo de texto/JSON leído. Tamaño: ${projectFileContent.length} bytes.`);
+            addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'DEBUG', message: `Contenido de archivo de texto/JSON leído. Tamaño: ${projectFileContent.length} bytes.`});
         } else if (file.type === 'application/zip' || file.name.endsWith('.zip')) {
-            addLog(`Archivo ZIP (${file.name}) seleccionado. Se enviará como string base64 (simulado) o se procesará en servidor.`);
-            projectFileContent = `Contenido_ZIP_Placeholder_Nombre:${file.name}_Tipo:${file.type}`;
-            addLog(`Contenido ZIP (placeholder) preparado. Longitud: ${projectFileContent.length}`);
+            addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Archivo ZIP (${file.name}) seleccionado. Se enviará como string base64 (simulado) o se procesará en servidor.`});
+            projectFileContent = `Contenido_ZIP_Placeholder_Nombre:${file.name}_Tipo:${file.type}`; // Placeholder
+            addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'DEBUG', message: `Contenido ZIP (placeholder) preparado. Longitud: ${projectFileContent.length}`});
         } else {
             toast({ title: "Error de Archivo", description: `No se puede procesar el contenido de '${file.name}' como texto o ZIP estándar.`, variant: "destructive" });
             setAnalysisStatus("idle");
-            addLog(`Error: Tipo de archivo no soportado para lectura de contenido: ${file.name}`);
+            addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'ERROR', message: `Error: Tipo de archivo no soportado para lectura de contenido: ${file.name}`});
             return;
         }
       } catch (e) {
         toast({ title: "Error de Lectura", description: "No se pudo leer el contenido del archivo.", variant: "destructive" });
         setAnalysisStatus("idle");
-        addLog(`Error leyendo archivo ${file.name}: ${(e as Error).message}`);
+        addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'ERROR', message: `Error leyendo archivo ${file.name}: ${(e as Error).message}`});
         return;
       }
     } else if (data.gitUrl) {
-        addLog(`Usando URL de Git: ${data.gitUrl} (Extracción de contenido es simulada).`);
+        addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Usando URL de Git: ${data.gitUrl} (Extracción de contenido es simulada).`});
     }
     
     let snapshot: LocalStorageSnapshot | undefined = undefined;
     if (data.configSource.startsWith('workgroup:')) {
-      addLog(`Usando grupo de trabajo. Recopilando snapshot de localStorage...`);
+      addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'DEBUG', message: `Usando grupo de trabajo. Recopilando snapshot de localStorage...`});
       snapshot = {
         [LOCALSTORAGE_PROVIDER_ID_KEY]: localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null,
         apiKeys: {},
@@ -190,16 +203,15 @@ export default function RefactorProjectPage() {
         snapshot!.modelNames[provider.id] = localStorage.getItem(getLocalStorageModelName(provider.id));
         snapshot!.apiUrls[provider.id] = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
       });
-      addLog(`Snapshot de localStorage recopilado para grupo de trabajo.`);
+      addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'DEBUG', message: `Snapshot de localStorage recopilado para grupo de trabajo.`});
     } else if (resolvedLlmOptions) {
-        addLog(`Usando configuración LLM directa: ${resolvedLlmOptions.providerId} - ${resolvedLlmOptions.modelName}`);
+        addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Usando configuración LLM directa: ${resolvedLlmOptions.providerId} - ${resolvedLlmOptions.modelName}`});
     } else {
-        addLog(`Error: No se pudo resolver la configuración LLM para ${data.configSource}.`);
+        addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'ERROR', message: `Error: No se pudo resolver la configuración LLM para ${data.configSource}.`});
         toast({ title: "Error de Configuración", description: `No se pudo resolver la configuración LLM para ${getSourceName(data.configSource)}.`, variant: "destructive"});
         setAnalysisStatus("idle");
         return;
     }
-
 
     const actionPayload: HandleGetRefactoringSuggestionsPayload = {
       projectFileContent,
@@ -216,32 +228,32 @@ export default function RefactorProjectPage() {
     };
     
     setAnalysisStatus("analyzing");
-    addLog(`Enviando solicitud de análisis al servidor...`);
+    addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Enviando solicitud de análisis al servidor...`});
     const result = await handleGetRefactoringSuggestions(actionPayload);
-    addServerLogs(result.workgroupLogs);
+    addServerLogsToDebug(result.workgroupLogs, 'SERVER_WG_REFACTOR');
 
     if (result.success && result.data) {
       setSuggestions(result.data.map(s => ({...s, id: crypto.randomUUID(), status: 'pending'})));
       setAnalysisStatus("success");
       toast({ title: "Análisis Completado", description: `Sugerencias de refactorización generadas (${result.data.length}).` });
-      addLog(`Análisis completado. ${result.data.length} sugerencias recibidas.`);
+      addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Análisis completado. ${result.data.length} sugerencias recibidas.`});
     } else {
       setCurrentError(result.error || "Error desconocido durante el análisis.");
       setAnalysisStatus("error");
       toast({ title: "Error de Análisis", description: result.error || "No se pudieron generar sugerencias.", variant: "destructive", duration: 7000 });
-      addLog(`Error en el análisis: ${result.error || "Desconocido"}`);
+      addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'ERROR', message: `Error en el análisis: ${result.error || "Desconocido"}`, data: result});
     }
   };
 
   const handleApplySuggestion = async (suggestionId: string) => {
-    addLog(`Intentando aplicar sugerencia: ${suggestionId}`);
+    addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Intentando aplicar sugerencia: ${suggestionId}`});
     const suggestion = suggestions.find(s => s.id === suggestionId);
     if (!suggestion) {
-        addLog(`Error: Sugerencia con ID ${suggestionId} no encontrada.`);
+        addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'ERROR', message: `Error: Sugerencia con ID ${suggestionId} no encontrada.`});
         return;
     }
     if (!suggestion.area || !suggestion.suggestedSnippet) {
-        addLog(`Error: Sugerencia ${suggestionId} (${suggestion.area}) no tiene contenido sugerido para aplicar.`);
+        addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'WARN', message: `Sugerencia ${suggestionId} (${suggestion.area}) no tiene contenido sugerido para aplicar.`});
         toast({title: "No Aplicable", description: "Esta sugerencia no tiene un cambio de código directo para aplicar.", variant: "default"});
         setSuggestions(prev => prev.map(s => s.id === suggestionId ? {...s, status: 'error', errorMessage: 'Sin contenido para aplicar.'} : s));
         return;
@@ -249,17 +261,17 @@ export default function RefactorProjectPage() {
     toast({title: "Aplicando Sugerencia (Simulado)", description: `Aplicando cambios para ${suggestion.area}. La funcionalidad real de modificación de archivos está pendiente.`});
     await new Promise(resolve => setTimeout(resolve, 700)); 
     setSuggestions(prev => prev.map(s => s.id === suggestionId ? {...s, status: 'applied'} : s));
-    addLog(`Sugerencia ${suggestionId} marcada como aplicada (simulado).`);
+    addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Sugerencia ${suggestionId} marcada como aplicada (simulado).`});
   };
 
   const handleDismissSuggestion = (suggestionId: string) => {
-    addLog(`Descartando sugerencia: ${suggestionId}`);
+    addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Descartando sugerencia: ${suggestionId}`});
     setSuggestions(prev => prev.map(s => s.id === suggestionId ? {...s, status: 'dismissed'} : s));
     toast({title: "Sugerencia Descartada"});
   };
   
   const handleApplyAllSuggestions = async () => {
-    addLog("Intentando aplicar todas las sugerencias pendientes (simulado)...");
+    addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: "Intentando aplicar todas las sugerencias pendientes (simulado)..."});
     toast({ title: "Aplicando Todas (Simulado)", description: "Se están aplicando todas las sugerencias. La funcionalidad real está pendiente." });
     await new Promise(resolve => setTimeout(resolve, 1000)); 
     let appliedCount = 0;
@@ -271,12 +283,11 @@ export default function RefactorProjectPage() {
         return s;
     }));
     toast({ title: "Todas las Sugerencias Aplicadas (Simulado)", description: `${appliedCount} sugerencias marcadas como aplicadas.` });
-    addLog(`${appliedCount} sugerencias marcadas como aplicadas (simulado).`);
+    addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `${appliedCount} sugerencias marcadas como aplicadas (simulado).`});
   };
 
-
   const getSourceName = (sourceId: string): string => {
-    if (sourceId === 'global') return 'Agente Refactorizador (Config. Global)';
+    if (sourceId === 'global') return `Agente ${REFACTOR_AGENT_NAME} (Config. Global)`;
     const agentPrefix = "agent:";
     const workgroupPrefix = "workgroup:";
 
@@ -298,23 +309,6 @@ export default function RefactorProjectPage() {
   const canSubmit = isProcessing || 
                     (!formValues.projectFile && !formValues.gitUrl) || 
                     (!resolvedLlmOptions && !watchedConfigSource.startsWith("workgroup:"));
-
-  const handleCopyLogsToClipboard = (logContent: string[] | string | undefined) => {
-    if (!logContent) return;
-    const textToCopy = Array.isArray(logContent) ? logContent.join('\n') : logContent;
-    navigator.clipboard.writeText(textToCopy)
-      .then(() => toast({ title: 'Copiado', description: 'El contenido ha sido copiado al portapapeles.' }))
-      .catch(err => {
-        console.error('Error al copiar:', err);
-        toast({ title: 'Fallo al Copiar', description: 'No se pudo copiar el contenido.', variant: 'destructive' });
-      });
-  };
-  const handleClearLogs = () => {
-    setDetailedLogs(["[CLIENT INFO] Logs borrados por el usuario."]);
-    toast({ title: "Logs Borrados", description: "Los logs de ejecución han sido borrados." });
-  };
-  const handleToggleLogsExpansion = () => setLogsExpanded(prev => !prev);
-
 
   return (
     <div className="space-y-6">
@@ -503,31 +497,6 @@ export default function RefactorProjectPage() {
             </CardContent>
         </Card>
        )}
-
-      {detailedLogs.length > 0 && (
-        <Card className="mt-6 border-primary/30 shadow-md">
-          <CardHeader className="pb-2 flex flex-row items-center justify-between">
-            <CardTitle className="text-lg flex items-center gap-2 text-primary"><ListOrdered className="h-5 w-5" /> Logs de Ejecución</CardTitle>
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="icon" onClick={handleToggleLogsExpansion} title={logsExpanded ? "Contraer Logs" : "Expandir Logs"}>
-                  {logsExpanded ? <Minimize className="h-4 w-4" /> : <Expand className="h-4 w-4" />}
-              </Button>
-              <Button variant="ghost" size="icon" onClick={handleClearLogs} title="Limpiar Logs"><Trash2 className="h-4 w-4 text-destructive" /></Button>
-              <Button variant="ghost" size="icon" onClick={() => handleCopyLogsToClipboard(detailedLogs)} title="Copiar Logs"><Copy className="h-4 w-4" /></Button>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <ScrollArea className={cn("p-2 border rounded bg-muted/30 transition-all duration-300 ease-in-out", logsExpanded ? "h-[300px]" : "h-[100px]")}>
-              <pre className="text-xs text-foreground whitespace-pre-wrap">
-                {detailedLogs.map((log, index) => (
-                  <span key={`log-${index}`} className={log.includes("[ERROR") || log.includes("Error:") ? "text-destructive" : log.includes("[WARN") ? "text-yellow-500" : ""}>{log}\n</span>
-                ))}
-              </pre>
-            </ScrollArea>
-          </CardContent>
-        </Card>
-      )}
     </div>
   );
 }
-
