@@ -99,11 +99,21 @@ async function fetchWithRetry(
         return response;
       }
 
-      let errorBodyText = 'No se pudo leer el cuerpo del error.';
+      let errorBodyText = `[FetchWithRetry] No se pudo leer el cuerpo del error de ${providerName} (${response.status}). La respuesta podría ser demasiado grande o no ser texto.`;
       try {
-          errorBodyText = await response.text();
+          // Limit the size of the error body we try to read to prevent OOM errors
+          const bodyBuffer = await response.arrayBuffer();
+          const maxErrorBodyReadBytes = 1024 * 10; // 10KB
+          if (bodyBuffer.byteLength > maxErrorBodyReadBytes) {
+              errorBodyText = `[FetchWithRetry] El cuerpo del error de ${providerName} (${response.status}) es demasiado grande (${bodyBuffer.byteLength} bytes). Mostrando solo los primeros ${maxErrorBodyReadBytes} bytes.`;
+              const partialBuffer = bodyBuffer.slice(0, maxErrorBodyReadBytes);
+              errorBodyText += new TextDecoder().decode(partialBuffer);
+          } else {
+              errorBodyText = new TextDecoder().decode(bodyBuffer);
+          }
       } catch (readError) {
-          console.warn(`[FetchWithRetry] No se pudo leer el cuerpo del error de ${providerName} (${response.status})`);
+          console.warn(`[FetchWithRetry] Excepción al leer el cuerpo del error de ${providerName} (${response.status}): ${(readError as Error).message}`);
+          // errorBodyText remains the default message from initialization
       }
 
 
@@ -313,15 +323,17 @@ export async function makeLLMRequest<TResponse>(
      } else if (typeof error === 'string') {
        errorMessage = error;
      } else {
-       errorMessage = `[LLM_SERVICE] Error desconocido (tipo: ${typeof error}) durante la solicitud a ${providerConfig.name} (${serviceNameSuffix}). Intente verificar los logs del servidor.`;
+       // Attempt to stringify, but be very careful
+       let errorDetails = "Complex error object";
        try {
-         errorMessage += ` Detalles: ${JSON.stringify(error)}`;
-       } catch {
-         // JSON.stringify failed, do nothing more with details
+         errorDetails = JSON.stringify(error);
+       } catch (stringifyError) {
+         errorDetails = "Unserializable complex error object";
        }
+       errorMessage = `[LLM_SERVICE] Error desconocido (tipo: ${typeof error}) durante la solicitud a ${providerConfig.name} (${serviceNameSuffix}). Detalles: ${errorDetails.substring(0,200)}`;
      }
      const finalErrorMessage = String(errorMessage || `[LLM_SERVICE] Error desconocido en makeLLMRequest para ${providerConfig.name}`);
-     console.error(`[LLM_SERVICE] Error procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}): ${finalErrorMessage}`);
+     console.error(`[LLM_SERVICE] Error procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}): ${finalErrorMessage}`, error); // Log the original error too
      throw new Error(finalErrorMessage);
   } finally {
     clearTimeout(timeoutId);
@@ -529,6 +541,7 @@ export async function chatWithLLM(payload: ChatLLMPayload): Promise<ChatLLMRespo
   return result;
 }
 
+// Type aliases for better clarity when using these functions
 export type GroqOptions = LLMOptions; 
 export type GroqResponse = CodeSuggestionResponse; 
 export type ProjectAnalysisGroqResponse = ProjectAnalysisResponse; 
