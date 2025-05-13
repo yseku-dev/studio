@@ -65,15 +65,20 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
                 if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean' || data === null) {
                     dataPreviewString = String(data);
                 } else if (data instanceof Error) { 
-                    dataPreviewString = `Error: ${data.message}${data.stack ? `\nStack: ${data.stack}` : ''}`;
+                    dataPreviewString = `Error: ${data.message}${data.stack ? `\nStack: ${data.stack.substring(0,150)}...` : ''}`;
                 }
                 else {
-                    dataPreviewString = JSON.stringify(data); 
+                    // Attempt to stringify, but be cautious with complex objects or circular refs
+                    try {
+                        dataPreviewString = JSON.stringify(data);
+                    } catch (stringifyError) {
+                        dataPreviewString = "[Contenido de datos complejo no serializable]";
+                    }
                 }
                 dataStringForLogMessage = ` | Data: ${dataPreviewString.substring(0, 300)}${dataPreviewString.length > 300 ? '...' : ''}`;
             } catch (e) {
-                dataStringForLogMessage = ' | Data: [Contenido no serializable para vista previa del log]';
-                console.warn(`[WORKGROUP_LOG_SERIALIZATION_ERROR][${timestamp}] Failed to stringify data for log type ${type}, message: ${message}`, e);
+                dataStringForLogMessage = ' | Data: [Error al previsualizar datos para log]';
+                console.warn(`[WORKGROUP_LOG_SERIALIZATION_ERROR][${timestamp}] Failed to stringify/preview data for log type ${type}, message: ${message}`, e);
             }
         }
         const logMsg = `[${timestamp}] [WG-${type}] ${message}${dataStringForLogMessage}`;
@@ -93,7 +98,6 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
         // === 1. Orchestrator Decides ===
         log('INFO', `Orchestrator (${payload.orchestrator.name}) deciding next step.`);
         
-        // Directly use LLM options from payload for the orchestrator
         const orchestratorLlmOptionsDirect: LLMOptions = {
             providerId: payload.orchestrator.llmProviderId,
             modelName: payload.orchestrator.llmModelName,
@@ -181,7 +185,6 @@ JSON:`;
 
                 log('INFO', `Agente seleccionado (${nextAgentConfigFromPayload.name}) preparando respuesta.`);
                 
-                // Directly use LLM options from the pre-resolved nextAgentConfigFromPayload
                 const agentLlmOptionsDirect: LLMOptions = {
                     providerId: nextAgentConfigFromPayload.llmProviderId,
                     modelName: nextAgentConfigFromPayload.llmModelName,
@@ -213,41 +216,38 @@ JSON:`;
             }
         } catch (err) { 
             const error = err as Error;
-            log('ERROR', `Fallo al procesar JSON del Orquestrador o error en su respuesta LLM: ${error.message}`, { rawResponse: orchestratorRawResponse ? orchestratorRawResponse.substring(0,500) + (orchestratorRawResponse.length > 500 ? "..." : "") : "Respuesta cruda no disponible", stack: error.stack });
-            currentHistory.push({ role: 'system', content: `[Error procesando decisión del Orquestrador (Turno ${payload.currentTurn}): ${error.message}]` , name: payload.orchestrator.name});
+            log('ERROR', `Fallo al procesar JSON del Orquestrador o error en su respuesta LLM: ${error.message}`, { rawResponse: orchestratorRawResponse ? orchestratorRawResponse.substring(0,500) + (orchestratorRawResponse.length > 500 ? "..." : "") : "Respuesta cruda no disponible", stack: error.stack ? error.stack.substring(0,300) : "No stack" });
+            currentHistory.push({ role: 'system', content: `[Error procesando decisión del Orquestrador (Turno ${payload.currentTurn}): ${error.message.substring(0,200)}...]` , name: payload.orchestrator.name});
+            // This specific error will be returned to the client, ensure it's simple.
             return { 
-                error: `Error del Orquestrador (fallo al procesar respuesta): ${String(error.message || "Error desconocido.")}`, 
+                error: `Error del Orquestrador (fallo al procesar respuesta): ${String(error.message || "Error desconocido.").substring(0,300)}`, 
                 isComplete: true, 
-                updatedHistory: currentHistory.map(m => ({...m, content: String(m.content || '')})), 
-                serverLogs: serverLogs.map(s => String(s || '')), 
+                updatedHistory: currentHistory.map(m => ({...m, content: String(m.content || '').substring(0, 200)})), 
+                serverLogs: serverLogs.map(s => String(s || '').substring(0,200)), 
                 orchestratorDecision: { 
                     nextAgentId: 'ERROR_ORCHESTRATOR', 
-                    reason: String(error.message || "Error desconocido."), 
-                    rawOutput: orchestratorRawResponse || 'Respuesta cruda no disponible' 
+                    reason: String(error.message || "Error desconocido.").substring(0,300), 
+                    rawOutput: orchestratorRawResponse ? orchestratorRawResponse.substring(0,300) : 'Respuesta cruda no disponible' 
                 }, 
                 agentResponse: null 
             };
         }
     } catch (error) { 
-        let detailMessage: string;
+        let detailMessage = "Unknown error in workgroup turn processing.";
         if (error instanceof Error) {
             detailMessage = error.message;
-        } else {
-            detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación del grupo de trabajo.";
-        }
-        if (!detailMessage || detailMessage.trim() === "") {
-            detailMessage = "Error desconocido o el servidor no proporcionó detalles.";
+        } else if (typeof error === 'string') {
+            detailMessage = error;
         }
         
-        console.error(`[WORKGROUP_ACTION_ERROR] Turn ${payload.currentTurn} failed: ${detailMessage}`, { stack: (error as Error)?.stack, fullError: error });
-        serverLogs.push(`[${new Date().toISOString()}] [FATAL_ERROR_WORKGROUP_TURN] ${detailMessage}`);
+        log('ERROR', `Error no manejado en handleWorkgroupTurn: ${detailMessage}`, { stack: (error as Error)?.stack ? (error as Error).stack?.substring(0,300) : "No stack", fullError: error });
 
         let safeHistoryForError: ChatMessage[];
         try {
             safeHistoryForError = currentHistory.map(msg => ({
                 role: msg.role,
-                content: String(msg.content || '').substring(0, 1000), 
-                name: msg.name ? String(msg.name).substring(0, 100) : undefined
+                content: String(msg.content || '').substring(0, 200), 
+                name: msg.name ? String(msg.name).substring(0, 50) : undefined
             }));
         } catch {
             safeHistoryForError = [{role: 'system', content: 'Error processing history for error response.'}];
@@ -255,13 +255,13 @@ JSON:`;
 
         let safeLogsForError: string[];
         try {
-            safeLogsForError = serverLogs.map(logEntry => String(logEntry || '').substring(0, 500));
+            safeLogsForError = serverLogs.map(logEntry => String(logEntry || '').substring(0, 200));
         } catch {
             safeLogsForError = ['Error processing server logs for error response.'];
         }
 
         return {
-            error: `SERVER_ACTION_UNHANDLED_ERROR: ${String(detailMessage || 'Unknown error').substring(0, 500)}`, 
+            error: `WORKGROUP_TURN_UNHANDLED_ERROR: ${detailMessage.substring(0, 300)}`, 
             isComplete: true, 
             updatedHistory: safeHistoryForError,
             serverLogs: safeLogsForError,
@@ -293,7 +293,9 @@ function formatHistoryForPrompt(history: ChatMessage[], maxMessages: number = 6)
             const agentName = msg.name;
             roleName = agentName ? `Sistema (${agentName})` : 'Sistema';
         }
-        return `  [${roleName}]: ${contentString.substring(0,1000)}${contentString.length > 1000 ? '...' : ''}`; 
+        // Truncate individual messages as well if they are extremely long
+        const truncatedContent = contentString.length > 1000 ? contentString.substring(0, 997) + "..." : contentString;
+        return `  [${roleName}]: ${truncatedContent}`; 
     }).join('\n');
 }
 
