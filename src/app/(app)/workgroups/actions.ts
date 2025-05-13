@@ -61,10 +61,16 @@ export async function handleWorkgroupTurn(payload: WorkgroupTurnPayload): Promis
         let dataStringForLogMessage = '';
         if (data !== undefined) {
             try {
-                const dataPreview = (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean' || data === null)
-                    ? String(data)
-                    : JSON.stringify(data);
-                dataStringForLogMessage = ` | Data: ${dataPreview.substring(0, 300)}${dataPreview.length > 300 ? '...' : ''}`;
+                let dataPreviewString = '';
+                if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean' || data === null) {
+                    dataPreviewString = String(data);
+                } else if (data instanceof Error) { 
+                    dataPreviewString = `Error: ${data.message}${data.stack ? `\nStack: ${data.stack}` : ''}`;
+                }
+                else {
+                    dataPreviewString = JSON.stringify(data); 
+                }
+                dataStringForLogMessage = ` | Data: ${dataPreviewString.substring(0, 300)}${dataPreviewString.length > 300 ? '...' : ''}`;
             } catch (e) {
                 dataStringForLogMessage = ' | Data: [Contenido no serializable para vista previa del log]';
                 console.warn(`[WORKGROUP_LOG_SERIALIZATION_ERROR][${timestamp}] Failed to stringify data for log type ${type}, message: ${message}`, e);
@@ -159,7 +165,7 @@ JSON:`;
                     reason: decisionJson.reason,
                     rawOutput: orchestratorRawResponse,
                  };
-                log('INFO', `Orquestador determinó que la tarea está completa en el turno ${payload.currentTurn}.`);
+                log('INFO', `Orquestrador determinó que la tarea está completa en el turno ${payload.currentTurn}.`);
             } else {
                 const nextAgentConfigFromPayload = Object.values(payload.participantAgentConfigs).find(a => a.name === decisionJson?.next_agent_name);
 
@@ -210,13 +216,13 @@ JSON:`;
             log('ERROR', `Fallo al procesar JSON del Orquestrador o error en su respuesta LLM: ${error.message}`, { rawResponse: orchestratorRawResponse ? orchestratorRawResponse.substring(0,500) + (orchestratorRawResponse.length > 500 ? "..." : "") : "Respuesta cruda no disponible", stack: error.stack });
             currentHistory.push({ role: 'system', content: `[Error procesando decisión del Orquestrador (Turno ${payload.currentTurn}): ${error.message}]` , name: payload.orchestrator.name});
             return { 
-                error: `Error del Orquestrador (fallo al procesar respuesta): ${error.message}`, 
+                error: `Error del Orquestrador (fallo al procesar respuesta): ${String(error.message || "Error desconocido.")}`, 
                 isComplete: true, 
                 updatedHistory: currentHistory.map(m => ({...m, content: String(m.content || '')})), 
                 serverLogs: serverLogs.map(s => String(s || '')), 
                 orchestratorDecision: { 
                     nextAgentId: 'ERROR_ORCHESTRATOR', 
-                    reason: error.message, 
+                    reason: String(error.message || "Error desconocido."), 
                     rawOutput: orchestratorRawResponse || 'Respuesta cruda no disponible' 
                 }, 
                 agentResponse: null 
@@ -255,7 +261,7 @@ JSON:`;
         }
 
         return {
-            error: `SERVER_ACTION_UNHANDLED_ERROR: ${detailMessage.substring(0, 500)}`, 
+            error: `SERVER_ACTION_UNHANDLED_ERROR: ${String(detailMessage || 'Unknown error').substring(0, 500)}`, 
             isComplete: true, 
             updatedHistory: safeHistoryForError,
             serverLogs: safeLogsForError,
@@ -269,7 +275,7 @@ JSON:`;
         isComplete = true; 
         currentHistory.push({ role: 'system', content: `[Sistema: Se alcanzó el límite de ${payload.maxTurns} turnos. Ejecución finalizada.]` });
     } else if (isComplete && payload.currentTurn <= payload.maxTurns) { 
-        log('INFO', `Orquestador marcó la tarea como completada en el turno ${payload.currentTurn}. Finalizando ejecución.`);
+        log('INFO', `Orquestrador marcó la tarea como completada en el turno ${payload.currentTurn}. Finalizando ejecución.`);
     }
 
     log('INFO', `Turno ${payload.currentTurn} completado.`);
@@ -290,3 +296,4 @@ function formatHistoryForPrompt(history: ChatMessage[], maxMessages: number = 6)
         return `  [${roleName}]: ${contentString.substring(0,1000)}${contentString.length > 1000 ? '...' : ''}`; 
     }).join('\n');
 }
+

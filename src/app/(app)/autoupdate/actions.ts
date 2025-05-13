@@ -37,11 +37,29 @@ export async function handleAutoAnalyzeAppSource(
 ): Promise<AutoUpdateAnalysisResult> {
   const executionLogs: string[] = [];
 
-  const log = (message: string, level: 'INFO' | 'ERROR' | 'WARN' | 'DETAIL' = 'INFO') => {
-    const timestampedMessage = `[${level} ${new Date().toISOString()}] ${message}`;
+  const log = (message: string, level: 'INFO' | 'ERROR' | 'WARN' | 'DETAIL' = 'INFO', data?: any) => {
+    const timestamp = new Date().toISOString();
+    let dataStringForLogMessage = '';
+    if (data !== undefined) {
+        try {
+            let dataPreviewString = '';
+            if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean' || data === null) {
+                dataPreviewString = String(data);
+            } else if (data instanceof Error) {
+                dataPreviewString = `Error: ${data.message}${data.stack ? `\nStack: ${data.stack}` : ''}`;
+            } else {
+                dataPreviewString = JSON.stringify(data);
+            }
+            dataStringForLogMessage = ` | Data: ${dataPreviewString.substring(0, 300)}${dataPreviewString.length > 300 ? '...' : ''}`;
+        } catch (e) {
+            dataStringForLogMessage = ' | Data: [Contenido no serializable para vista previa del log]';
+            console.warn(`[AUTOUPDATE_LOG_SERIALIZATION_ERROR][${timestamp}] Failed to stringify data for log type ${level}, message: ${message}`, e);
+        }
+    }
+    const timestampedMessage = `[${level} ${timestamp}] ${message}${dataStringForLogMessage}`;
     if (level === 'ERROR') console.error(timestampedMessage);
     else if (level === 'WARN') console.warn(timestampedMessage);
-    else console.log(timestampedMessage);
+    else console.log(timestampedMessage.replace(/\n/g, ' ')); 
     executionLogs.push(timestampedMessage);
   };
   
@@ -74,7 +92,7 @@ export async function handleAutoAnalyzeAppSource(
       const gitBundleResult = await fetchRepositoryContents(gitRepoUrl);
       if (!gitBundleResult.success || !gitBundleResult.files || gitBundleResult.files.length === 0) {
         const errorMsg = gitBundleResult.error || "No se pudo obtener el código fuente desde Git para analizar.";
-        log(errorMsg, 'ERROR');
+        log(errorMsg, 'ERROR', gitBundleResult);
         if(gitBundleResult.logsBuilt) executionLogs.push(...gitBundleResult.logsBuilt);
         return {
           success: false,
@@ -206,7 +224,7 @@ export async function handleAutoAnalyzeAppSource(
         allResults.push(result);
         processedChunks++;
         log(`[CHUNK_ANALYSIS_SUCCESS] Fragmento ${currentChunkNum}/${totalChunks} procesado exitosamente.`, 'INFO');
-        log(`[CHUNK_ANALYSIS_RESPONSE ${currentChunkNum}/${totalChunks}] Respuesta del LLM (primeros 200 caracteres): ${JSON.stringify(result).substring(0,200)}...`, 'DETAIL');
+        log(`[CHUNK_ANALYSIS_RESPONSE ${currentChunkNum}/${totalChunks}] Respuesta del LLM (primeros 200 caracteres): ${JSON.stringify(result).substring(0,200)}...`, 'DETAIL', result);
 
         if (processedChunks < totalChunks) {
           log(`[CHUNK_DELAY] Esperando ${INTER_CHUNK_PROCESSING_DELAY_MS / 1000}s antes del siguiente fragmento para gestionar los límites de TPM/RPM.`, 'INFO');
@@ -220,7 +238,7 @@ export async function handleAutoAnalyzeAppSource(
         } else {
             errorMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante el análisis de un fragmento.";
         }
-        log(`[CHUNK_ANALYSIS_ERROR] Error analizando el fragmento ${currentChunkNum}/${totalChunks}. ${errorMessage}`, 'ERROR');
+        log(`[CHUNK_ANALYSIS_ERROR] Error analizando el fragmento ${currentChunkNum}/${totalChunks}. ${errorMessage}`, 'ERROR', error);
         return {
           success: false,
           error: `Falló el análisis del fragmento ${currentChunkNum}: ${errorMessage}`,
@@ -250,7 +268,7 @@ export async function handleAutoAnalyzeAppSource(
       suggestions: allResults.flatMap(r => (r.suggestions || []).map(s => ({...s, area: s.area || "General (Fragmento)" }))),
       overallAssessment: allResults.map(r => r.overallAssessment || "").filter(a => a.trim() !== "").join('\n\n---\n\n') || "No se generó una evaluación general agregada.",
     };
-    log("Resultados agregados exitosamente.", 'INFO');
+    log("Resultados agregados exitosamente.", 'INFO', aggregatedResult);
 
     return {
       success: true,
@@ -261,10 +279,10 @@ export async function handleAutoAnalyzeAppSource(
     };
   } catch (e) {
     const error = e as Error;
-    log(`Error crítico en handleAutoAnalyzeAppSource: ${error.message}`, 'ERROR');
+    log(`Error crítico en handleAutoAnalyzeAppSource: ${error.message}`, 'ERROR', error);
     return {
       success: false,
-      error: `Error crítico durante el auto-análisis: ${error.message}`,
+      error: `Error crítico durante el auto-análisis: ${String(error.message || "Error desconocido")}`,
       detailedExecutionLogs: executionLogs,
     };
   }
@@ -295,11 +313,30 @@ export async function getApplicationSourceBundle(
   gitRepoUrl?: string 
 ): Promise<AppSourceBundleResult> {
   const internalLogs: string[] = [];
-  const log = (message: string, level: 'INFO' | 'DETAIL' | 'WARN' | 'ERROR' = 'INFO') => {
-    const timestampedMessage = `[SourceBundle ${level} ${new Date().toISOString()}] ${message}`;
+  const log = (message: string, level: 'INFO' | 'DETAIL' | 'WARN' | 'ERROR' = 'INFO', data?: any) => { // Added data param
+    const timestamp = new Date().toISOString();
+    let dataStringForLogMessage = '';
+    if (data !== undefined) {
+        try {
+            let dataPreviewString = '';
+            if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean' || data === null) {
+                dataPreviewString = String(data);
+            } else if (data instanceof Error) {
+                dataPreviewString = `Error: ${data.message}${data.stack ? `\nStack: ${data.stack}` : ''}`;
+            } else {
+                dataPreviewString = JSON.stringify(data);
+            }
+            dataStringForLogMessage = ` | Data: ${dataPreviewString.substring(0, 300)}${dataPreviewString.length > 300 ? '...' : ''}`;
+        } catch (e) {
+            dataStringForLogMessage = ' | Data: [Contenido no serializable para vista previa del log]';
+            console.warn(`[SOURCEBUNDLE_LOG_SERIALIZATION_ERROR][${timestamp}] Failed to stringify data for log type ${level}, message: ${message}`, e);
+        }
+    }
+    const timestampedMessage = `[SourceBundle ${level} ${timestamp}] ${message}${dataStringForLogMessage}`;
+
     switch(level) {
-        case 'INFO': console.log(timestampedMessage); break;
-        case 'DETAIL': console.log(timestampedMessage); break; 
+        case 'INFO': console.log(timestampedMessage.replace(/\n/g, ' ')); break;
+        case 'DETAIL': console.log(timestampedMessage.replace(/\n/g, ' ')); break; 
         case 'WARN': console.warn(timestampedMessage); break;
         case 'ERROR': console.error(timestampedMessage); break;
     }
@@ -314,8 +351,8 @@ export async function getApplicationSourceBundle(
       if (gitResult.logsBuilt) internalLogs.unshift(...gitResult.logsBuilt);
       
       if (!gitResult.success || !gitResult.files) {
-        log(`Error obteniendo contenido de Git: ${gitResult.error}`, 'ERROR');
-        return { success: false, error: gitResult.error || "Fallo al obtener contenido de Git.", logsBuilt: internalLogs };
+        log(`Error obteniendo contenido de Git: ${String(gitResult.error)}`, 'ERROR', gitResult);
+        return { success: false, error: String(gitResult.error || "Fallo al obtener contenido de Git."), logsBuilt: internalLogs };
       }
       if (concatenate) {
         return { success: true, files: gitResult.files, concatenatedSource: gitResult.concatenatedSource, logsBuilt: internalLogs };
@@ -370,10 +407,10 @@ export async function getApplicationSourceBundle(
         } catch (readError) {
           const error = readError as NodeJS.ErrnoException;
           if (error.code === 'EACCES' || error.code === 'ENOENT' || error.code === 'EISDIR') {
-              log(`Acceso/Permiso denegado o archivo no encontrado/es directorio para ${relativeFilePath}: ${error.message}. Omitiendo.`, 'WARN'); 
+              log(`Acceso/Permiso denegado o archivo no encontrado/es directorio para ${relativeFilePath}: ${error.message}. Omitiendo.`, 'WARN', error); 
               continue; 
           } else {
-              log(`No se pudo leer el archivo ${relativeFilePath} como texto (podría ser binario o error desconocido): ${error.message}. Código: ${error.code}`, 'WARN');
+              log(`No se pudo leer el archivo ${relativeFilePath} como texto (podría ser binario o error desconocido): ${error.message}. Código: ${error.code}`, 'WARN', error);
               content = `// Error: No se pudo leer el archivo ${relativeFilePath} como texto. Causa: ${error.message}.`;
               filesData.push({ fileName: relativeFilePath, content: content });
                if (concatenate) {
@@ -391,9 +428,9 @@ export async function getApplicationSourceBundle(
       } catch (fileProcessingError) {
         const error = fileProcessingError as NodeJS.ErrnoException;
         if (error.code !== 'EACCES' && error.code !== 'EISDIR' && error.code !== 'ENOENT') {
-            log(`Error al procesar el archivo ${relativeFilePath} para el paquete fuente: ${error.message}. Código: ${error.code}`, 'WARN');
+            log(`Error al procesar el archivo ${relativeFilePath} para el paquete fuente: ${error.message}. Código: ${error.code}`, 'WARN', error);
         } else {
-            log(`Error de acceso/directorio omitido para ${relativeFilePath}: ${error.message}. Código: ${error.code}`, 'DETAIL');
+            log(`Error de acceso/directorio omitido para ${relativeFilePath}: ${error.message}. Código: ${error.code}`, 'DETAIL', error);
         }
       }
     }
@@ -416,7 +453,7 @@ export async function getApplicationSourceBundle(
     } else {
       errorMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
     }
-    log(`Error crítico empaquetando el código fuente de la aplicación: ${errorMessage}`, 'ERROR');
+    log(`Error crítico empaquetando el código fuente de la aplicación: ${errorMessage}`, 'ERROR', error);
     if (error instanceof Error && error.stack) {
         log(`Stack del error crítico: ${error.stack}`, 'ERROR');
     }
@@ -435,11 +472,30 @@ export async function applySuggestedChange(
     parentExecutionLogs?: string[]
 ): Promise<{success: boolean, error?: string, newContent?: string}> {
     const internalLogs: string[] = [];
-    const log = (message: string, level: 'INFO' | 'ERROR' | 'DETAIL' = 'INFO') => {
-        const timestampedMessage = `[ApplyChange ${level} ${new Date().toISOString()}] ${message}`;
-        if (level === 'INFO') console.log(timestampedMessage);
+    const log = (message: string, level: 'INFO' | 'ERROR' | 'DETAIL' = 'INFO', data?:any) => { // Added data param
+        const timestamp = new Date().toISOString();
+        let dataStringForLogMessage = '';
+        if (data !== undefined) {
+             try {
+                let dataPreviewString = '';
+                if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean' || data === null) {
+                    dataPreviewString = String(data);
+                } else if (data instanceof Error) {
+                    dataPreviewString = `Error: ${data.message}${data.stack ? `\nStack: ${data.stack}` : ''}`;
+                } else {
+                    dataPreviewString = JSON.stringify(data);
+                }
+                dataStringForLogMessage = ` | Data: ${dataPreviewString.substring(0, 300)}${dataPreviewString.length > 300 ? '...' : ''}`;
+            } catch (e) {
+                dataStringForLogMessage = ' | Data: [Contenido no serializable para vista previa del log]';
+                console.warn(`[APPLYCHANGE_LOG_SERIALIZATION_ERROR][${timestamp}] Failed to stringify data for log type ${level}, message: ${message}`, e);
+            }
+        }
+        const timestampedMessage = `[ApplyChange ${level} ${timestamp}] ${message}${dataStringForLogMessage}`;
+
+        if (level === 'INFO') console.log(timestampedMessage.replace(/\n/g, ' '));
         else if (level === 'ERROR') console.error(timestampedMessage);
-        else console.log(timestampedMessage); 
+        else console.log(timestampedMessage.replace(/\n/g, ' ')); 
         internalLogs.push(timestampedMessage);
         if (parentExecutionLogs) parentExecutionLogs.push(timestampedMessage);
     };
@@ -475,7 +531,7 @@ export async function applySuggestedChange(
         } else {
             errorMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
         }
-        log(`Error al aplicar el cambio al archivo ${filePath}: ${errorMessage}`, 'ERROR');
+        log(`Error al aplicar el cambio al archivo ${filePath}: ${errorMessage}`, 'ERROR', error);
         return { success: false, error: `Error al escribir en ${filePath}: ${errorMessage}` };
     }
 }
@@ -496,9 +552,28 @@ export async function handleGetErrorFixSuggestion(
   customContext?: string
 ): Promise<AutoFixSuggestionResult> {
    const internalLogs: string[] = [];
-   const log = (message: string, level: 'INFO' | 'ERROR' = 'INFO') => {
-        const timestampedMessage = `[AutoFix ${level} ${new Date().toISOString()}] ${message}`;
-        if (level === 'INFO') console.log(timestampedMessage);
+   const log = (message: string, level: 'INFO' | 'ERROR' = 'INFO', data?: any) => { // Added data param
+        const timestamp = new Date().toISOString();
+        let dataStringForLogMessage = '';
+        if (data !== undefined) {
+            try {
+                let dataPreviewString = '';
+                if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean' || data === null) {
+                    dataPreviewString = String(data);
+                } else if (data instanceof Error) {
+                    dataPreviewString = `Error: ${data.message}${data.stack ? `\nStack: ${data.stack}` : ''}`;
+                } else {
+                    dataPreviewString = JSON.stringify(data);
+                }
+                dataStringForLogMessage = ` | Data: ${dataPreviewString.substring(0, 300)}${dataPreviewString.length > 300 ? '...' : ''}`;
+            } catch (e) {
+                dataStringForLogMessage = ' | Data: [Contenido no serializable para vista previa del log]';
+                console.warn(`[AUTOFIX_LOG_SERIALIZATION_ERROR][${timestamp}] Failed to stringify data for log type ${level}, message: ${message}`, e);
+            }
+        }
+        const timestampedMessage = `[AutoFix ${level} ${timestamp}] ${message}${dataStringForLogMessage}`;
+
+        if (level === 'INFO') console.log(timestampedMessage.replace(/\n/g, ' '));
         else console.error(timestampedMessage);
         internalLogs.push(timestampedMessage);
         if (parentExecutionLogs) parentExecutionLogs.push(timestampedMessage);
@@ -543,7 +618,7 @@ export async function handleGetErrorFixSuggestion(
 
     const operationName = `la obtención de sugerencia para corrección con ${currentProvider.name}`;
     const result = await suggestErrorFix(input); 
-    log("Sugerencia de auto-corrección recibida exitosamente.", 'INFO');
+    log("Sugerencia de auto-corrección recibida exitosamente.", 'INFO', result);
     return { success: true, data: result };
   } catch (error) {
     let specificErrorMessage: string;
@@ -553,8 +628,8 @@ export async function handleGetErrorFixSuggestion(
     } else {
         specificErrorMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
     }
-    log(`Error obteniendo sugerencia para la corrección: ${specificErrorMessage}`, 'ERROR');
-    return { success: false, error: `Falló la obtención de sugerencia para corrección: ${specificErrorMessage}` };
+    log(`Error obteniendo sugerencia para la corrección: ${specificErrorMessage}`, 'ERROR', error);
+    return { success: false, error: `Falló la obtención de sugerencia para corrección con ${providerId}: ${String(specificErrorMessage || "Error desconocido")}` };
   }
 }
 
@@ -578,10 +653,29 @@ export async function handleUploadToGit(
     parentExecutionLogs?: string[]
 ): Promise<GitUploadResult> {
     const internalLogs: string[] = [];
-    const log = (message: string, level: 'INFO' | 'DETAIL' | 'WARN' | 'ERROR' = 'INFO') => {
-        const timestampedMessage = `[GitUpload ${level} ${new Date().toISOString()}] ${message}`;
+    const log = (message: string, level: 'INFO' | 'DETAIL' | 'WARN' | 'ERROR' = 'INFO', data?: any) => { // Added data param
+        const timestamp = new Date().toISOString();
+        let dataStringForLogMessage = '';
+        if (data !== undefined) {
+            try {
+                let dataPreviewString = '';
+                if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean' || data === null) {
+                    dataPreviewString = String(data);
+                } else if (data instanceof Error) {
+                    dataPreviewString = `Error: ${data.message}${data.stack ? `\nStack: ${data.stack}` : ''}`;
+                } else {
+                    dataPreviewString = JSON.stringify(data);
+                }
+                dataStringForLogMessage = ` | Data: ${dataPreviewString.substring(0, 300)}${dataPreviewString.length > 300 ? '...' : ''}`;
+            } catch (e) {
+                dataStringForLogMessage = ' | Data: [Contenido no serializable para vista previa del log]';
+                console.warn(`[GITUPLOAD_LOG_SERIALIZATION_ERROR][${timestamp}] Failed to stringify data for log type ${level}, message: ${message}`, e);
+            }
+        }
+        const timestampedMessage = `[GitUpload ${level} ${timestamp}] ${message}${dataStringForLogMessage}`;
+
         if (level !== 'DETAIL') { 
-             console.log(timestampedMessage);
+             console.log(timestampedMessage.replace(/\n/g, ' '));
         }
         internalLogs.push(timestampedMessage);
         if (parentExecutionLogs) parentExecutionLogs.push(timestampedMessage);
@@ -604,7 +698,7 @@ export async function handleUploadToGit(
         const sourceBundle = await getApplicationSourceBundle(false, internalLogs); 
         if (!sourceBundle.success || !sourceBundle.files || sourceBundle.files.length === 0) {
             const errorMsg = sourceBundle.error || "No se pudo obtener el código fuente para subir a Git.";
-            log(errorMsg, 'ERROR');
+            log(errorMsg, 'ERROR', sourceBundle);
             return { success: false, message: errorMsg, logs: internalLogs };
         }
         log(`Paquete de código fuente obtenido con ${sourceBundle.files.length} archivos.`, 'INFO');
@@ -635,14 +729,14 @@ export async function handleUploadToGit(
                     await git.checkout(defaultBranch);
                     log(`Cambiado a la rama local existente '${defaultBranch}'.`, 'INFO');
                 } catch (checkoutError: any) {
-                    log(`Error al cambiar a la rama '${defaultBranch}': ${checkoutError.message}`, 'ERROR');
+                    log(`Error al cambiar a la rama '${defaultBranch}': ${checkoutError.message}`, 'ERROR', checkoutError);
                     throw checkoutError; 
                 }
             } else if (branchError.message && branchError.message.includes('is not a commit')) {
                 log(`El repositorio está vacío. La rama '${defaultBranch}' se creará en el primer commit.`, 'INFO');
             }
              else {
-                log(`Error inesperado al gestionar la rama '${defaultBranch}': ${branchError.message}`, 'ERROR');
+                log(`Error inesperado al gestionar la rama '${defaultBranch}': ${branchError.message}`, 'ERROR', branchError);
                 throw branchError;
             }
         }
@@ -662,7 +756,7 @@ export async function handleUploadToGit(
                await fs.writeFile(filePath, file.content, 'utf-8');
                log(`Archivo copiado: ${file.fileName}`, 'DETAIL');
            } catch(writeError: any) {
-               log(`Error al escribir el archivo ${file.fileName} en el repositorio temporal: ${writeError.message}`, 'WARN');
+               log(`Error al escribir el archivo ${file.fileName} en el repositorio temporal: ${writeError.message}`, 'WARN', writeError);
            }
         }
         log("Archivos copiados al repositorio temporal.", 'INFO');
@@ -678,7 +772,7 @@ export async function handleUploadToGit(
              log("No hay cambios para hacer commit. La subida a Git se considera exitosa sin push.", 'WARN');
              return { success: true, message: "No se detectaron cambios en el código fuente para subir a Git.", logs: internalLogs };
         }
-        log(`Commit realizado. SHA: ${commitResult.commit || 'N/A'}. Resumen: ${commitResult.summary.changes} cambios, ${commitResult.summary.insertions} inserciones, ${commitResult.summary.deletions} eliminaciones.`, 'INFO');
+        log(`Commit realizado. SHA: ${commitResult.commit || 'N/A'}. Resumen: ${commitResult.summary.changes} cambios, ${commitResult.summary.insertions} inserciones, ${commitResult.summary.deletions} eliminaciones.`, 'INFO', commitResult);
 
         log("Paso 8: Configurando repositorio remoto 'origin'...", 'INFO');
         const authenticatedRepoUrl = gitConfig.repoUrl.replace("https://", `https://${encodeURIComponent(gitConfig.username)}:${encodeURIComponent(gitConfig.pat)}@`);
@@ -717,11 +811,11 @@ export async function handleUploadToGit(
                   errorMsg = "Falló la autenticación Git (no se pudo leer el nombre de usuario). Verifica tu PAT y permisos.";
              }
         }
-        log(`Error crítico durante la subida a Git: ${errorMsg}`, 'ERROR');
+        log(`Error crítico durante la subida a Git: ${errorMsg}`, 'ERROR', error);
         if (errorDetails) {
             log(`Stack/Detalles del error de Git: ${errorDetails}`, 'ERROR');
         }
-        return { success: false, message: `Falló la subida a Git: ${errorMsg}`, logs: internalLogs };
+        return { success: false, message: `Falló la subida a Git: ${String(errorMsg || "Error desconocido")}`, logs: internalLogs };
     } finally {
         if (tempRepoPath) {
             log(`Paso 10: Limpiando directorio temporal ${tempRepoPath}...`, 'INFO');
@@ -729,7 +823,7 @@ export async function handleUploadToGit(
                 await fs.rm(tempRepoPath, { recursive: true, force: true });
                 log("Directorio temporal eliminado.", 'INFO');
             } catch (cleanupError: any) {
-                log(`Error al limpiar el directorio temporal ${tempRepoPath}: ${cleanupError.message}`, 'ERROR');
+                log(`Error al limpiar el directorio temporal ${tempRepoPath}: ${cleanupError.message}`, 'ERROR', cleanupError);
             }
         }
     }

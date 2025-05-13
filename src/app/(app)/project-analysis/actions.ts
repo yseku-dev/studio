@@ -42,12 +42,24 @@ export async function handleAnalyzeProject(
   const serverLogs: string[] = [];
   const log = (type: 'INFO' | 'ERROR' | 'DEBUG' | 'DETAIL' | 'WARN', message: string, data?: any) => {
     const timestamp = new Date().toISOString();
-    let dataString = '';
+    let dataStringForLogMessage = '';
     if (data !== undefined) {
-        try { dataString = ` | Data: ${JSON.stringify(data).substring(0, 300)}${JSON.stringify(data).length > 300 ? '...' : ''}`; } 
-        catch { dataString = ' | Data: [Unserializable]'; }
+        try {
+            let dataPreviewString = '';
+            if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean' || data === null) {
+                dataPreviewString = String(data);
+            } else if (data instanceof Error) {
+                dataPreviewString = `Error: ${data.message}${data.stack ? `\nStack: ${data.stack}` : ''}`;
+            } else {
+                dataPreviewString = JSON.stringify(data);
+            }
+            dataStringForLogMessage = ` | Data: ${dataPreviewString.substring(0, 300)}${dataPreviewString.length > 300 ? '...' : ''}`;
+        } catch (e) {
+            dataStringForLogMessage = ' | Data: [Contenido no serializable para vista previa del log]';
+            console.warn(`[PROJANALYSIS_LOG_SERIALIZATION_ERROR][${timestamp}] Failed to stringify data for log type ${type}, message: ${message}`, e);
+        }
     }
-    const logMsg = `[${timestamp}] [ProjAnalysis-${type}] ${message}${dataString}`;
+    const logMsg = `[${timestamp}] [ProjAnalysis-${type}] ${message}${dataStringForLogMessage}`;
     console.log(logMsg.replace(/\n/g, ' ')); 
     serverLogs.push(logMsg);
   };
@@ -63,8 +75,8 @@ export async function handleAnalyzeProject(
       const gitResult = await fetchRepositoryContents(payload.gitUrl);
       if (gitResult.logsBuilt) serverLogs.push(...gitResult.logsBuilt.map(l => `[GIT_FETCH_LOG] ${l}`));
       if (!gitResult.success || !gitResult.concatenatedSource) {
-        log('ERROR', `No se pudo obtener el contenido del repositorio Git: ${gitResult.error}`);
-        return { success: false, error: gitResult.error || "Fallo al obtener contenido de Git.", detailedExecutionLogs: serverLogs };
+        log('ERROR', `No se pudo obtener el contenido del repositorio Git: ${gitResult.error}`, gitResult);
+        return { success: false, error: String(gitResult.error || "Fallo al obtener contenido de Git."), detailedExecutionLogs: serverLogs };
       }
       projectContentToAnalyze = gitResult.concatenatedSource;
       log('INFO', `Contenido Git obtenido. Tamaño: ${projectContentToAnalyze.length}`);
@@ -97,8 +109,8 @@ export async function handleAnalyzeProject(
 
       const orchestrator = agentsForLookup.find(a => a.name === ORCHESTRATOR_AGENT_NAME && workgroup.agentIds.includes(a.id));
       if (!orchestrator) {
-        log('ERROR', `Orquestador no encontrado en grupo ${workgroup.name}.`);
-        return { success: false, error: `Orquestador no encontrado en grupo ${workgroup.name}.`, workgroupLogs: serverLogs, detailedExecutionLogs: serverLogs };
+        log('ERROR', `Orquestrador no encontrado en grupo ${workgroup.name}.`);
+        return { success: false, error: `Orquestrador no encontrado en grupo ${workgroup.name}.`, workgroupLogs: serverLogs, detailedExecutionLogs: serverLogs };
       }
       
       const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, agentsForLookup, workgroupsForLookup, payload.localStorageSnapshot);
@@ -146,7 +158,7 @@ export async function handleAnalyzeProject(
         if (turnResult.serverLogs) serverLogs.push(...turnResult.serverLogs);
         if (turnResult.error) {
           log('ERROR', `Error en turno ${turn} del grupo: ${turnResult.error}`);
-          return { success: false, error: `Error en turno ${turn} del grupo: ${turnResult.error}`, workgroupLogs: serverLogs, detailedExecutionLogs: serverLogs };
+          return { success: false, error: `Error en turno ${turn} del grupo: ${String(turnResult.error)}`, workgroupLogs: serverLogs, detailedExecutionLogs: serverLogs };
         }
         
         currentHistory = turnResult.updatedHistory;
@@ -162,8 +174,8 @@ export async function handleAnalyzeProject(
               }
               throw new Error("Respuesta final del grupo no tuvo el formato esperado (ProjectAnalysisResponse).");
             } catch (e) {
-              log('ERROR', `Error al interpretar la respuesta final del grupo: ${(e as Error).message}. Contenido: ${finalResponseContent.substring(0,200)}...`);
-              return { success: false, error: `Error al interpretar respuesta final: ${(e as Error).message}`, workgroupLogs: serverLogs, detailedExecutionLogs: serverLogs };
+              log('ERROR', `Error al interpretar la respuesta final del grupo: ${(e as Error).message}. Contenido: ${finalResponseContent.substring(0,200)}...`, e);
+              return { success: false, error: `Error al interpretar respuesta final: ${String((e as Error).message)}`, workgroupLogs: serverLogs, detailedExecutionLogs: serverLogs };
             }
           }
           return { success: false, error: "Grupo finalizó sin respuesta de agente para extraer análisis.", workgroupLogs: serverLogs, detailedExecutionLogs: serverLogs };
@@ -209,8 +221,8 @@ export async function handleAnalyzeProject(
                   await new Promise(resolve => setTimeout(resolve, INTER_CHUNK_PROCESSING_DELAY_MS_PROJ_ANALYSIS));
               }
           } catch (e) {
-              log('ERROR', `Error analizando fragmento ${i + 1}: ${(e as Error).message}`);
-              return { success: false, error: `Error en fragmento ${i+1}: ${(e as Error).message}`, detailedExecutionLogs: serverLogs };
+              log('ERROR', `Error analizando fragmento ${i + 1}: ${(e as Error).message}`, e);
+              return { success: false, error: `Error en fragmento ${i+1}: ${String((e as Error).message)}`, detailedExecutionLogs: serverLogs };
           }
       }
       
@@ -220,7 +232,7 @@ export async function handleAnalyzeProject(
           suggestions: allResults.flatMap(r => (r.suggestions || [])),
           overallAssessment: allResults.map(r => r.overallAssessment || "").filter(a => a.trim() !== "").join('\n\n---\n\n') || "Evaluación general no disponible.",
       };
-      log('INFO', `Análisis directo de todos los fragmentos completado.`);
+      log('INFO', `Análisis directo de todos los fragmentos completado.`, aggregatedResult);
       return { success: true, data: aggregatedResult, detailedExecutionLogs: serverLogs };
     }
   } catch (e) {
@@ -228,7 +240,7 @@ export async function handleAnalyzeProject(
     log('ERROR', `Error crítico en handleAnalyzeProject: ${error.message}`, {stack: error.stack});
     return {
       success: false,
-      error: `Error crítico durante el análisis del proyecto: ${error.message}`,
+      error: `Error crítico durante el análisis del proyecto: ${String(error.message || "Error desconocido.")}`,
       detailedExecutionLogs: serverLogs
     };
   }
