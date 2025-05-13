@@ -1,3 +1,4 @@
+
 // src/services/git-service.ts
 'use server';
 
@@ -41,11 +42,29 @@ export async function fetchRepositoryContents(
   ignorePatterns: string[] = DEFAULT_IGNORE_PATTERNS
 ): Promise<AppSourceBundleResult> {
   const internalLogs: string[] = [];
-  const log = (message: string, level: 'INFO' | 'DETAIL' | 'WARN' | 'ERROR' = 'INFO') => {
-    const timestampedMessage = `[GitService ${level} ${new Date().toISOString()}] ${message}`;
+  const log = (message: string, level: 'INFO' | 'DETAIL' | 'WARN' | 'ERROR' = 'INFO', data?: any) => {
+    const timestamp = new Date().toISOString();
+     let dataStringForLogMessage = '';
+    if (data !== undefined) {
+        try {
+            let dataPreviewString = '';
+            if (typeof data === 'string' || typeof data === 'number' || typeof data === 'boolean' || data === null) {
+                dataPreviewString = String(data);
+            } else if (data instanceof Error) {
+                dataPreviewString = `Error: ${data.message}${data.stack ? `\nStack: ${data.stack}` : ''}`;
+            } else {
+                dataPreviewString = JSON.stringify(data);
+            }
+            dataStringForLogMessage = ` | Data: ${dataPreviewString.substring(0, 300)}${dataPreviewString.length > 300 ? '...' : ''}`;
+        } catch (e) {
+            dataStringForLogMessage = ' | Data: [Contenido no serializable para vista previa del log]';
+            console.warn(`[GITSERVICE_LOG_SERIALIZATION_ERROR][${timestamp}] Failed to stringify data for log type ${level}, message: ${message}`, e);
+        }
+    }
+    const timestampedMessage = `[GitService ${level} ${timestamp}] ${message}${dataStringForLogMessage}`;
     internalLogs.push(timestampedMessage);
     if (level === 'ERROR' || level === 'WARN') console.warn(timestampedMessage);
-    else console.log(timestampedMessage);
+    else if (level === 'INFO' || level === 'DETAIL') console.log(timestampedMessage.replace(/\n/g, ' ')); // Keep original logging for info/detail
   };
 
   let tempRepoPath: string | undefined;
@@ -61,9 +80,7 @@ export async function fetchRepositoryContents(
     await git.clone(repoUrl, tempRepoPath, ['--depth=1', '--no-tags', '--shallow-submodules']); // Shallow clone for speed
     log('Repositorio clonado exitosamente.', 'INFO');
 
-    const basePathForGlob = tempRepoPath; // specificPath ? path.join(tempRepoPath, specificPath) : tempRepoPath;
-    // Note: specificPath handling with glob might need adjustment if it's a file or if paths need to be relative to original repo root.
-    // For now, glob operates from the root of the cloned repo.
+    const basePathForGlob = tempRepoPath; 
 
     const filesInRepo = await glob('**/*', {
       cwd: basePathForGlob,
@@ -74,36 +91,46 @@ export async function fetchRepositoryContents(
     });
 
     log(`Glob encontró ${filesInRepo.length} archivos en el repositorio clonado después de aplicar filtros.`, 'INFO');
-    filesInRepo.forEach(f => log(`Archivo encontrado por glob en repo: ${f}`, 'DETAIL'));
+    if (filesInRepo.length < 20) { // Log individual files only if there aren't too many
+        filesInRepo.forEach(f => log(`Archivo encontrado por glob en repo: ${f}`, 'DETAIL'));
+    } else {
+        log(`Se encontraron ${filesInRepo.length} archivos. Omitiendo listado individual por brevedad.`, 'DETAIL');
+    }
 
 
     if (filesInRepo.length === 0) {
       log('No se encontraron archivos en el repositorio clonado después del filtrado.', 'WARN');
-      // Consider if this should be an error or an empty success
     }
 
     const filesData: AppSourceFile[] = [];
     let concatenatedContent = "";
+    let totalConcatenatedChars = 0;
 
     for (const relativeFilePath of filesInRepo) {
       const fullPath = path.join(basePathForGlob, relativeFilePath);
       try {
+        log(`Procesando archivo del repo: ${relativeFilePath}`, 'DETAIL');
         const stats = await fs.stat(fullPath);
-        if (stats.size > 1 * 1024 * 1024) { // Skip files larger than 1MB from concatenation for safety
+        log(`Estadísticas para ${relativeFilePath}: tamaño ${stats.size} bytes.`, 'DETAIL');
+        
+        if (stats.size > 1 * 1024 * 1024) { 
           log(`Archivo omitido de la concatenación por tamaño > 1MB: ${relativeFilePath}`, 'WARN');
           filesData.push({ fileName: relativeFilePath, content: `// Contenido omitido: Archivo demasiado grande (${(stats.size / (1024*1024)).toFixed(2)}MB)` });
           continue;
         }
         const content = await fs.readFile(fullPath, 'utf-8');
         filesData.push({ fileName: relativeFilePath, content });
-        concatenatedContent += `\n\n// --- Archivo: ${relativeFilePath} ---\n\n${content}`;
+        const fileMarker = `\n\n// --- Archivo: ${relativeFilePath} ---\n\n`;
+        concatenatedContent += fileMarker + content;
+        totalConcatenatedChars += fileMarker.length + content.length;
+        log(`Archivo ${relativeFilePath} añadido. Longitud total concatenada aprox: ${totalConcatenatedChars}`, 'DETAIL');
       } catch (readError) {
-        log(`No se pudo leer el archivo ${relativeFilePath} del repositorio clonado: ${(readError as Error).message}`, 'WARN');
+        log(`No se pudo leer el archivo ${relativeFilePath} del repositorio clonado: ${(readError as Error).message}`, 'WARN', readError);
         filesData.push({ fileName: relativeFilePath, content: `// Error al leer archivo: ${(readError as Error).message}` });
       }
     }
     
-    log(`Procesamiento de archivos del repositorio finalizado. Total de archivos procesados: ${filesData.length}.`, 'INFO');
+    log(`Procesamiento de archivos del repositorio finalizado. Total de archivos procesados: ${filesData.length}. Longitud total concatenada: ${totalConcatenatedChars}`, 'INFO');
 
     return {
       success: true,
@@ -114,7 +141,7 @@ export async function fetchRepositoryContents(
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : "Error desconocido durante la obtención del repositorio Git.";
-    log(`Error crítico obteniendo contenido del repositorio Git: ${errorMessage}`, 'ERROR');
+    log(`Error crítico obteniendo contenido del repositorio Git: ${errorMessage}`, 'ERROR', error);
     if (error instanceof Error && error.stack) {
         log(`Stack del error crítico: ${error.stack}`, 'ERROR');
     }
@@ -130,8 +157,9 @@ export async function fetchRepositoryContents(
         await fs.rm(tempRepoPath, { recursive: true, force: true });
         log('Directorio temporal eliminado.', 'INFO');
       } catch (cleanupError) {
-        log(`Error al limpiar el directorio temporal ${tempRepoPath}: ${(cleanupError as Error).message}`, 'ERROR');
+        log(`Error al limpiar el directorio temporal ${tempRepoPath}: ${(cleanupError as Error).message}`, 'ERROR', cleanupError);
       }
     }
   }
 }
+
