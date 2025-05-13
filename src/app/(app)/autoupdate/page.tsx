@@ -8,7 +8,7 @@ import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, Check
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion, handleUploadToGit, initiateAutoUpdateWorkgroupAnalysis } from './actions';
 import type { AppSourceFile } from '@/types/project'; 
-import type { ProjectAnalysisResponse, LLMOptions, SuggestionItem } from '@/services/groq';
+import type { ProjectAnalysisResponse, SuggestionItem } from '@/services/groq';
 import type { SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
@@ -58,10 +58,9 @@ type AutoUpdateStatus = "idle" | "loading_source" | "chunking_source" | "analyzi
 type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
 
 
-// Define the type for a single suggestion item from the response
 // Correctly extend the type of an element in the 'suggestions' array
 interface SingleSuggestion extends SuggestionItem {
-  id?: string; // id might not exist initially, make it optional
+  id?: string; 
   area: string;
 }
 
@@ -91,7 +90,7 @@ export default function AutoUpdatePage() {
   const [analysisResult, setAnalysisResult] = useState<ProjectAnalysisResponse | null>(null);
   const [currentAnalysisError, setCurrentAnalysisError] = useState<string | null>(null);
   const [suggestionsWithStatus, setSuggestionsWithStatus] = useState<SuggestionWithStatus[]>([]);
-  const [isDownloading, setIsDownloading] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(isDownloading);
   const [projectFiles, setProjectFiles] = useState<AppSourceFile[]>([]);
   const [analysisPreferences, setAnalysisPreferences] = useState<string>("");
   const [analysisProgress, setAnalysisProgress] = useState<AnalysisProgress>({ processed: 0, total: 0 });
@@ -105,7 +104,7 @@ export default function AutoUpdatePage() {
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
   const [gitSourceUrl, setGitSourceUrl] = useState<string>(""); 
-  const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global'); 
+  const [selectedConfigSource, setSelectedConfigSource] = useState<string>(''); 
   const [currentLlmOptions, setCurrentLlmOptions] = useState<LLMOptions | null>(null);
 
   const [gitConfig, setGitConfig] = useState<GitConfig>({ repoUrl: null, username: null, email: null, pat: null });
@@ -121,12 +120,14 @@ export default function AutoUpdatePage() {
   useEffect(() => {
     isMountedRef.current = true;
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Componente AutoUpdatePage montado.' });
+    
+    let loadedAgents: AgentConfig[] = [];
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
     if (storedAgents) {
       try { 
-        const parsedAgents = JSON.parse(storedAgents);
-        setAgents(parsedAgents); 
-        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'DEBUG', message: 'Agentes cargados desde localStorage.', data: { count: parsedAgents.length } });
+        loadedAgents = JSON.parse(storedAgents);
+        setAgents(loadedAgents); 
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'DEBUG', message: 'Agentes cargados desde localStorage.', data: { count: loadedAgents.length } });
       } catch (e) { 
         console.error("Error parsing stored agents:", e); 
         setAgents([]); 
@@ -135,10 +136,22 @@ export default function AutoUpdatePage() {
     } else {
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'WARN', message: 'No se encontraron agentes en localStorage.' });
     }
+
     const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
     if (storedWorkgroups) {
         try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); addDebugLog({source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: 'Error al parsear grupos de localStorage.', data: e});}
     }
+
+    // Set default config source to RefactorizadorCodigoExperto if available
+    const refactorAgent = loadedAgents.find(a => a.name === REFACTOR_AGENT_NAME);
+    if (refactorAgent) {
+      setSelectedConfigSource(`agent:${refactorAgent.id}`);
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Fuente de configuración por defecto establecida a: Agente ${REFACTOR_AGENT_NAME}` });
+    } else {
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'WARN', message: `Agente ${REFACTOR_AGENT_NAME} no encontrado. El usuario deberá seleccionar una fuente de configuración.` });
+       setSelectedConfigSource(''); // Or some other sensible default like 'global' if that becomes an option again
+    }
+
 
     setGitConfig({
       repoUrl: localStorage.getItem(LOCALSTORAGE_GIT_REPO_URL_KEY),
@@ -152,9 +165,11 @@ export default function AutoUpdatePage() {
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Componente AutoUpdatePage desmontado.' });
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addDebugLog]);
+  }, [addDebugLog]); // Removed setSelectedConfigSource from deps as it's set based on loadedAgents
 
   useEffect(() => {
+    if (!selectedConfigSource) return; 
+
     const localStorageSnapshot: LocalStorageSnapshot = {
       [LOCALSTORAGE_PROVIDER_ID_KEY]: typeof window !== 'undefined' ? localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null : null,
       apiKeys: LLM_PROVIDERS.reduce((acc, p) => { acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(getLocalStorageApiKeyName(p.id)) : null; return acc; }, {} as LocalStorageSnapshot['apiKeys']),
@@ -164,6 +179,7 @@ export default function AutoUpdatePage() {
     const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups, localStorageSnapshot);
     setCurrentLlmOptions(options);
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'DEBUG', message: `Opciones LLM resueltas para ${getSourceName(selectedConfigSource)}`, data: options });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedConfigSource, agents, workgroups, addDebugLog]);
   
   const addServerLogsToDebugAndPage = useCallback((serverLogs: string[] | undefined, sourcePrefix: string = 'SERVER_AUTOUDDATE') => {
@@ -241,6 +257,14 @@ export default function AutoUpdatePage() {
     setDetailedLogs([]); 
     const isWorkgroupMode = selectedConfigSource.startsWith('workgroup:');
 
+    if (!selectedConfigSource) {
+        const errorMsg = `Por favor, selecciona una fuente de configuración LLM (Agente o Grupo).`;
+        toast({ title: "Error de Configuración LLM", description: errorMsg, variant: "destructive", duration: 7000 });
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Auto-Análisis fallido: ${errorMsg}` });
+        return;
+    }
+
+
     if (!isWorkgroupMode && !currentLlmOptions) {
         const errorMsg = `La configuración LLM para '${getSourceName(selectedConfigSource)}' está incompleta o no es válida.`;
         toast({ title: "Error de Configuración LLM", description: errorMsg, variant: "destructive", duration: 7000 });
@@ -275,23 +299,30 @@ export default function AutoUpdatePage() {
       description: `Paso 1: Cargando y preparando el código fuente... ${gitSourceUrl ? `desde ${gitSourceUrl}` : '(local)'}`
     });
 
-    const bundleResult = await getApplicationSourceBundle(false, undefined, gitSourceUrl || undefined);
+    const bundleResult = await getApplicationSourceBundle(true, undefined, gitSourceUrl || undefined); // Concatenate for analysis
     addServerLogsToDebugAndPage(bundleResult.logsBuilt, 'SERVER_SOURCE_BUNDLE');
 
-    if (!bundleResult.success || !bundleResult.files) {
+    if (!bundleResult.success || !bundleResult.files || !bundleResult.concatenatedSource) {
       const errorMsg = bundleResult.error || "No se pudo obtener el código fuente para analizar.";
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Error en Paso 1: ${errorMsg}`});
       handleAnalysisError(errorMsg);
       return;
     }
-    setProjectFiles(bundleResult.files);
-    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Paso 1 completado. ${bundleResult.files?.length || 'Varios'} archivos obtenidos.`});
+    setProjectFiles(bundleResult.files); // Store individual files for applying suggestions later
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Paso 1 completado. ${bundleResult.files?.length || 'Varios'} archivos obtenidos. Contenido concatenado: ${bundleResult.concatenatedSource.length} caracteres.`});
 
 
-    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Paso 2: Enviando ${bundleResult.files.length} archivos al servidor para análisis y/o fragmentación.`});
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Paso 2: Iniciando análisis del código concatenado.`});
     setStatus("analyzing");
 
     let analysisActionResult;
+    // Ensure preferences include Spanish language if not already set
+    let finalAnalysisPreferences = analysisPreferences || "Priorizar la calidad del código, mantenibilidad y buenas prácticas. Todas las sugerencias deben estar en castellano.";
+    if (!finalAnalysisPreferences.toLowerCase().includes("castellano") && !finalAnalysisPreferences.toLowerCase().includes("español")) {
+        finalAnalysisPreferences += " Todas las sugerencias deben estar en castellano.";
+    }
+
+
     if (isWorkgroupMode) {
       const workgroupId = selectedConfigSource.split(':')[1];
       const localStorageSnapshot: LocalStorageSnapshot = {
@@ -301,11 +332,11 @@ export default function AutoUpdatePage() {
         apiUrls: LLM_PROVIDERS.reduce((acc, p) => { acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(`codealchemist_apiurl_${p.id}`) : null; return acc; }, {} as LocalStorageSnapshot['apiUrls']),
       };
       analysisActionResult = await initiateAutoUpdateWorkgroupAnalysis({
-        sourceFiles: bundleResult.files,
-        concatenatedSource: bundleResult.concatenatedSource,
+        sourceFiles: bundleResult.files, // Keep individual files if needed by workgroup
+        concatenatedSource: bundleResult.concatenatedSource, // Pass concatenated source
         gitRepoUrl: gitSourceUrl || undefined,
         workgroupId,
-        analysisPreferences,
+        analysisPreferences: finalAnalysisPreferences,
         agents,
         workgroups,
         localStorageSnapshot
@@ -313,12 +344,12 @@ export default function AutoUpdatePage() {
       addServerLogsToDebugAndPage(analysisActionResult.workgroupLogs, 'SERVER_WG_AUTO_ANALYZE');
     } else if (currentLlmOptions) {
       analysisActionResult = await handleAutoAnalyzeAppSource(
-          bundleResult.files,
+          bundleResult.files, // Pass individual files for chunking on server
           currentLlmOptions.providerId,
           currentLlmOptions.apiKey,
           currentLlmOptions.modelName,
           currentLlmOptions.apiUrl,
-          analysisPreferences,
+          finalAnalysisPreferences,
           gitSourceUrl || undefined 
       );
       addServerLogsToDebugAndPage(analysisActionResult.detailedExecutionLogs, 'SERVER_AUTO_ANALYZE');
@@ -350,17 +381,29 @@ export default function AutoUpdatePage() {
     const targetError = errorToFix || currentAnalysisError || currentGitError;
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Intentando auto-corrección.', data: { error: targetError, context: errorContext }});
     
-    if (!currentLlmOptions && !selectedConfigSource.startsWith('workgroup:')) { // Also check for workgroup, as orchestrator needs config
-      const errorMsg = `Configuración LLM para '${getSourceName(selectedConfigSource)}' no resuelta. Necesario para Auto-Fix.`;
+    let llmOptionsForFix = currentLlmOptions; // Default to current page selection
+
+    if (selectedConfigSource.startsWith('workgroup:')) {
+        const orchestrator = agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME);
+        if (orchestrator) {
+            const snapshot: LocalStorageSnapshot = { /* ... populate snapshot ... */
+                [LOCALSTORAGE_PROVIDER_ID_KEY]: localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null,
+                apiKeys: {}, modelNames: {}, apiUrls: {}
+            };
+            LLM_PROVIDERS.forEach(p => {
+                snapshot.apiKeys[p.id] = localStorage.getItem(getLocalStorageApiKeyName(p.id));
+                snapshot.modelNames[p.id] = localStorage.getItem(getLocalStorageModelName(p.id));
+                snapshot.apiUrls[p.id] = localStorage.getItem(`codealchemist_apiurl_${p.id}`);
+            });
+            llmOptionsForFix = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, agents, workgroups, snapshot);
+        }
+    }
+    
+    if (!llmOptionsForFix) {
+      const errorMsg = `Configuración LLM para '${getSourceName(selectedConfigSource)}' no resuelta o inválida para Auto-Fix.`;
       toast({ title: "Error de Configuración LLM", description: errorMsg, variant: "destructive" });
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Auto-corrección fallida: ${errorMsg}`});
       return;
-    }
-    if (selectedConfigSource.startsWith('workgroup:') && (!workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1]) || !agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME))) {
-        const errorMsg = `El grupo de trabajo '${getSourceName(selectedConfigSource)}' o su Orquestador no están configurados correctamente para Auto-Fix.`;
-        toast({ title: "Error de Configuración de Grupo", description: errorMsg, variant: "destructive" });
-        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Auto-corrección fallida: ${errorMsg}`});
-        return;
     }
     
     if (!targetError) {
@@ -374,18 +417,6 @@ export default function AutoUpdatePage() {
     setStatus(fixingStatus);
     setAutoFixSuggestion(null);
     
-    let llmOptionsForFix = currentLlmOptions;
-    if (selectedConfigSource.startsWith('workgroup:')) {
-        const orchestrator = agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME);
-        if (orchestrator) {
-            const snapshot: LocalStorageSnapshot = { /* ... populate snapshot ... */ };
-            llmOptionsForFix = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, agents, workgroups, snapshot);
-        }
-    }
-    if (!llmOptionsForFix) {
-        toast({ title: "Error de Configuración", description: `No se pudo determinar la config LLM para Auto-Fix.`, variant: "destructive" });
-        setStatus(prevStatus); return;
-    }
 
     toast({ title: "Intentando Auto-Corrección", description: `Consultando a ${llmOptionsForFix.providerId} para una posible solución...` });
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Consultando a ${llmOptionsForFix.providerId} para auto-corrección.`});
@@ -498,11 +529,11 @@ export default function AutoUpdatePage() {
             }
           });
           blob = await zip.generateAsync({ type: "blob" });
-          downloadFileName = 'codealchemist-source.zip';
+          downloadFileName = 'CodeAlchemist-source.zip';
         } else { 
           const jsonData = JSON.stringify(filesToProcess, null, 2);
           blob = new Blob([jsonData], { type: 'application/json;charset=utf-8' });
-          downloadFileName = 'codealchemist-source.json';
+          downloadFileName = 'CodeAlchemist-source.json';
         }
 
         const url = URL.createObjectURL(blob);
@@ -581,7 +612,10 @@ export default function AutoUpdatePage() {
   const sourceDescription = gitSourceUrl ? `Git: ${gitSourceUrl.split('/').pop() || gitSourceUrl}` : 'Local';
 
   const getSourceName = (sourceId: string): string => {
-    if (sourceId === 'global') return 'Global (Config. General)';
+    if (!sourceId) return 'Seleccionar fuente';
+    const refactorAgent = agents.find(a => a.name === REFACTOR_AGENT_NAME);
+    if (sourceId === `agent:${refactorAgent?.id}`) return `Agente: ${REFACTOR_AGENT_NAME} (Por defecto)`;
+    
     if (sourceId.startsWith('agent:')) {
       const agentId = sourceId.split(':')[1];
       return agents.find(a => a.id === agentId)?.name || `Agente ${agentId.substring(0,6)}...`;
@@ -590,12 +624,15 @@ export default function AutoUpdatePage() {
       const workgroupId = sourceId.split(':')[1];
       return workgroups.find(wg => wg.id === workgroupId)?.name || `Grupo ${workgroupId.substring(0,6)}...`;
     }
-    return 'Desconocido';
+    return `Desconocido (${sourceId})`;
   };
   
   let llmConfigDisplayStatus = "";
   const isWorkgroupSelected = selectedConfigSource.startsWith('workgroup:');
-  if (!isWorkgroupSelected && !currentLlmOptions) {
+
+  if (!selectedConfigSource) {
+    llmConfigDisplayStatus = "Error: Por favor, selecciona un Agente o Grupo para el análisis.";
+  } else if (!isWorkgroupSelected && !currentLlmOptions) {
     llmConfigDisplayStatus = `Error: Configuración LLM para '${getSourceName(selectedConfigSource)}' incompleta.`;
   } else if (!isWorkgroupSelected && currentLlmOptions) {
     llmConfigDisplayStatus = `Análisis con: ${getSourceName(selectedConfigSource)} (${currentLlmOptions.providerId} - ${currentLlmOptions.modelName})`;
@@ -611,12 +648,18 @@ export default function AutoUpdatePage() {
                 llmConfigDisplayStatus = `Error: Configuración LLM para Orquestador del grupo '${workgroup.name}' incompleta.`;
              }
         } else {
-            llmConfigDisplayStatus = `Error: Grupo '${workgroup.name}' no tiene Orquestador asignado.`;
+            llmConfigDisplayStatus = `Error: Grupo '${workgroup.name}' no tiene Orquestador (${ORCHESTRATOR_AGENT_NAME}) asignado.`;
         }
       } else {
         llmConfigDisplayStatus = `Error: Grupo '${getSourceName(selectedConfigSource)}' no encontrado.`;
       }
   }
+
+  const refactorAgentInstance = agents.find(a => a.name === REFACTOR_AGENT_NAME);
+  const filteredWorkgroups = workgroups.filter(wg => 
+    wg.agentIds.includes(refactorAgentInstance?.id || '') && 
+    wg.agentIds.some(agentId => agents.find(a => a.id === agentId)?.name === ORCHESTRATOR_AGENT_NAME)
+  );
 
 
   return (
@@ -629,8 +672,8 @@ export default function AutoUpdatePage() {
             AutoUpdate: Análisis de CodeAlchemist
           </CardTitle>
           <CardDescription className="text-lg text-foreground">
-            Analiza el código fuente de CodeAlchemist (local o desde Git) usando la configuración LLM seleccionada.
-            <span className={cn("block mt-1", ( (!isWorkgroupSelected && !currentLlmOptions) || (isWorkgroupSelected && (!workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1]) || !agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME))) ) ? "text-destructive" : "text-foreground")}>
+            Analiza el código fuente de CodeAlchemist (local o desde Git) usando un agente o grupo de trabajo especializado.
+            <span className={cn("block mt-1", (llmConfigDisplayStatus.startsWith("Error:")) ? "text-destructive" : "text-foreground")}>
                 {llmConfigDisplayStatus}
             </span>
              <span className="text-foreground block mt-1">(Fuente actual: {sourceDescription})</span>
@@ -639,17 +682,34 @@ export default function AutoUpdatePage() {
         <CardContent className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
              <div className="space-y-2">
-                <Label htmlFor="configSourceAutoUpdate" className="text-base flex items-center gap-1"><Settings2 className="h-4 w-4"/> Usar Configuración LLM De:</Label>
+                <Label htmlFor="configSourceAutoUpdate" className="text-base flex items-center gap-1"><Settings2 className="h-4 w-4"/> Usar para Análisis:</Label>
                 <Select onValueChange={setSelectedConfigSource} value={selectedConfigSource}>
-                    <SelectTrigger id="configSourceAutoUpdate" className="w-full"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
+                    <SelectTrigger id="configSourceAutoUpdate" className="w-full">
+                        <SelectValue placeholder="Seleccionar Agente o Grupo" />
+                    </SelectTrigger>
                     <SelectContent>
                         <ScrollArea className="h-[--radix-select-content-available-height] max-h-60">
-                            <SelectItem value="global">Global (Config. General)</SelectItem>
-                            {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
-                            {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
+                            {refactorAgentInstance && (
+                                <SelectItem value={`agent:${refactorAgentInstance.id}`}>
+                                    Agente: {REFACTOR_AGENT_NAME} (Recomendado)
+                                </SelectItem>
+                            )}
+                            {agents.filter(a => a.name !== REFACTOR_AGENT_NAME).map(agent => (
+                                <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>
+                                    Agente: {agent.name}
+                                </SelectItem>
+                            ))}
+                            {filteredWorkgroups.map(wg => (
+                                <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>
+                                    Grupo: {wg.name}
+                                </SelectItem>
+                            ))}
                         </ScrollArea>
                     </SelectContent>
                 </Select>
+                {(!selectedConfigSource && !refactorAgentInstance) && 
+                    <p className="text-xs text-destructive mt-1">Por favor, crea el agente '{REFACTOR_AGENT_NAME}' o selecciona una fuente de configuración.</p>
+                }
              </div>
              <div className="space-y-2">
               <Label htmlFor="gitSourceUrl" className="text-base flex items-center gap-1"><Github className="h-4 w-4" /> URL del Repositorio Git (Opcional)</Label>
@@ -668,12 +728,12 @@ export default function AutoUpdatePage() {
           <div className="space-y-2">
             <Label htmlFor="analysis-preferences" className="text-base flex items-center gap-2 text-foreground"><Edit3 className="h-5 w-5" /> Preferencias de Análisis (Opcional)</Label>
             <Textarea id="analysis-preferences" value={analysisPreferences} onChange={(e) => setAnalysisPreferences(e.target.value)}
-              placeholder="Ej: 'Enfócate en optimizar el rendimiento...', 'Revisa la seguridad...'" rows={3} className="bg-card text-foreground" />
-            <p className="text-xs text-muted-foreground">Describe qué tipo de actualizaciones o áreas te gustaría que la IA priorizara.</p>
+              placeholder="Ej: 'Enfócate en optimizar el rendimiento de la UI...', 'Revisa la seguridad en las llamadas API...', 'Todas las sugerencias deben estar en castellano.'" rows={3} className="bg-card text-foreground" />
+            <p className="text-xs text-muted-foreground">Describe qué tipo de actualizaciones o áreas te gustaría que la IA priorizara. Especifica el idioma si es necesario.</p>
           </div>
           <div className="flex flex-wrap gap-4">
             <Button onClick={() => handleStartAutoAnalysis(false)} 
-              disabled={isProcessing || (!isWorkgroupSelected && !currentLlmOptions) || (isWorkgroupSelected && (!workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1]) || !agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME))) } 
+              disabled={isProcessing || !selectedConfigSource || (!isWorkgroupSelected && !currentLlmOptions) || (isWorkgroupSelected && (!workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1]) || !agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME))) } 
               className="text-base py-3 px-6"
             >
               {isProcessing && (status === "analyzing" || status === "loading_source" || status === "chunking_source") ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Sparkles className="mr-2 h-5 w-5" />}
@@ -817,7 +877,7 @@ export default function AutoUpdatePage() {
                 <div className="flex gap-2 mt-2">
                   <Button variant="outline" size="sm" onClick={() => addDebugLog({ source: 'AUTOUPDATE_UI', type: 'ERROR', message: `Error copiado de UI: ${currentAnalysisError || currentGitError}`})} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground"><Copy className="mr-2 h-4 w-4" /> Copiar Error</Button>
                   <Button variant="outline" size="sm" onClick={() => handleAttemptAutoFix(currentAnalysisError || currentGitError, currentGitError ? "Error en subida Git." : "Error en auto-análisis.")}
-                    disabled={status === "fixing_error" || status === "fixing_git_error" || (!isWorkgroupSelected && !currentLlmOptions) || (isWorkgroupSelected && (!workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1]) || !agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME))) } 
+                    disabled={status === "fixing_error" || status === "fixing_git_error" || !selectedConfigSource || (!isWorkgroupSelected && !currentLlmOptions) || (isWorkgroupSelected && (!workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1]) || !agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME))) } 
                     className="text-accent border-accent/50 hover:bg-accent/20 hover:text-accent-foreground">
                     {(status === "fixing_error" || status === "fixing_git_error") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Settings2 className="mr-2 h-4 w-4" />} Auto-Fix
                   </Button>

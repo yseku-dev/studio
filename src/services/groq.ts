@@ -347,7 +347,7 @@ export async function analyzeCode(
   const systemPrompt = `Eres un asistente experto en análisis de código. Analiza el siguiente fragmento de código y proporciona:
 1. Una sugerencia de código mejorado (campo "codeSuggestion").
 2. Una explicación concisa de las mejoras (campo "explanation").
-Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "codeSuggestion" y "explanation". Asegúrate de que la respuesta sea un único objeto JSON válido. No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
+Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "codeSuggestion" y "explanation". Asegúrate de que la respuesta sea un único objeto JSON válido. No incluyas markdown ni texto introductorio/conclusivo fuera del JSON. Todas las explicaciones y sugerencias deben estar en castellano.`;
 
   const messages: ChatMessage[] = [
     { role: "system", content: systemPrompt },
@@ -386,7 +386,7 @@ export async function analyzeProjectSourceChunk(
     - "suggestedFullFileContent": (string, opcional) SOLO si la sugerencia implica un cambio de código directo Y el archivo completo está contenido DENTRO de este fragmento, proporciona el contenido COMPLETO del archivo con la sugerencia aplicada. Si el archivo es más grande que este fragmento, la sugerencia no es un cambio de código completo para un archivo totalmente visible aquí, o no aplica a un archivo específico, OMITE este campo y detalla los cambios en "suggestion".
 4. Una evaluación general del CÓDIGO PROPORCIONADO EN ESTE FRAGMENTO (campo "overallAssessment").
 
-Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTitle", "identifiedAreas", "suggestions", "overallAssessment". Asegúrate de que la respuesta sea un único objeto JSON válido y que "identifiedAreas" y "suggestions" sean arrays. No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
+Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTitle", "identifiedAreas", "suggestions", "overallAssessment". Asegúrate de que la respuesta sea un único objeto JSON válido y que "identifiedAreas" y "suggestions" sean arrays. No incluyas markdown ni texto introductorio/conclusivo fuera del JSON. Todas las descripciones, títulos y sugerencias deben estar en castellano.`;
 
   if (analysisPreferences) {
     systemPrompt += `\n\nTen en cuenta las siguientes preferencias o áreas de enfoque para tu análisis sobre este fragmento: "${analysisPreferences}".`;
@@ -436,7 +436,7 @@ Proporciona:
 Responde ÚNICAMENTE en formato JSON válido con la clave "generatedCode" y, opcionalmente, "explanation".
 Asegúrate de que el código sea funcional y siga las mejores prácticas.
 Si el prompt pide un lenguaje específico, úsalo. Si no, Python es una buena opción por defecto.
-No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
+No incluyas markdown ni texto introductorio/conclusivo fuera del JSON. Todas las explicaciones y el código generado deben estar en castellano donde sea apropiado (comentarios, nombres de variables si el prompt lo sugiere, etc.).`;
 
   const messages: ChatMessage[] = [
     { role: "system", content: systemMessage },
@@ -479,7 +479,7 @@ Asegúrate de que "projectStructure.files" sea un array válido de objetos, cada
 Genera una estructura de directorios lógica y común para el tipo de proyecto descrito.
 Incluye archivos de configuración comunes si son relevantes (ej: package.json, tsconfig.json, .gitignore).
 El contenido de los archivos debe ser coherente con sus extensiones y propósitos.
-No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
+No incluyas markdown ni texto introductorio/conclusivo fuera del JSON. Todas las notas y nombres de archivos/carpetas deben estar en castellano si el prompt original está en castellano o si parece apropiado.`;
 
   const messages: ChatMessage[] = [
     { role: "system", content: systemMessage },
@@ -524,6 +524,18 @@ export async function chatWithLLM(payload: ChatLLMPayload): Promise<ChatLLMRespo
     ...options,
     timeoutMs: options.timeoutMs || CHAT_COMPLETION_TIMEOUT_MS,
   };
+  
+  // Add instruction for Spanish responses if not already a system instruction.
+  const systemMessageIndex = messages.findIndex(m => m.role === 'system');
+  const spanishInstruction = "Por favor, responde siempre en castellano.";
+  if (systemMessageIndex !== -1) {
+    if (!messages[systemMessageIndex].content.toLowerCase().includes("castellano") && !messages[systemMessageIndex].content.toLowerCase().includes("español")) {
+      messages[systemMessageIndex].content += `\n${spanishInstruction}`;
+    }
+  } else {
+    messages.unshift({ role: "system", content: spanishInstruction });
+  }
+
 
   const result = await makeLLMRequest<ChatLLMResponse>(
     chatOptions,

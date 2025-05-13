@@ -51,7 +51,7 @@ const projectSourceSchema = z.object({
   return false;
 }, {
   message: "Debes proporcionar un archivo o una URL de Git.",
-  path: ["projectFile"], // path can be generic, refinement checks both
+  path: ["projectFile"], 
 });
 
 type ProjectSourceFormData = z.infer<typeof projectSourceSchema>;
@@ -88,7 +88,7 @@ export default function RefactorProjectPage() {
     resolver: zodResolver(projectSourceSchema),
     defaultValues: { 
         sourceType: "file",
-        configSource: 'global' 
+        configSource: agents.find(a => a.name === REFACTOR_AGENT_NAME)?.id ? `agent:${agents.find(a => a.name === REFACTOR_AGENT_NAME)!.id}` : 'global' 
     },
   });
 
@@ -130,11 +130,23 @@ export default function RefactorProjectPage() {
   }, [addDebugLog]);
 
   useEffect(() => {
+    let loadedAgents: AgentConfig[] = [];
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
-    if (storedAgents) try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing agents", e); addDebugLog({source: 'REFACTOR_PROJECT_PAGE', type: 'ERROR', message: 'Error al parsear agentes de localStorage.', data: e}); }
+    if (storedAgents) try { 
+      loadedAgents = JSON.parse(storedAgents);
+      setAgents(loadedAgents); 
+    } catch (e) { console.error("Error parsing agents", e); addDebugLog({source: 'REFACTOR_PROJECT_PAGE', type: 'ERROR', message: 'Error al parsear agentes de localStorage.', data: e}); }
+    
     const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
     if (storedWorkgroups) try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing workgroups", e); addDebugLog({source: 'REFACTOR_PROJECT_PAGE', type: 'ERROR', message: 'Error al parsear grupos de localStorage.', data: e}); }
-    sourceForm.setValue('configSource', 'global');
+    
+    const refactorAgent = loadedAgents.find(a => a.name === REFACTOR_AGENT_NAME);
+    if (refactorAgent) {
+        sourceForm.setValue('configSource', `agent:${refactorAgent.id}`);
+    } else {
+        sourceForm.setValue('configSource', 'global'); // Fallback, though 'global' might not be a direct LLM option anymore
+    }
+
   }, [sourceForm, addDebugLog]);
 
   useEffect(() => {
@@ -187,8 +199,8 @@ export default function RefactorProjectPage() {
             } else if (file.type === 'application/zip' || file.name.endsWith('.zip')) {
                 addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'INFO', message: `Archivo ZIP (${file.name}) seleccionado. Se leerá su contenido.`});
                 try {
-                    projectFileContent = await file.text(); // Attempt to read as text, server will handle actual unzipping if needed.
-                    addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'DEBUG', message: `Contenido de ZIP (leído como texto) preparado. Longitud: ${projectFileContent.length}`});
+                    projectFileContent = `Contenido_ZIP_Placeholder_Nombre:${file.name}_Tipo:${file.type}`; // Placeholder, server will handle.
+                    addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'DEBUG', message: `Contenido de ZIP (placeholder) preparado.`});
                 } catch (zipReadError) {
                     addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'WARN', message: `No se pudo leer el ZIP como texto, usando placeholder. Error: ${(zipReadError as Error).message}`});
                     projectFileContent = `Contenido_ZIP_Placeholder_Nombre:${file.name}_Tipo:${file.type}`; 
@@ -210,6 +222,11 @@ export default function RefactorProjectPage() {
         setAnalysisStatus("idle");
         addDebugLog({ source: 'REFACTOR_PROJECT_PAGE', type: 'ERROR', message: `Intento de análisis Git sin URL.`});
         return;
+    }
+
+    let goalsWithLanguage = params.goals || "";
+    if (!goalsWithLanguage.toLowerCase().includes("castellano") && !goalsWithLanguage.toLowerCase().includes("español")) {
+        goalsWithLanguage = `${goalsWithLanguage} Todas las sugerencias y descripciones deben estar en castellano.`.trim();
     }
 
 
@@ -242,7 +259,7 @@ export default function RefactorProjectPage() {
       projectFileName: data.sourceType === "file" ? projectFileName : undefined,
       projectFileType: data.sourceType === "file" ? projectFileType : undefined,
       gitUrl: data.sourceType === "git" ? data.gitUrl : undefined,
-      goals: params.goals,
+      goals: goalsWithLanguage,
       priority: params.priority,
       configSource: data.configSource,
       llmOptions: data.configSource.startsWith('workgroup:') ? undefined : resolvedLlmOptions || undefined,
@@ -311,21 +328,25 @@ export default function RefactorProjectPage() {
   };
 
   const getSourceName = (sourceId: string): string => {
-    if (sourceId === 'global') return `Agente ${REFACTOR_AGENT_NAME} (Config. Global)`;
+    const refactorAgentDefault = agents.find(a => a.name === REFACTOR_AGENT_NAME);
+    if (sourceId === 'global' && refactorAgentDefault) return `Agente: ${REFACTOR_AGENT_NAME} (Usando Config. Global)`;
+    if (sourceId === 'global' && !refactorAgentDefault) return `LLM Global (Agente ${REFACTOR_AGENT_NAME} no encontrado)`;
+
+
     const agentPrefix = "agent:";
     const workgroupPrefix = "workgroup:";
 
     if (sourceId.startsWith(agentPrefix)) {
       const agentId = sourceId.substring(agentPrefix.length);
       const agent = agents.find(a => a.id === agentId);
-      return agent ? (agent.name === REFACTOR_AGENT_NAME ? REFACTOR_AGENT_NAME : `Agente: ${agent.name}`) : `Agente ${agentId.substring(0, 6)}...`;
+      return agent ? `Agente: ${agent.name}` : `Agente ${agentId.substring(0, 6)}...`;
     }
     if (sourceId.startsWith(workgroupPrefix)) {
       const workgroupId = sourceId.substring(workgroupPrefix.length);
       const workgroup = workgroups.find(wg => wg.id === workgroupId);
       return workgroup ? `Grupo: ${workgroup.name}` : `Grupo ${workgroupId.substring(0, 6)}...`;
     }
-    return 'Desconocido';
+    return 'Seleccionar Fuente';
   };
 
   const isProcessing = analysisStatus === "loading" || analysisStatus === "analyzing";
@@ -334,8 +355,9 @@ export default function RefactorProjectPage() {
   const canSubmit = isProcessing ||
                     (formValues.sourceType === "file" && !formValues.projectFile) ||
                     (formValues.sourceType === "git" && (!formValues.gitUrl || formValues.gitUrl.trim() === '')) ||
+                    !watchedConfigSource || // Ensure a config source is selected
                     (!resolvedLlmOptions && !isWorkgroupSelected) ||
-                    (isWorkgroupSelected && workgroups.length === 0 && !workgroups.find(wg => wg.id === watchedConfigSource.split(':')[1]));
+                    (isWorkgroupSelected && (!workgroups.find(wg => wg.id === watchedConfigSource.split(':')[1]) || !agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME)));
 
 
   return (
@@ -360,24 +382,36 @@ export default function RefactorProjectPage() {
         <form onSubmit={sourceForm.handleSubmit(handleAnalyzeRefactor)}>
           <CardContent className="space-y-6">
             <div className="space-y-2">
-              <Label htmlFor="configSourceRefactor" className="text-base flex items-center gap-1"><Settings2 className="h-4 w-4"/> Usar Configuración LLM De:</Label>
+              <Label htmlFor="configSourceRefactor" className="text-base flex items-center gap-1"><Settings2 className="h-4 w-4"/> Usar para Análisis:</Label>
               <Controller
                 name="configSource"
                 control={sourceForm.control}
                 render={({ field }) => (
                   <Select onValueChange={field.onChange} value={field.value}>
                     <SelectTrigger id="configSourceRefactor" className="w-full md:w-1/2">
-                      <SelectValue placeholder="Seleccionar fuente (Agente Refactorizador o Grupo)" />
+                      <SelectValue placeholder="Seleccionar Agente o Grupo" />
                     </SelectTrigger>
                     <SelectContent>
                       <ScrollArea className="h-[--radix-select-content-available-height] max-h-60">
-                        <SelectItem value="global">Agente {REFACTOR_AGENT_NAME} (Config. Global)</SelectItem>
-                        {workgroups.filter(wg => wg.agentIds.some(agentId => agents.find(a => a.id === agentId)?.name === REFACTOR_AGENT_NAME)).map(wg => (
-                          <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>
-                        ))}
-                        {agents.filter(a => a.name === REFACTOR_AGENT_NAME).map(agent => (
+                        {agents.find(a => a.name === REFACTOR_AGENT_NAME) && (
+                             <SelectItem value={`agent:${agents.find(a => a.name === REFACTOR_AGENT_NAME)!.id}`}>
+                                Agente: {REFACTOR_AGENT_NAME} (Recomendado)
+                             </SelectItem>
+                        )}
+                        {agents.filter(a => a.name !== REFACTOR_AGENT_NAME).map(agent => (
                           <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>
                         ))}
+                        {workgroups.filter(wg => 
+                            wg.agentIds.some(id => agents.find(a=>a.id===id)?.name === REFACTOR_AGENT_NAME) &&
+                            wg.agentIds.some(id => agents.find(a=>a.id===id)?.name === ORCHESTRATOR_AGENT_NAME)
+                         ).map(wg => (
+                          <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>
+                        ))}
+                         {(!agents.find(a => a.name === REFACTOR_AGENT_NAME) && workgroups.filter(wg => wg.agentIds.some(id => agents.find(a=>a.id===id)?.name === REFACTOR_AGENT_NAME)).length === 0) && (
+                            <div className="p-2 text-sm text-muted-foreground text-center">
+                                No se encontró el agente '{REFACTOR_AGENT_NAME}' ni grupos que lo contengan.
+                            </div>
+                         )}
                       </ScrollArea>
                     </SelectContent>
                   </Select>
@@ -444,7 +478,7 @@ export default function RefactorProjectPage() {
               <div className="space-y-3">
                 <div>
                   <Label htmlFor="goals" className="text-foreground">Metas (opcional, separadas por coma)</Label>
-                  <Input id="goals" {...paramsForm.register('goals')} placeholder="Ej: Mejorar rendimiento, Estandarizar código" className="bg-card"/>
+                  <Input id="goals" {...paramsForm.register('goals')} placeholder="Ej: Mejorar rendimiento, Estandarizar código. Todas las sugerencias deben estar en castellano." className="bg-card"/>
                 </div>
                 <div>
                   <Label htmlFor="priority" className="text-foreground">Prioridad General (opcional)</Label>

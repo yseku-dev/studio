@@ -2,7 +2,7 @@
 'use server';
 
 import type { LLMOptions, ChatMessage } from '@/services/groq';
-import { makeLLMRequest, analyzeProjectSourceChunk } from '@/services/groq'; 
+import { analyzeProjectSourceChunk } from '@/services/groq'; 
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
 import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
@@ -74,7 +74,7 @@ export async function handleGetRefactoringSuggestions(
     }
     const logMsg = `[${timestamp}] [RefactorProj-${type}] ${message}${dataStringForLogMessage}`;
     console.log(`[${timestamp}] [RefactorProj-${type}] ${message}`, data); 
-    serverLogs.push(logMsg);
+    serverLogs.push(logMsg); 
   };
 
   log('INFO', `Iniciando obtención de sugerencias de refactorización. ConfigSource: ${payload.configSource}`);
@@ -91,7 +91,7 @@ export async function handleGetRefactoringSuggestions(
   if (payload.gitUrl) {
     sourceDescriptionForLLM = `el repositorio Git en ${payload.gitUrl}`;
     log('INFO', `Procesando URL de Git: ${payload.gitUrl}. Fuente para LLM: ${sourceDescriptionForLLM}`);
-    projectContentForLLM = payload.gitUrl;
+    projectContentForLLM = payload.gitUrl; // Pass URL directly for agent to handle
   } else if (payload.projectFileContent) {
     sourceDescriptionForLLM = `el archivo ${payload.projectFileName || 'subido'}`;
     log('INFO', `Procesando contenido de archivo: ${payload.projectFileName} (${payload.projectFileType}). Fuente para LLM: ${sourceDescriptionForLLM}`);
@@ -146,14 +146,14 @@ Tu respuesta DEBE ser un objeto JSON con la clave "refactoringSuggestions", que 
 - "description": (string) Una descripción clara de la mejora propuesta.
 - "priority": (string) "Alta", "Media", o "Baja".
 - "suggestedSnippet": (string, opcional) Un fragmento de código que ilustra el cambio. Si el cambio es conceptual o abarca múltiples áreas, este campo puede omitirse.
-No incluyas markdown ni texto introductorio/conclusivo fuera del JSON. Si el texto de entrada es un fragmento, las sugerencias deben ser sobre ese fragmento.`;
+No incluyas markdown ni texto introductorio/conclusivo fuera del JSON. Si el texto de entrada es un fragmento, las sugerencias deben ser sobre ese fragmento. Todas las descripciones y sugerencias deben estar en castellano.`;
   
   const taskForWorkgroup = `Analizar ${sourceDescriptionForLLM} para refactorización. ${refactoringGoals} ${refactoringPriority}
 ${payload.gitUrl
     ? `El proyecto se encuentra en la URL de Git: ${payload.gitUrl}. El agente ${REFACTOR_AGENT_NAME} (o uno similar con capacidad de acceso a Git y análisis de código) debe ser instruido para obtener el código de esta URL y realizar el análisis.`
     : `El proyecto es (contenido textual):\n${projectContentForLLM.substring(0, 15000)} ${projectContentForLLM.length > 15000 ? "\\n... (contenido truncado para el prompt inicial del orquestador)" : ""}`
 }
-La respuesta final de un agente especialista en refactorización (probablemente ${REFACTOR_AGENT_NAME}) DEBE ser un objeto JSON con la clave "refactoringSuggestions" como se describe en el prompt del sistema del ${REFACTOR_AGENT_NAME}.
+La respuesta final de un agente especialista en refactorización (probablemente ${REFACTOR_AGENT_NAME}) DEBE ser un objeto JSON con la clave "refactoringSuggestions" como se describe en el prompt del sistema del ${REFACTOR_AGENT_NAME}. Todas las descripciones y sugerencias deben estar en castellano.
 El Orquestrador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tarea y el código/referencia para analizar.`;
 
   try {
@@ -229,79 +229,69 @@ El Orquestrador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la ta
       throw new Error(`Grupo no completó refactorización en ${MAX_WORKGROUP_TURNS} turnos.`);
     } else if (llmOptionsToUse) { 
       log('INFO', `Usando llamada directa a LLM para refactorización con proveedor ${llmOptionsToUse.providerId}, modelo ${llmOptionsToUse.modelName}.`);
+      
+      let actualContentToAnalyze = projectContentForLLM!;
+
+      if (payload.gitUrl) {
+        log('INFO', `Obteniendo contenido desde Git URL para análisis directo: ${payload.gitUrl}`);
+        const gitResult = await fetchRepositoryContents(payload.gitUrl);
+        if (gitResult.logsBuilt) serverLogs.push(...gitResult.logsBuilt.map(l => `[GIT_FETCH_LOG] ${l}`));
+        if (!gitResult.success || !gitResult.concatenatedSource) {
+          log('ERROR', `No se pudo obtener el contenido del repositorio Git para análisis directo: ${gitResult.error}`, gitResult);
+          throw new Error(String(gitResult.error || "Fallo al obtener contenido de Git para análisis directo."));
+        }
+        actualContentToAnalyze = gitResult.concatenatedSource;
+        log('INFO', `Contenido Git obtenido para análisis directo. Tamaño: ${actualContentToAnalyze.length}`);
+      }
+
+
       const allSuggestions: RefactoringSuggestionItem[] = [];
+      const chunks: string[] = [];
       
-      let contentForLLM: string = projectContentForLLM!;
-      
-      if (payload.gitUrl && !payload.configSource.startsWith('workgroup:')) {
-          log('INFO', `Llamada única al LLM para que obtenga y analice la URL de Git: ${payload.gitUrl}`);
-          const messages: ChatMessage[] = [
-            { role: "system", content: systemPromptForLLM },
-            { role: "user", content: `Por favor, obtén y analiza el código fuente del repositorio Git en la siguiente URL: ${contentForLLM}` } 
-          ];
-          
-          const result = await makeLLMRequest<RefactorProjectAIResponse>(
-            { ...llmOptionsToUse, timeoutMs: REFACTOR_LLM_API_TIMEOUT_MS * 3 }, 
-            messages,
-            "json_object" 
-          );
-          if (result && Array.isArray(result.refactoringSuggestions)) {
-            allSuggestions.push(...result.refactoringSuggestions);
-          } else {
-            log('WARN', `LLM no devolvió sugerencias válidas para la URL de Git. Respuesta:`, result);
-          }
-      } else if (contentForLLM.length > MAX_CHARS_PER_REFACTOR_CHUNK) { 
-        log('INFO', `El contenido del proyecto (${contentForLLM.length} caracteres) excede el límite por fragmento (${MAX_CHARS_PER_REFACTOR_CHUNK}). Se dividirá en fragmentos.`);
-        const chunks: string[] = [];
-        for (let i = 0; i < contentForLLM.length; i += MAX_CHARS_PER_REFACTOR_CHUNK) {
-          chunks.push(contentForLLM.substring(i, i + MAX_CHARS_PER_REFACTOR_CHUNK));
+      if (actualContentToAnalyze.length > MAX_CHARS_PER_REFACTOR_CHUNK) {
+        log('INFO', `El contenido del proyecto (${actualContentToAnalyze.length} caracteres) excede el límite por fragmento (${MAX_CHARS_PER_REFACTOR_CHUNK}). Se dividirá en fragmentos.`);
+        for (let i = 0; i < actualContentToAnalyze.length; i += MAX_CHARS_PER_REFACTOR_CHUNK) {
+          chunks.push(actualContentToAnalyze.substring(i, i + MAX_CHARS_PER_REFACTOR_CHUNK));
         }
         log('INFO', `Proyecto dividido en ${chunks.length} fragmentos.`);
+      } else {
+        chunks.push(actualContentToAnalyze);
+        log('INFO', `El contenido del proyecto (${actualContentToAnalyze.length} caracteres) es suficientemente pequeño para una sola llamada/fragmento.`);
+      }
 
-        for (let i = 0; i < chunks.length; i++) {
-          const chunk = chunks[i];
-          log('DEBUG', `Procesando fragmento ${i + 1}/${chunks.length} para refactorización. Tamaño: ${chunk.length}`);
-          const messagesForChunk: ChatMessage[] = [
-            { role: "system", content: systemPromptForLLM },
-            { role: "user", content: `Analiza el siguiente FRAGMENTO de código para refactorización (es parte de un proyecto más grande, considera esto al sugerir áreas):\n\n${chunk}` }
-          ];
-          
-          const chunkResult = await makeLLMRequest<RefactorProjectAIResponse>(
-            {...llmOptionsToUse, timeoutMs: REFACTOR_LLM_API_TIMEOUT_MS},
-            messagesForChunk,
-            "json_object" 
-          );
-
-          if (chunkResult && Array.isArray(chunkResult.refactoringSuggestions)) {
-            log('INFO', `Fragmento ${i + 1} procesado. ${chunkResult.refactoringSuggestions.length} sugerencias encontradas.`);
-            allSuggestions.push(...chunkResult.refactoringSuggestions.map(s => ({...s, area: s.area + ` (Fragmento ${i+1}/${chunks.length})` })));
-          } else {
-            log('WARN', `Fragmento ${i + 1} no devolvió sugerencias válidas o tuvo un error. Respuesta:`, chunkResult);
-          }
-
-          if (i < chunks.length - 1) {
-            log('INFO', `Esperando ${INTER_CHUNK_REFACTOR_DELAY_MS / 1000}s antes del siguiente fragmento.`);
-            await new Promise(resolve => setTimeout(resolve, INTER_CHUNK_REFACTOR_DELAY_MS));
-          }
-        }
-      } else { 
-        log('INFO', `El contenido del proyecto (${contentForLLM.length} caracteres) es suficientemente pequeño para una sola llamada.`);
-        const messages: ChatMessage[] = [
-          { role: "system", content: systemPromptForLLM },
-          { role: "user", content: contentForLLM }
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        log('DEBUG', `Procesando fragmento ${i + 1}/${chunks.length} para refactorización. Tamaño: ${chunk.length}`);
+        
+        // For direct LLM calls, the system prompt is defined here and used by makeLLMRequest.
+        // The `analyzeProjectSourceChunk` function itself also defines a system prompt,
+        // so it's better to call that for consistency if it matches the desired output.
+        // However, `analyzeProjectSourceChunk` is more for general analysis.
+        // For refactoring, we use `makeLLMRequest` with a specific refactoring prompt.
+        const messagesForChunk: ChatMessage[] = [
+          { role: "system", content: systemPromptForLLM }, // systemPromptForLLM already requests Spanish.
+          { role: "user", content: `Analiza el siguiente FRAGMENTO de código para refactorización (es parte de un proyecto más grande, considera esto al sugerir áreas):\n\n${chunk}` }
         ];
         
-        const result = await makeLLMRequest<RefactorProjectAIResponse>(
+        const chunkResult = await analyzeProjectSourceChunk(
+          chunk, // Pass the chunk content
           {...llmOptionsToUse, timeoutMs: REFACTOR_LLM_API_TIMEOUT_MS},
-          messages,
-          "json_object"
+          // The preferences string can also include the language instruction if needed.
+          // For analyzeProjectSourceChunk, the system prompt inside already asks for Spanish.
+          `Analiza este fragmento para refactorización. ${refactoringGoals} ${refactoringPriority}. El fragmento es ${i+1} de ${chunks.length}. Todas las sugerencias deben estar en castellano.`
         );
 
-        if (result && Array.isArray(result.refactoringSuggestions)) {
-          allSuggestions.push(...result.refactoringSuggestions);
+
+        if (chunkResult && Array.isArray(chunkResult.suggestions)) {
+          log('INFO', `Fragmento ${i + 1} procesado. ${chunkResult.suggestions.length} sugerencias encontradas.`);
+          allSuggestions.push(...chunkResult.suggestions.map(s => ({...s, area: s.area + ` (Fragmento ${i+1}/${chunks.length})` })));
         } else {
-          log('ERROR', 'La respuesta directa del LLM no contenía sugerencias de refactorización válidas en el formato esperado.', {response: result});
-          throw new Error("La respuesta del LLM no contenía sugerencias válidas para refactorización en el formato esperado.");
+          log('WARN', `Fragmento ${i + 1} no devolvió sugerencias válidas o tuvo un error. Respuesta:`, chunkResult);
+        }
+
+        if (i < chunks.length - 1) {
+          log('INFO', `Esperando ${INTER_CHUNK_REFACTOR_DELAY_MS / 1000}s antes del siguiente fragmento.`);
+          await new Promise(resolve => setTimeout(resolve, INTER_CHUNK_REFACTOR_DELAY_MS));
         }
       }
       log('INFO', `Procesamiento directo completado. Total de sugerencias: ${allSuggestions.length}`);
