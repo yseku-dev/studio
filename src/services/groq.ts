@@ -1,3 +1,4 @@
+// src/services/groq.ts
 
 import {
   LLM_PROVIDERS,
@@ -12,9 +13,9 @@ import {
 // Generic LLM Options
 export interface LLMOptions {
   providerId: LLMProviderId;
-  apiKey: string; // Could be empty for local models
+  apiKey: string; 
   modelName: string;
-  apiUrl?: string; // Optional override for API endpoint
+  apiUrl?: string; 
   timeoutMs?: number;
 }
 
@@ -36,7 +37,7 @@ export interface SuggestionItem {
 export interface ProjectAnalysisResponse {
   analysisTitle: string;
   identifiedAreas: string[];
-  suggestions: Array<SuggestionItem>; // Use the named SuggestionItem type
+  suggestions: Array<SuggestionItem>; 
   overallAssessment: string;
 }
 
@@ -63,7 +64,7 @@ export interface GeneratedProjectResponse {
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
-  name?: string; // Optional agent name for logging/prompt context
+  name?: string; 
 }
 
 export interface ChatLLMPayload {
@@ -76,8 +77,8 @@ export interface ChatLLMResponse {
 }
 
 
-const DEFAULT_TIMEOUT_MS = 60000; // 60 segundos
-const CHAT_COMPLETION_TIMEOUT_MS = 90000; // 90 segundos para chat
+const DEFAULT_TIMEOUT_MS = 60000; 
+const CHAT_COMPLETION_TIMEOUT_MS = 90000; 
 
 async function fetchWithRetry(
   url: string,
@@ -102,7 +103,7 @@ async function fetchWithRetry(
       try {
           errorBodyText = await response.text();
       } catch (readError) {
-          console.warn(`No se pudo leer el cuerpo del error de ${providerName} (${response.status})`);
+          console.warn(`[FetchWithRetry] No se pudo leer el cuerpo del error de ${providerName} (${response.status})`);
       }
 
 
@@ -110,65 +111,66 @@ async function fetchWithRetry(
         lastError = new Error(`Error de la API de ${providerName}: Límite de tasa excedido (429). Detalle: ${errorBodyText.substring(0, 500)}`);
 
         if (attempt >= maxRetries) {
-          console.error(`Máximos reintentos (${maxRetries}) alcanzados para ${providerName} después de error 429. Último error:`, errorBodyText);
+          console.error(`[FetchWithRetry] Máximos reintentos (${maxRetries}) alcanzados para ${providerName} después de error 429. Último error: ${errorBodyText}`);
           throw lastError;
         }
 
         let waitMs = initialDelayMs * Math.pow(2, attempt - 1);
-        const retryAfterMatch = errorBodyText.match(/try again in (\d+\.?\d*)\s*s/i);
+        // Extract suggested wait time more robustly
+        const retryAfterMatch = errorBodyText.match(/Please try again in (\d+\.?\d*)\s*s/i) || errorBodyText.match(/Rate limit reached.*try again in (\d+\.?\d*)\s*s/i);
+
         if (retryAfterMatch && retryAfterMatch[1]) {
           const suggestedSeconds = parseFloat(retryAfterMatch[1]);
-          const suggestedWaitMs = Math.ceil(suggestedSeconds * 1000) + (Math.random() * 1000);
+          const suggestedWaitMs = Math.ceil(suggestedSeconds * 1000) + (Math.random() * 1000); // Add jitter
           waitMs = Math.max(waitMs, suggestedWaitMs);
-          console.warn(`${providerName} 429: Reintentando después del retraso sugerido/calculado de ${waitMs / 1000}s. Intento ${attempt}/${maxRetries}. Error: ${errorBodyText.substring(0, 200)}`);
+          console.warn(`[FetchWithRetry] ${providerName} 429: Reintentando después del retraso sugerido/calculado de ${waitMs / 1000}s. Intento ${attempt}/${maxRetries}. Error: ${errorBodyText.substring(0, 200)}`);
         } else {
-          console.warn(`${providerName} 429: Límite de tasa excedido. Reintentando en ${waitMs / 1000}s (intento ${attempt}/${maxRetries}). Error: ${errorBodyText.substring(0,200)}`);
+          console.warn(`[FetchWithRetry] ${providerName} 429: Límite de tasa excedido. Reintentando en ${waitMs / 1000}s (intento ${attempt}/${maxRetries}). Error: ${errorBodyText.substring(0,200)}`);
         }
 
         await new Promise(resolve => setTimeout(resolve, waitMs));
         continue;
       } else if (response.status === 413) {
         lastError = new Error(`Error de la API de ${providerName}: Payload Too Large (413). Detalle: ${errorBodyText.substring(0, 500)}`);
-        console.error(`Error de Payload Too Large (413) en ${providerName}. El payload es demasiado grande para el modelo. Error: ${errorBodyText}`);
+        console.error(`[FetchWithRetry] Error de Payload Too Large (413) en ${providerName}. El payload es demasiado grande para el modelo. Error: ${errorBodyText}`);
         throw lastError;
       } else {
          lastError = new Error(`Error HTTP de ${providerName}: ${response.status} ${response.statusText}. Detalle: ${errorBodyText.substring(0, 500)}`);
-         console.error(`Respuesta de error HTTP ${response.status} de ${providerName}:`, errorBodyText);
+         console.error(`[FetchWithRetry] Respuesta de error HTTP ${response.status} de ${providerName}:`, errorBodyText);
          throw lastError;
       }
 
     } catch (error) {
       lastError = error as Error;
       if (error instanceof Error && error.name === 'AbortError') {
-        console.error(`Error de timeout llamando a ${providerName} en intento ${attempt}`);
+        console.error(`[FetchWithRetry] Error de timeout llamando a ${providerName} en intento ${attempt}`);
         throw new Error(`La solicitud a ${providerName} excedió el tiempo límite en el intento ${attempt}.`);
       }
 
       if (attempt >= maxRetries) {
-        console.error(`Máximos reintentos (${maxRetries}) alcanzados para ${providerName}. Último error:`, error);
+        console.error(`[FetchWithRetry] Máximos reintentos (${maxRetries}) alcanzados para ${providerName}. Último error:`, error);
         throw new Error(`Falló la solicitud a ${providerName} después de ${maxRetries} intentos. Último error: ${lastError.message}`);
       }
 
       const waitMs = (initialDelayMs * Math.pow(2, attempt - 1)) + (Math.random() * 1000);
-      console.warn(`${providerName}: Error en intento ${attempt}. Reintentando en ${waitMs / 1000}s. Error: ${lastError.message}`);
+      console.warn(`[FetchWithRetry] ${providerName}: Error en intento ${attempt}. Reintentando en ${waitMs / 1000}s. Error: ${lastError.message}`);
       await new Promise(resolve => setTimeout(resolve, waitMs));
     }
   }
   throw new Error(`Falló la solicitud a ${providerName} después de ${maxRetries} intentos. Último error: ${lastError ? lastError.message : "Error desconocido"}`);
 }
 
-// Helper to construct API request based on provider type
 export async function makeLLMRequest<TResponse>(
   options: LLMOptions,
   messages: ChatMessage[],
   expectedResponseFormat: "json_object" | "text",
   temperature: number = 0.3,
   max_tokens: number = 2048,
-  serviceNameSuffix: string = "request"
+  serviceNameSuffix: string = "request" 
 ): Promise<TResponse> {
   const providerConfig = LLM_PROVIDERS.find(p => p.id === options.providerId);
   if (!providerConfig) {
-    throw new Error(`Proveedor LLM no configurado: ${options.providerId}`);
+    throw new Error(`[LLM_SERVICE] Proveedor LLM no configurado: ${options.providerId}`);
   }
 
   const effectiveApiUrl = options.apiUrl || providerConfig.apiUrl;
@@ -238,17 +240,17 @@ export async function makeLLMRequest<TResponse>(
       }
     };
   } else {
-    throw new Error(`Configuración de solicitud no definida para el proveedor ${providerConfig.name}`);
+    throw new Error(`[LLM_SERVICE] Configuración de solicitud no definida para el proveedor ${providerConfig.name}`);
   }
 
-  console.log(`[${providerConfig.name} - ${serviceNameSuffix}] Llamando a ${endpoint} con modelo ${options.modelName}`);
+  console.log(`[LLM_SERVICE][${providerConfig.name} - ${serviceNameSuffix}] Llamando a ${endpoint} con modelo ${options.modelName}`);
   
   let stringifiedBody: string;
   try {
     stringifiedBody = JSON.stringify(requestBody);
   } catch (stringifyError) {
-    console.error(`[${providerConfig.name} - ${serviceNameSuffix}] Error al serializar el cuerpo de la solicitud:`, stringifyError);
-    throw new Error(`Error interno al preparar la solicitud para ${providerConfig.name}: El payload es demasiado grande o tiene una estructura inválida para serializar. ${(stringifyError as Error).message}`);
+    console.error(`[LLM_SERVICE][${providerConfig.name} - ${serviceNameSuffix}] Error al serializar el cuerpo de la solicitud:`, stringifyError);
+    throw new Error(`[LLM_SERVICE] Error interno al preparar la solicitud para ${providerConfig.name}: El payload es demasiado grande o tiene una estructura inválida para serializar. ${(stringifyError as Error).message}`);
   }
 
   const controller = new AbortController();
@@ -275,12 +277,12 @@ export async function makeLLMRequest<TResponse>(
         if (data.candidates && data.candidates.length > 0) {
             const candidate = data.candidates[0];
             if (candidate.finishReason === "SAFETY") {
-                console.warn(`[${providerConfig.name} - ${serviceNameSuffix}] Contenido bloqueado por razones de seguridad:`, candidate.safetyRatings);
+                console.warn(`[LLM_SERVICE][${providerConfig.name} - ${serviceNameSuffix}] Contenido bloqueado por razones de seguridad:`, candidate.safetyRatings);
                 throw new Error(`Contenido bloqueado por ${providerConfig.name} debido a filtros de seguridad. Por favor, revisa o ajusta tu prompt.`);
             }
             contentToParse = candidate.content?.parts?.[0]?.text;
         } else if (data.promptFeedback && data.promptFeedback.blockReason) {
-            console.warn(`[${providerConfig.name} - ${serviceNameSuffix}] Prompt bloqueado:`, data.promptFeedback);
+            console.warn(`[LLM_SERVICE][${providerConfig.name} - ${serviceNameSuffix}] Prompt bloqueado:`, data.promptFeedback);
             throw new Error(`Prompt bloqueado por ${providerConfig.name} debido a: ${data.promptFeedback.blockReason}. Detalles: ${data.promptFeedback.safetyRatings?.map((r:any)=>`${r.category} - ${r.probability}`).join(', ')}`);
         }
     } else if (providerConfig.isOllamaCompatible && providerConfig.id === 'ollama') {
@@ -294,14 +296,14 @@ export async function makeLLMRequest<TResponse>(
           const cleanedContent = contentToParse.replace(/^```json\s*/, '').replace(/\s*```$/, '');
           return JSON.parse(cleanedContent) as TResponse;
         } catch (parseError) {
-          console.error(`Error al parsear la respuesta JSON de ${providerConfig.name} (${serviceNameSuffix}):`, parseError, "\nContenido recibido:", contentToParse);
+          console.error(`[LLM_SERVICE] Error al parsear la respuesta JSON de ${providerConfig.name} (${serviceNameSuffix}):`, parseError, "\nContenido recibido:", contentToParse);
           throw new Error(`La respuesta de ${providerConfig.name} (${serviceNameSuffix}) no es un JSON válido o está malformada. Error: ${(parseError as Error).message}`);
         }
       } else {
         return { content: contentToParse } as unknown as TResponse;
       }
     } else {
-      console.error(`Respuesta inesperada o vacía de la API de ${providerConfig.name} (${serviceNameSuffix}):`, data);
+      console.error(`[LLM_SERVICE] Respuesta inesperada o vacía de la API de ${providerConfig.name} (${serviceNameSuffix}):`, data);
       throw new Error(`Respuesta inesperada de la API de ${providerConfig.name} (${serviceNameSuffix}). No se encontró contenido interpretable.`);
     }
   } catch (error) {
@@ -311,25 +313,21 @@ export async function makeLLMRequest<TResponse>(
      } else if (typeof error === 'string') {
        errorMessage = error;
      } else {
-       errorMessage = `Error desconocido (tipo: ${typeof error}) durante la solicitud a ${providerConfig.name} (${serviceNameSuffix}). Intente verificar los logs del servidor.`;
+       errorMessage = `[LLM_SERVICE] Error desconocido (tipo: ${typeof error}) durante la solicitud a ${providerConfig.name} (${serviceNameSuffix}). Intente verificar los logs del servidor.`;
        try {
          errorMessage += ` Detalles: ${JSON.stringify(error)}`;
        } catch {
          // JSON.stringify failed, do nothing more with details
        }
      }
-     // Ensure errorMessage is always a string for the new Error constructor
-     const finalErrorMessage = String(errorMessage || `Error desconocido en makeLLMRequest para ${providerConfig.name}`);
-     console.error(`Error procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}): ${finalErrorMessage}`);
+     const finalErrorMessage = String(errorMessage || `[LLM_SERVICE] Error desconocido en makeLLMRequest para ${providerConfig.name}`);
+     console.error(`[LLM_SERVICE] Error procesando la solicitud a ${providerConfig.name} (${serviceNameSuffix}): ${finalErrorMessage}`);
      throw new Error(finalErrorMessage);
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-/**
- * Analiza código para sugerir mejoras.
- */
 export async function analyzeCode(
   code: string,
   options: LLMOptions
@@ -354,16 +352,13 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "codeSugges
   );
 
   if (!result.codeSuggestion || typeof result.explanation === 'undefined') { 
-    console.error("Respuesta JSON de LLM incompleta o malformada (analyzeCode):", result);
+    console.error("[LLM_SERVICE] Respuesta JSON de LLM incompleta o malformada (analyzeCode):", result);
     throw new Error("La respuesta JSON del LLM (analyzeCode) no contiene los campos 'codeSuggestion' o 'explanation' esperados.");
   }
   return result;
 }
 
 
-/**
- * Analiza un fragmento de código fuente de un proyecto.
- */
 export async function analyzeProjectSourceChunk(
   sourceCodeChunk: string,
   options: LLMOptions,
@@ -405,12 +400,12 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
       !Array.isArray(result.suggestions) ||
       typeof result.overallAssessment !== 'string'
     ) {
-      console.error("Respuesta JSON de LLM incompleta o con tipos incorrectos (analyzeProjectSourceChunk):", result);
+      console.error("[LLM_SERVICE] Respuesta JSON de LLM incompleta o con tipos incorrectos (analyzeProjectSourceChunk):", result);
       throw new Error("La respuesta JSON del LLM (analyzeProjectSourceChunk) no tiene la estructura o tipos esperados.");
     }
     for (const sug of result.suggestions) {
         if (typeof sug.area !== 'string' || typeof sug.suggestion !== 'string') {
-             console.error("Item de sugerencia inválido en analyzeProjectSourceChunk:", sug, "\nRespuesta completa:", result);
+             console.error("[LLM_SERVICE] Item de sugerencia inválido en analyzeProjectSourceChunk:", sug, "\nRespuesta completa:", result);
              throw new Error("La respuesta JSON del LLM (analyzeProjectSourceChunk) contiene un item de sugerencia inválido.");
         }
     }
@@ -418,9 +413,6 @@ Responde ÚNICAMENTE en formato JSON válido con las claves exactas: "analysisTi
   return result;
 }
 
-/**
- * Genera código a partir de un prompt.
- */
 export async function generateCodeFromPrompt(
   prompt: string,
   options: LLMOptions
@@ -449,16 +441,13 @@ No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
   );
 
   if (typeof result.generatedCode !== 'string') { 
-    console.error("Respuesta JSON de LLM incompleta o malformada (generateCodeFromPrompt):", result);
+    console.error("[LLM_SERVICE] Respuesta JSON de LLM incompleta o malformada (generateCodeFromPrompt):", result);
     throw new Error("La respuesta JSON del LLM (generateCodeFromPrompt) no contiene el campo 'generatedCode' como string.");
   }
   return result;
 }
 
 
-/**
- * Genera una estructura de proyecto a partir de un prompt.
- */
 export async function generateProjectStructureFromPrompt(
   prompt: string,
   options: LLMOptions
@@ -499,12 +488,12 @@ No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
       typeof result.projectStructure !== 'object' ||
       !Array.isArray(result.projectStructure.files)
      ) {
-      console.error("Respuesta JSON de LLM incompleta o malformada (generateProjectStructure - structure):", result);
+      console.error("[LLM_SERVICE] Respuesta JSON de LLM incompleta o malformada (generateProjectStructure - structure):", result);
       throw new Error("La respuesta JSON de LLM (generateProjectStructure) no contiene 'projectStructure' o 'projectStructure.files' no es un array.");
   }
   for (const file of result.projectStructure.files) {
       if (typeof file.path !== 'string' || typeof file.content !== 'string') {
-          console.error("Objeto de archivo inválido en la respuesta de LLM (generateProjectStructure):", file, "\nRespuesta completa:", result);
+          console.error("[LLM_SERVICE] Objeto de archivo inválido en la respuesta de LLM (generateProjectStructure):", file, "\nRespuesta completa:", result);
           throw new Error("La respuesta JSON de LLM (generateProjectStructure) contiene un objeto de archivo inválido (falta 'path' o 'content' como string).");
       }
   }
@@ -512,14 +501,11 @@ No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
   return result;
 }
 
-/**
- * Envía una solicitud de completado de chat a la API LLM configurada.
- */
 export async function chatWithLLM(payload: ChatLLMPayload): Promise<ChatLLMResponse> {
   const { messages, options } = payload;
   const providerConfig = LLM_PROVIDERS.find(p => p.id === options.providerId);
   if (!providerConfig) {
-    throw new Error(`Proveedor LLM no configurado: ${options.providerId}`);
+    throw new Error(`[LLM_SERVICE] Proveedor LLM no configurado: ${options.providerId}`);
   }
 
   const chatOptions = {
@@ -537,7 +523,7 @@ export async function chatWithLLM(payload: ChatLLMPayload): Promise<ChatLLMRespo
   );
 
   if (typeof result.content !== 'string') { 
-    console.error(`Respuesta de LLM incompleta o inválida (chatWithLLM) para ${providerConfig.name}:`, result);
+    console.error(`[LLM_SERVICE] Respuesta de LLM incompleta o inválida (chatWithLLM) para ${providerConfig.name}:`, result);
     throw new Error(`Respuesta de LLM (chatWithLLM) para ${providerConfig.name} no contiene contenido textual.`);
   }
   return result;
@@ -548,4 +534,3 @@ export type GroqResponse = CodeSuggestionResponse;
 export type ProjectAnalysisGroqResponse = ProjectAnalysisResponse; 
 export type ChatGroqPayload = ChatLLMPayload; 
 export type ChatGroqResponse = ChatLLMResponse;
-
