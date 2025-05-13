@@ -73,11 +73,11 @@ export function SettingsForm() {
     reset,
     getValues,
     trigger,
-    control,
+    // control, // control is not used, can be removed
   } = useForm<SettingsFormData>({
     resolver: zodResolver(settingsSchema),
     defaultValues: {
-        isDebugModeActive: isDebugModeActive,
+        isDebugModeActive: isDebugModeActive, // Initialized from context
     }
   });
   
@@ -88,22 +88,29 @@ export function SettingsForm() {
   const watchedDebugMode = watch('isDebugModeActive');
 
   useEffect(() => {
-    // Sync form state with context state for debug mode
-    setValue('isDebugModeActive', isDebugModeActive, { shouldDirty: false });
-  }, [isDebugModeActive, setValue]);
+    // Sync form debug mode with context state if context changes
+    if (isDebugModeActive !== getValues('isDebugModeActive')) {
+        setValue('isDebugModeActive', isDebugModeActive, { shouldDirty: false });
+    }
+  }, [isDebugModeActive, setValue, getValues]);
 
   const updateModelsForProvider = useCallback((providerId: LLMProviderId | undefined) => {
     if (!providerId) {
       setAvailableModels([]);
       return;
     }
+    const providerData = LLM_PROVIDERS.find(p => p.id === providerId);
+    if (!providerData) {
+        setAvailableModels([]);
+        return;
+    }
     const models = MODELS_BY_PROVIDER[providerId] || {};
     const modelNames = Object.keys(models).sort((a, b) => {
-      const tpmA = models[a].tpm || 0;
-      const tpmB = models[b].tpm || 0;
+      const tpmA = models[a]?.tpm || 0; // Add null check for models[a]
+      const tpmB = models[b]?.tpm || 0; // Add null check for models[b]
       if (tpmA !== tpmB) return tpmB - tpmA;
-      const tokensA = models[a].tokens || 0;
-      const tokensB = models[b].tokens || 0;
+      const tokensA = models[a]?.tokens || 0; // Add null check for models[a]
+      const tokensB = models[b]?.tokens || 0; // Add null check for models[b]
       if (tokensA !== tokensB) return tokensB - tokensA; 
       return a.localeCompare(b);
     });
@@ -112,6 +119,7 @@ export function SettingsForm() {
 
   useEffect(() => {
     addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: 'Montando formulario de configuración.'});
+    
     const storedProviderId = localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null;
     const initialProviderId = storedProviderId || DEFAULT_LLM_PROVIDER;
     const provider = LLM_PROVIDERS.find(p => p.id === initialProviderId) || LLM_PROVIDERS.find(p => p.id === DEFAULT_LLM_PROVIDER)!;
@@ -122,35 +130,38 @@ export function SettingsForm() {
     const apiKeyFromStorage = localStorage.getItem(getLocalStorageApiKeyName(provider.id)) || '';
     setValue('apiKey', apiKeyFromStorage, { shouldDirty: false });
 
-    const modelNameFromStorage = localStorage.getItem(getLocalStorageModelName(provider.id));
     updateModelsForProvider(provider.id); 
-
+    const modelNameFromStorage = localStorage.getItem(getLocalStorageModelName(provider.id));
     const providerModels = MODELS_BY_PROVIDER[provider.id] || {};
     const providerModelKeys = Object.keys(providerModels);
+
     if (modelNameFromStorage && providerModelKeys.includes(modelNameFromStorage)) {
       setValue('llmModelName', modelNameFromStorage, { shouldDirty: false });
     } else if (providerModelKeys.length > 0) {
-      const sortedModels = Object.keys(providerModels).sort((a,b) => (providerModels[b].tpm || 0) - (providerModels[a].tpm || 0) || a.localeCompare(b) );
+      const sortedModels = Object.keys(providerModels).sort((a,b) => (providerModels[b]?.tpm || 0) - (providerModels[a]?.tpm || 0) || a.localeCompare(b) );
       setValue('llmModelName', sortedModels[0], { shouldDirty: false });
     } else {
       setValue('llmModelName', '', {shouldDirty: false});
     }
     
     const storedApiUrl = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
-    setValue('apiUrl', storedApiUrl || provider.apiUrl, { shouldDirty: false });
+    setValue('apiUrl', storedApiUrl || provider.apiUrl || '', { shouldDirty: false });
+
 
     setValue('gitRepositoryUrl', localStorage.getItem(LOCALSTORAGE_GIT_REPO_URL_KEY) || '', { shouldDirty: false });
     setValue('gitUsername', localStorage.getItem(LOCALSTORAGE_GIT_USERNAME_KEY) || '', { shouldDirty: false });
     setValue('gitEmail', localStorage.getItem(LOCALSTORAGE_GIT_EMAIL_KEY) || '', { shouldDirty: false });
     setValue('gitPat', localStorage.getItem(LOCALSTORAGE_GIT_PAT_KEY) || '', { shouldDirty: false });
     
-    setValue('isDebugModeActive', isDebugModeActive, { shouldDirty: false });
+    // isDebugModeActive is already set by its own useEffect from context
+    // setValue('isDebugModeActive', isDebugModeActive, { shouldDirty: false });
 
-    reset(getValues(), {keepValues: true, keepDirty:false}); 
+    // Reset form state after loading from localStorage to clear initial dirty state
+    reset(getValues(), { keepValues: true, keepDirty: false, keepDefaultValues: false }); 
     addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: 'Formulario de configuración inicializado desde localStorage.'});
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setValue, updateModelsForProvider, isDebugModeActive]); // isDebugModeActive is a dependency
+  }, [setValue, updateModelsForProvider, reset]); // Removed isDebugModeActive as it's handled separately
 
   useEffect(() => {
     const newProvider = LLM_PROVIDERS.find(p => p.id === watchedProviderId);
@@ -164,25 +175,31 @@ export function SettingsForm() {
 
       const newProviderModels = MODELS_BY_PROVIDER[newProvider.id] || {};
       const newProviderModelKeys = Object.keys(newProviderModels);
+      let newModelToSet = '';
       if (newProviderModelKeys.length > 0) {
-         const sortedModels = Object.keys(newProviderModels).sort((a,b) => (newProviderModels[b].tpm || 0) - (newProviderModels[a].tpm || 0) || a.localeCompare(b) );
-         setValue('llmModelName', sortedModels[0], { shouldDirty: dirtyFields.llmModelName });
-      } else {
-        setValue('llmModelName', '', { shouldDirty: dirtyFields.llmModelName });
+         const sortedModels = Object.keys(newProviderModels).sort((a,b) => (newProviderModels[b]?.tpm || 0) - (newProviderModels[a]?.tpm || 0) || a.localeCompare(b) );
+         newModelToSet = sortedModels[0];
       }
+      setValue('llmModelName', newModelToSet, { shouldDirty: dirtyFields.llmModelName });
       
       const storedApiUrl = localStorage.getItem(`codealchemist_apiurl_${newProvider.id}`);
-      setValue('apiUrl', storedApiUrl || newProvider.apiUrl, { shouldDirty: dirtyFields.apiUrl });
+      setValue('apiUrl', storedApiUrl || newProvider.apiUrl || '', { shouldDirty: dirtyFields.apiUrl });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watchedProviderId, setValue, updateModelsForProvider, dirtyFields]);
+  }, [watchedProviderId, setValue, updateModelsForProvider, dirtyFields, currentProvider?.id]);
 
 
   const onSubmit: SubmitHandler<SettingsFormData> = (data) => {
     addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: 'Intentando guardar configuración.', data });
-    if (!currentProvider) {
-        toast({title: "Error", description: "Proveedor LLM no seleccionado.", variant: "destructive"});
-        addDebugLog({ source: 'SETTINGS_FORM', type: 'ERROR', message: 'Intento de guardado fallido: Proveedor LLM no seleccionado.'});
+    if (!currentProvider && !data.llmProviderId) { // Check data.llmProviderId too if currentProvider is somehow not set
+        toast({title: "Error", description: "Proveedor LLM no seleccionado o inválido.", variant: "destructive"});
+        addDebugLog({ source: 'SETTINGS_FORM', type: 'ERROR', message: 'Intento de guardado fallido: Proveedor LLM no seleccionado/inválido.'});
+        return;
+    }
+    const providerToSave = LLM_PROVIDERS.find(p => p.id === data.llmProviderId);
+     if (!providerToSave) {
+        toast({title: "Error", description: "Proveedor LLM seleccionado es inválido.", variant: "destructive"});
+        addDebugLog({ source: 'SETTINGS_FORM', type: 'ERROR', message: 'Intento de guardado fallido: Proveedor LLM seleccionado es inválido.'});
         return;
     }
     
@@ -194,8 +211,7 @@ export function SettingsForm() {
     }
     localStorage.setItem(getLocalStorageModelName(data.llmProviderId), data.llmModelName);
     
-    const providerConfig = LLM_PROVIDERS.find(p => p.id === data.llmProviderId);
-    if (data.apiUrl && data.apiUrl !== providerConfig?.apiUrl) {
+    if (data.apiUrl && data.apiUrl !== providerToSave.apiUrl) {
         localStorage.setItem(`codealchemist_apiurl_${data.llmProviderId}`, data.apiUrl);
     } else {
         localStorage.removeItem(`codealchemist_apiurl_${data.llmProviderId}`);
@@ -338,7 +354,7 @@ export function SettingsForm() {
               <div className="space-y-2">
                 <Label htmlFor="llmProviderId" className="text-foreground">Proveedor LLM</Label>
                 <Select
-                  value={watchedProviderId}
+                  value={watchedProviderId || DEFAULT_LLM_PROVIDER}
                   onValueChange={(value) => setValue('llmProviderId', value as LLMProviderId, { shouldDirty: true, shouldValidate: true })}
                 >
                   <SelectTrigger id="llmProviderId" className="w-full bg-card text-foreground">
@@ -366,13 +382,12 @@ export function SettingsForm() {
                     {...register('apiUrl')}
                     placeholder={`Ej: ${currentProvider.apiUrl}`}
                     className="bg-card text-foreground"
-                    defaultValue={currentProvider.apiUrl}
                   />
                    {errors.apiUrl && (
                     <p className="text-sm text-destructive">{errors.apiUrl.message}</p>
                   )}
                   <p className="text-xs text-muted-foreground">
-                    Asegúrate de que este endpoint sea accesible. Para LM Studio/Ollama, incluye la versión, ej: /v1.
+                    Asegúrate de que este endpoint sea accesible. Para LM Studio/Ollama, incluye la versión (ej: /v1 o /api/chat). Para Gemini, la URL base.
                   </p>
                 </div>
               )}
@@ -399,9 +414,10 @@ export function SettingsForm() {
                   <Select
                     value={watchedModelName || ''}
                     onValueChange={(value) => setValue('llmModelName', value, { shouldDirty: true, shouldValidate: true })}
+                    disabled={availableModels.length === 0 && !(currentProvider.requiresApiKey && !watchedApiKey)} // Disable if no models AND (not because API key is missing for required provider)
                   >
                     <SelectTrigger id="llmModelName" className="w-full bg-card text-foreground">
-                      <SelectValue placeholder={availableModels.length > 0 ? "Selecciona un modelo" : "No hay modelos disponibles o carga de modelos"} />
+                      <SelectValue placeholder={availableModels.length > 0 ? "Selecciona un modelo" : "No hay modelos configurados o falta API Key"} />
                     </SelectTrigger>
                     <SelectContent>
                       {availableModels.length > 0 ? (
@@ -417,7 +433,7 @@ export function SettingsForm() {
                            { currentProvider.requiresApiKey && !watchedApiKey 
                              ? "Introduce una clave API para ver modelos." 
                              : currentProvider.id === "ollama" || currentProvider.id === "lmstudio"
-                             ? "Carga/selecciona modelos en tu instancia local."
+                             ? "Asegúrate de que Ollama/LM Studio está en ejecución y accesible, y de que tienes modelos cargados."
                              : "No hay modelos configurados para este proveedor."
                            }
                          </div>
@@ -428,7 +444,7 @@ export function SettingsForm() {
                     <p className="text-sm text-destructive">{errors.llmModelName.message}</p>
                   )}
                   <p className="text-xs text-muted-foreground">
-                    La disponibilidad de modelos depende del proveedor y de tu clave API.
+                    La disponibilidad de modelos puede depender del proveedor y, en algunos casos, de tu clave API o configuración local.
                   </p>
                 </div>
               )}
@@ -544,10 +560,9 @@ export function SettingsForm() {
             <div className="flex items-center space-x-2">
                 <Switch
                     id="debug-mode"
-                    checked={watchedDebugMode}
+                    checked={!!watchedDebugMode} // Ensure it's boolean
                     onCheckedChange={(checked) => {
                         setValue('isDebugModeActive', checked, { shouldDirty: true });
-                        // No es necesario llamar a setIsDebugModeActive aquí, se hará en el submit
                     }}
                 />
                 <Label htmlFor="debug-mode" className="text-foreground">Activar modo Debug</Label>
@@ -556,7 +571,7 @@ export function SettingsForm() {
                 Muestra una ventana de logs detallados en la parte inferior de la pantalla.
             </p>
             {errors.isDebugModeActive && (
-                <p className="text-sm text-destructive">{errors.isDebugModeActive.message}</p>
+                <p className="text-sm text-destructive">{errors.isDebugModeActive.message as string}</p>
             )}
           </div>
 
@@ -575,3 +590,4 @@ export function SettingsForm() {
     </Card>
   );
 }
+
