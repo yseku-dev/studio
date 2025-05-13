@@ -23,7 +23,8 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "@/components/ui/alert-dialog"; // Import AlertDialog components
+  AlertDialogTrigger, // Ensure AlertDialogTrigger is imported
+} from "@/components/ui/alert-dialog";
 import { useToast } from '@/hooks/use-toast';
 import { PlusCircle, Users2, Edit2, Trash2, Wand2, UploadCloud, DownloadCloud, MessageSquare, Code, Terminal, FolderGit2, FileCode, ShieldCheck } from 'lucide-react';
 import type { AgentConfig, AgentLLMConfig, AgentSpecificLLMConfig, WorkgroupConfig } from '@/types/agent';
@@ -71,14 +72,14 @@ const defaultAgents: Omit<AgentConfig, 'id'>[] = [
   { name: "RepresentanteUsuario", description: "Proporciona feedback desde la perspectiva del usuario final.", systemMessage: "Eres el Representante del Usuario. Tu perspectiva es crucial. Proporciona feedback sobre las funcionalidades desarrolladas y valida que el producto cumple con las expectativas.", llmConfig: 'default' },
   {
     name: ORCHESTRATOR_AGENT_NAME,
-    description: "Agente central obligatorio en cada Grupo de Trabajo. Recibe y gestiona todas las respuestas generadas dentro del grupo y, si el usuario no propone un paso, decide qué agente o subgrupo actúa a continuación. Todas las respuestas deben pasar obligatoriamente por él para garantizar un flujo coordinado y la toma de decisiones centralizada. Limita los turnos a 10 por defecto.",
-    systemMessage: "Eres el Orquestador del Grupo de Trabajo. Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti para asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realices la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso. Si el usuario no propone un paso explícito, prioriza agentes con capacidades relevantes para la tarea actual (ej. 'RefactorizadorCodigoExperto' para mejoras de código). Tu respuesta DEBE SER EXCLUSIVAMENTE un objeto JSON válido con las claves 'next_agent_name' (string, el nombre EXACTO de un agente disponible o 'COMPLETADO') y 'reason' (string, justificación concisa). No incluyas NADA más.",
+    description: "Agente central obligatorio en cada Grupo de Trabajo. Gestiona el flujo de interacciones, recibe todas las respuestas y decide qué agente actúa a continuación para garantizar un proceso coordinado y la toma de decisiones centralizada.",
+    systemMessage: `Eres ${ORCHESTRATOR_AGENT_NAME}. Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti para asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realizas la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso. Si el usuario no propone un paso explícito, prioriza agentes con capacidades relevantes para la tarea actual (ej. '${REFACTOR_AGENT_NAME}' para mejoras de código). Tu respuesta DEBE SER EXCLUSIVAMENTE un objeto JSON válido con las claves 'next_agent_name' (string, el nombre EXACTO de un agente disponible o 'COMPLETADO') y 'reason' (string, justificación concisa). No incluyas NADA más.`,
     llmConfig: 'default'
   },
   {
     name: REFACTOR_AGENT_NAME,
     description: "Analiza código y propone refactorizaciones para mejorar calidad, rendimiento o legibilidad, priorizando estándares como SOLID y Clean Code.",
-    systemMessage: `Eres un experto en refactorización de código. Prioriza estándares como SOLID y Clean Code. Analiza el proyecto o fragmento de código proporcionado. Considera las metas y prioridades de refactorización especificadas. Genera una lista de sugerencias de refactorización. Para cada sugerencia, indica el archivo/área, una descripción clara de la mejora, una prioridad (Alta, Media, o Baja) y, si es aplicable, un fragmento del código modificado. Tu respuesta DEBE ser un objeto JSON con la clave "refactoringSuggestions", que es un array de objetos, cada uno con "area", "description", "priority", y opcionalmente "suggestedSnippet".`,
+    systemMessage: `Eres ${REFACTOR_AGENT_NAME}. Prioriza estándares como SOLID y Clean Code. Analiza el proyecto o fragmento de código proporcionado. Considera las metas y prioridades de refactorización especificadas. Genera una lista de sugerencias de refactorización. Para cada sugerencia, indica el archivo/área, una descripción clara de la mejora, una prioridad (Alta, Media, o Baja) y, si es aplicable, un fragmento del código modificado. Tu respuesta DEBE ser un objeto JSON con la clave "refactoringSuggestions", que es un array de objetos, cada uno con "area", "description", "priority", y opcionalmente "suggestedSnippet". Todas las sugerencias y descripciones deben estar en castellano.`,
     llmConfig: 'default',
     capabilities: { selfCodeAccess: true, executionCapability: true, readWriteCapability: false }
   },
