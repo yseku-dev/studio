@@ -29,48 +29,41 @@ export async function handleGenerateCode(
   modelName: string,
   apiUrl?: string 
 ): Promise<HandleGenerateCodeResult> {
-
-  const currentProvider = LLM_PROVIDERS.find(p => p.id === providerId);
-  if (!currentProvider) {
-    return { success: false, error: `Proveedor LLM '${providerId}' no encontrado. Por favor, configúralo en ajustes.` };
-  }
-  if (currentProvider.requiresApiKey && !apiKey) {
-    return { success: false, error: `La clave API para ${currentProvider.name} es obligatoria. Por favor, configúrala en ajustes.` };
-  }
-  if (!modelName) {
-     return { success: false, error: `El nombre del modelo para ${currentProvider.name} es obligatorio. Por favor, configúralo en ajustes.` };
-  }
-
-  const llmOptions: LLMOptions = {
-    providerId: currentProvider.id,
-    apiKey,
-    modelName,
-    apiUrl: apiUrl || currentProvider.apiUrl,
-    timeoutMs: LLM_API_TIMEOUT_MS_GENERATE_CODE,
-  };
-  
-  const operationName = `la generación del código con ${currentProvider.name}`;
   try {
+    const currentProvider = LLM_PROVIDERS.find(p => p.id === providerId);
+    if (!currentProvider) {
+      return { success: false, error: `Proveedor LLM '${providerId}' no encontrado. Por favor, configúralo en ajustes.` };
+    }
+    if (currentProvider.requiresApiKey && !apiKey) {
+      return { success: false, error: `La clave API para ${currentProvider.name} es obligatoria. Por favor, configúrala en ajustes.` };
+    }
+    if (!modelName) {
+      return { success: false, error: `El nombre del modelo para ${currentProvider.name} es obligatorio. Por favor, configúralo en ajustes.` };
+    }
+
+    const llmOptions: LLMOptions = {
+      providerId: currentProvider.id,
+      apiKey,
+      modelName,
+      apiUrl: apiUrl || currentProvider.apiUrl,
+      timeoutMs: LLM_API_TIMEOUT_MS_GENERATE_CODE,
+    };
+    
+    const operationName = `la generación del código con ${currentProvider.name}`;
     const result = await callLLMToGenerateCode(prompt, llmOptions);
     return { success: true, data: result };
   } catch (error) {
-    console.error(`Error en ${operationName}:`, error); 
+    const err = error as Error;
+    console.error(`Error en handleGenerateCode: ${err.message}`, {stack: err.stack}); 
     
-    let detailMessage: string;
-    if (error instanceof Error) {
-        detailMessage = error.message;
-        if (detailMessage.toLowerCase().includes("timeout") || detailMessage.toLowerCase().includes("excedió el tiempo límite")) {
-          detailMessage = `La generación de código excedió el tiempo límite de ${LLM_API_TIMEOUT_MS_GENERATE_CODE / 1000} segundos. Intenta con un prompt más simple o revisa la conexión.`;
-        }
-    } else {
-        detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
+    let detailMessage: string = err.message;
+    if (detailMessage.toLowerCase().includes("timeout") || detailMessage.toLowerCase().includes("excedió el tiempo límite")) {
+      detailMessage = `La generación de código excedió el tiempo límite de ${LLM_API_TIMEOUT_MS_GENERATE_CODE / 1000} segundos. Intenta con un prompt más simple o revisa la conexión.`;
+    } else if (!detailMessage || detailMessage.trim() === "") {
+        detailMessage = "Ha ocurrido un error desconocido durante la operación.";
     }
     
-    if (!detailMessage || detailMessage.trim() === "") {
-        detailMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
-    }
-    
-    return { success: false, error: `Falló ${operationName}: ${detailMessage}` };
+    return { success: false, error: `Falló la generación de código: ${detailMessage}` };
   }
 }
 
@@ -83,7 +76,7 @@ export async function initiateWorkgroupCodeGeneration(
   localStorageSnapshot: LocalStorageSnapshot 
 ): Promise<HandleGenerateCodeResult> {
   const serverLogs: string[] = [];
-  const log = (type: 'INFO' | 'ERROR' | 'DEBUG', message: string, data?: any) => {
+  const log = (type: 'INFO' | 'ERROR' | 'DEBUG' | 'WARN', message: string, data?: any) => {
     const timestamp = new Date().toISOString();
     let dataStringForLogMessage = '';
     if (data !== undefined) {
@@ -102,54 +95,53 @@ export async function initiateWorkgroupCodeGeneration(
     serverLogs.push(logMsg);
   };
 
-  log('INFO', `Iniciando generación de código con grupo de trabajo ID: ${workgroupId}`);
-  
-  const workgroup = allWorkgroups.find(wg => wg.id === workgroupId);
-  if (!workgroup) {
-    log('ERROR', `Grupo de trabajo con ID ${workgroupId} no encontrado.`);
-    return { success: false, error: `Grupo de trabajo no encontrado.`, workgroupLogs: serverLogs };
-  }
+  try {
+    log('INFO', `Iniciando generación de código con grupo de trabajo ID: ${workgroupId}`);
+    
+    const workgroup = allWorkgroups.find(wg => wg.id === workgroupId);
+    if (!workgroup) {
+      log('ERROR', `Grupo de trabajo con ID ${workgroupId} no encontrado.`);
+      return { success: false, error: `Grupo de trabajo no encontrado.`, workgroupLogs: serverLogs };
+    }
 
-  const orchestrator = allAgents.find(a => a.name === ORCHESTRATOR_AGENT_NAME && workgroup.agentIds.includes(a.id));
-  if (!orchestrator) {
-    log('ERROR', `Agente Orquestador no encontrado en el grupo ${workgroup.name}.`);
-    return { success: false, error: `Orquestador no encontrado en el grupo.`, workgroupLogs: serverLogs };
-  }
+    const orchestrator = allAgents.find(a => a.name === ORCHESTRATOR_AGENT_NAME && workgroup.agentIds.includes(a.id));
+    if (!orchestrator) {
+      log('ERROR', `Agente Orquestrador no encontrado en el grupo ${workgroup.name}.`);
+      return { success: false, error: `Orquestador no encontrado en el grupo.`, workgroupLogs: serverLogs };
+    }
 
-  const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, allAgents, allWorkgroups, localStorageSnapshot);
-  if (!orchestratorLlmOptions) {
-    log('ERROR', `Configuración LLM inválida para Orquestador (${orchestrator.name}) en grupo ${workgroup.name}.`);
-    return { success: false, error: `Configuración LLM inválida para Orquestador.`, workgroupLogs: serverLogs };
-  }
-    // Override with specific options from AgentConfig if they differ
+    const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, allAgents, allWorkgroups, localStorageSnapshot);
+    if (!orchestratorLlmOptions) {
+      log('ERROR', `Configuración LLM inválida para Orquestador (${orchestrator.name}) en grupo ${workgroup.name}.`);
+      return { success: false, error: `Configuración LLM inválida para Orquestador.`, workgroupLogs: serverLogs };
+    }
     orchestratorLlmOptions.providerId = (orchestrator.llmConfig !== 'default' ? orchestrator.llmConfig.providerId : orchestratorLlmOptions.providerId);
     orchestratorLlmOptions.modelName = (orchestrator.llmConfig !== 'default' ? orchestrator.llmConfig.modelName : orchestratorLlmOptions.modelName);
     orchestratorLlmOptions.apiKey = (orchestrator.llmConfig !== 'default' ? orchestrator.llmConfig.apiKey : orchestratorLlmOptions.apiKey) || '';
     orchestratorLlmOptions.apiUrl = (orchestrator.llmConfig !== 'default' ? orchestrator.llmConfig.apiUrl : orchestratorLlmOptions.apiUrl);
 
 
-  const participantAgentConfigs = workgroup.agentIds
-    .filter(id => id !== orchestrator.id)
-    .map(id => allAgents.find(a => a.id === id))
-    .filter(agent => agent !== undefined)
-    .reduce((acc, agent) => {
-      const llmOptions = resolveLlmOptionsForSource(`agent:${agent!.id}`, allAgents, allWorkgroups, localStorageSnapshot);
-      if (llmOptions) {
-        acc[agent!.id] = {
-          id: agent!.id, name: agent!.name, systemMessage: agent!.systemMessage,
-          llmProviderId: llmOptions.providerId, llmModelName: llmOptions.modelName,
-          llmApiKey: llmOptions.apiKey, llmApiUrl: llmOptions.apiUrl
-        };
-      } else {
-        log('ERROR', `Configuración LLM inválida para agente participante ${agent!.name}, omitiendo.`);
-      }
-      return acc;
-    }, {} as WorkgroupTurnPayload['participantAgentConfigs']);
+    const participantAgentConfigs = workgroup.agentIds
+      .filter(id => id !== orchestrator.id)
+      .map(id => allAgents.find(a => a.id === id))
+      .filter(agent => agent !== undefined)
+      .reduce((acc, agent) => {
+        const llmOptions = resolveLlmOptionsForSource(`agent:${agent!.id}`, allAgents, allWorkgroups, localStorageSnapshot);
+        if (llmOptions) {
+          acc[agent!.id] = {
+            id: agent!.id, name: agent!.name, systemMessage: agent!.systemMessage,
+            llmProviderId: llmOptions.providerId, llmModelName: llmOptions.modelName,
+            llmApiKey: llmOptions.apiKey, llmApiUrl: llmOptions.apiUrl
+          };
+        } else {
+          log('WARN', `Configuración LLM inválida para agente participante ${agent!.name}, será omitido.`);
+        }
+        return acc;
+      }, {} as WorkgroupTurnPayload['participantAgentConfigs']);
 
-  let conversationHistory: ChatMessage[] = [];
-  const taskForWorkgroup = `Genera código basado en la siguiente descripción. Tu respuesta final (probablemente del agente DesarrolladorSoftware o similar) DEBE ser un objeto JSON con las claves "generatedCode" (string) y opcionalmente "explanation" (string). Descripción del usuario: "${prompt}"`;
+    let conversationHistory: ChatMessage[] = [];
+    const taskForWorkgroup = `Genera código basado en la siguiente descripción. Tu respuesta final (probablemente del agente DesarrolladorSoftware o similar) DEBE ser un objeto JSON con las claves "generatedCode" (string) y opcionalmente "explanation" (string). Descripción del usuario: "${prompt}"`;
 
-  try {
     for (let turn = 1; turn <= MAX_WORKGROUP_TURNS; turn++) {
       log('INFO', `Procesando turno ${turn}/${MAX_WORKGROUP_TURNS} para la generación de código.`);
       const payload: WorkgroupTurnPayload = {
@@ -181,7 +173,6 @@ export async function initiateWorkgroupCodeGeneration(
         const finalResponseContent = turnResult.agentResponse?.content || conversationHistory.findLast(m => m.role === 'assistant')?.content;
         if (finalResponseContent) {
           try {
-            
             const cleanedContent = finalResponseContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
             const parsedData = JSON.parse(cleanedContent) as GeneratedCodeData;
             if (typeof parsedData.generatedCode === 'string') {
@@ -202,16 +193,12 @@ export async function initiateWorkgroupCodeGeneration(
     }
     throw new Error(`Grupo no completó generación en ${MAX_WORKGROUP_TURNS} turnos.`);
   } catch (error) {
-    let detailMessage: string;
-    if (error instanceof Error) {
-        detailMessage = error.message;
-    } else {
-        detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la generación de código por grupo.";
-    }
+    const err = error as Error;
+    let detailMessage: string = err.message;
     if (!detailMessage || detailMessage.trim() === "") {
-        detailMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
+        detailMessage = "Ha ocurrido un error desconocido durante la generación de código por grupo.";
     }
-    log('ERROR', `Error en initiateWorkgroupCodeGeneration: ${detailMessage}`);
+    log('ERROR', `Error en initiateWorkgroupCodeGeneration: ${detailMessage}`, {stack: err.stack});
     return { success: false, error: detailMessage, workgroupLogs: serverLogs };
   }
 }

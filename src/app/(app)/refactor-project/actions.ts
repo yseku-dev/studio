@@ -2,14 +2,12 @@
 'use server';
 
 import type { LLMOptions, ChatMessage } from '@/services/groq';
-import { makeLLMRequest } from '@/services/groq'; // Use makeLLMRequest for direct calls
+import { makeLLMRequest, analyzeProjectSourceChunk } from '@/services/groq'; 
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
 import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
 import { ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS, REFACTOR_AGENT_NAME } from '@/config/agent-config';
 import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
-import fs from 'fs/promises'; 
-import path from 'path'; 
 import { fetchRepositoryContents } from '@/services/git-service';
 
 
@@ -46,18 +44,16 @@ export interface HandleGetRefactoringSuggestionsResult {
   workgroupLogs?: string[];
 }
 
-const REFACTOR_LLM_API_TIMEOUT_MS = 180000; // 3 minutes per call/chunk
-// Max chars for a single chunk sent to LLM for refactoring suggestions.
-// Adjust based on model context window and desired granularity.
+const REFACTOR_LLM_API_TIMEOUT_MS = 180000; 
 const MAX_CHARS_PER_REFACTOR_CHUNK = 7000; 
-const INTER_CHUNK_REFACTOR_DELAY_MS = 5000; // Delay between chunk processing
+const INTER_CHUNK_REFACTOR_DELAY_MS = 5000;
 
 
 export async function handleGetRefactoringSuggestions(
   payload: HandleGetRefactoringSuggestionsPayload
 ): Promise<HandleGetRefactoringSuggestionsResult> {
   const serverLogs: string[] = [];
-  const log = (type: 'INFO' | 'ERROR' | 'DEBUG', message: string, data?: any) => {
+  const log = (type: 'INFO' | 'ERROR' | 'DEBUG' | 'WARN', message: string, data?: any) => {
     const timestamp = new Date().toISOString();
     let dataStringForLogMessage = '';
     if (data !== undefined) {
@@ -76,39 +72,10 @@ export async function handleGetRefactoringSuggestions(
     serverLogs.push(logMsg);
   };
 
-  log('INFO', `Iniciando obtención de sugerencias de refactorización.`);
+  log('INFO', `Iniciando obtención de sugerencias de refactorización. ConfigSource: ${payload.configSource}`);
 
-  let projectContent: string | undefined = undefined;
+  let projectContentForLLM: string | undefined = undefined; 
   let sourceDescriptionForLLM = "";
-
-  if (payload.gitUrl) {
-    log('INFO', `Procesando URL de Git: ${payload.gitUrl}`);
-    sourceDescriptionForLLM = `el repositorio Git en ${payload.gitUrl}`;
-    // Get concatenated source for now, chunking logic below will handle it
-    const gitResult = await fetchRepositoryContents(payload.gitUrl, true); 
-    serverLogs.push(...(gitResult.logsBuilt || []));
-    if (!gitResult.success || !gitResult.concatenatedSource) {
-      log('ERROR', `No se pudo obtener el contenido del repositorio Git: ${gitResult.error}`);
-      return { success: false, error: `No se pudo obtener el contenido del repositorio Git: ${gitResult.error || 'Error desconocido.'}`, workgroupLogs: serverLogs };
-    }
-    projectContent = gitResult.concatenatedSource;
-    log('INFO', `Contenido del repositorio Git obtenido. Tamaño concatenado: ${projectContent.length}`);
-  } else if (payload.projectFileContent) {
-    sourceDescriptionForLLM = `el archivo ${payload.projectFileName || 'subido'}`;
-    log('INFO', `Procesando contenido de archivo: ${payload.projectFileName} (${payload.projectFileType})`);
-    projectContent = payload.projectFileContent; 
-    if (projectContent) {
-      log('INFO', `Contenido de archivo procesado. Tamaño: ${projectContent.length}`);
-    } else {
-      log('ERROR', `Contenido de archivo no proporcionado para análisis de archivo.`);
-      return { success: false, error: "Contenido de archivo no proporcionado.", workgroupLogs: serverLogs };
-    }
-  }
-  
-  if (projectContent === undefined) {
-    log('ERROR', 'No se proporcionó contenido de archivo ni URL de Git válidos.');
-    return { success: false, error: "Fuente del proyecto no especificada o no procesable.", workgroupLogs: serverLogs };
-  }
 
   const agentsForLookup = payload.agents || [];
   const workgroupsForLookup = payload.workgroups || [];
@@ -116,6 +83,27 @@ export async function handleGetRefactoringSuggestions(
   let workgroupForAnalysis: WorkgroupConfig | undefined;
   let orchestratorAgentConfig: AgentConfig | undefined;
 
+  if (payload.gitUrl) {
+    sourceDescriptionForLLM = `el repositorio Git en ${payload.gitUrl}`;
+    log('INFO', `Procesando URL de Git: ${payload.gitUrl}. Fuente para LLM: ${sourceDescriptionForLLM}`);
+    // If it's a workgroup, the task will contain the URL.
+    // If it's a direct/agent call, the LLM will be instructed to fetch from the URL.
+    projectContentForLLM = payload.gitUrl; // For workgroups, this is the URL. For direct, it's also the URL (LLM fetches).
+  } else if (payload.projectFileContent) {
+    sourceDescriptionForLLM = `el archivo ${payload.projectFileName || 'subido'}`;
+    log('INFO', `Procesando contenido de archivo: ${payload.projectFileName} (${payload.projectFileType}). Fuente para LLM: ${sourceDescriptionForLLM}`);
+    projectContentForLLM = payload.projectFileContent; 
+    if (!projectContentForLLM) {
+      log('ERROR', `Contenido de archivo no proporcionado para análisis de archivo.`);
+      return { success: false, error: "Contenido de archivo no proporcionado.", workgroupLogs: serverLogs };
+    }
+    log('INFO', `Contenido de archivo procesado. Tamaño: ${projectContentForLLM.length}`);
+  }
+  
+  if (projectContentForLLM === undefined) {
+    log('ERROR', 'No se proporcionó contenido de proyecto (archivo o URL de Git válidos).');
+    return { success: false, error: "Fuente del proyecto no especificada o no procesable.", workgroupLogs: serverLogs };
+  }
 
   if (payload.configSource.startsWith('workgroup:')) {
     const workgroupId = payload.configSource.split(':')[1];
@@ -134,32 +122,34 @@ export async function handleGetRefactoringSuggestions(
       log('ERROR', `Agente Orquestador no encontrado en el grupo '${workgroupForAnalysis.name}'.`);
       return { success: false, error: `Agente Orquestador no encontrado en el grupo '${workgroupForAnalysis.name}'.`, workgroupLogs: serverLogs };
     }
-  } else {
+  } else { // Direct or Agent call
     llmOptionsToUse = payload.llmOptions || resolveLlmOptionsForSource(payload.configSource, agentsForLookup, workgroupsForLookup, payload.localStorageSnapshot);
-  }
-
-  if (!llmOptionsToUse && !workgroupForAnalysis) {
-    log('ERROR', `Configuración LLM para '${payload.configSource}' no pudo ser resuelta o proporcionada, y no es un grupo de trabajo válido.`);
-    return { success: false, error: `Configuración LLM para '${payload.configSource}' no pudo ser resuelta o proporcionada.`, workgroupLogs: serverLogs };
+    if (!llmOptionsToUse) {
+      log('ERROR', `Configuración LLM para '${payload.configSource}' no pudo ser resuelta o proporcionada.`);
+      return { success: false, error: `Configuración LLM para '${payload.configSource}' no pudo ser resuelta o proporcionada.`, workgroupLogs: serverLogs };
+    }
   }
 
   const refactoringGoals = payload.goals ? `Metas de refactorización: "${payload.goals}".` : "Metas de refactorización generales: mejorar claridad, eficiencia y mantenibilidad.";
   const refactoringPriority = payload.priority ? `Prioridad general: "${payload.priority}".` : "";
 
-  // Prompt for direct LLM call or for the RefactorizadorCodigoExperto agent
-  const systemPromptForLLM = `Eres un agente experto en refactorización de código. Analiza el siguiente proyecto (o fragmento de proyecto) y genera una lista de sugerencias de refactorización.
+  const systemPromptForLLM = `Eres un agente experto en refactorización de código. Analiza el siguiente proyecto y genera una lista de sugerencias de refactorización.
 ${refactoringGoals} ${refactoringPriority}
+Si la entrada del usuario es una URL de un repositorio Git (ej: "Por favor, obtén y analiza el código fuente del repositorio Git en la siguiente URL: https://..."), primero obtén el contenido completo de ese repositorio. Luego, procede con el análisis del código obtenido.
+Si la entrada del usuario es un fragmento de código o el contenido de un archivo directamente, analízalo.
+
 Tu respuesta DEBE ser un objeto JSON con la clave "refactoringSuggestions", que es un array de objetos. Cada objeto de sugerencia debe tener:
-- "area": (string) El archivo/ruta relevante (ej: "src/components/MyComponent.tsx"). Si el input es un fragmento, indica que es parte de un archivo más grande o un fragmento general.
+- "area": (string) El archivo/ruta relevante (ej: "src/components/MyComponent.tsx"). Si el input es un fragmento, indica que es parte de un archivo más grande o un fragmento general. Para repositorios Git, usa rutas relativas desde la raíz del repo.
 - "description": (string) Una descripción clara de la mejora propuesta.
 - "priority": (string) "Alta", "Media", o "Baja".
 - "suggestedSnippet": (string, opcional) Un fragmento de código que ilustra el cambio. Si el cambio es conceptual o abarca múltiples áreas, este campo puede omitirse.
 No incluyas markdown ni texto introductorio/conclusivo fuera del JSON. Si el texto de entrada es un fragmento, las sugerencias deben ser sobre ese fragmento.`;
   
-  // Task for the workgroup, orchestrator will receive this.
   const taskForWorkgroup = `Analizar ${sourceDescriptionForLLM} para refactorización. ${refactoringGoals} ${refactoringPriority}
-El proyecto es (contenido textual o referencia a Git URL):
-${projectContent.substring(0, 15000)} ${projectContent.length > 15000 ? "\\n... (contenido truncado para el prompt inicial del orquestador)" : ""}
+${payload.gitUrl
+    ? `El proyecto se encuentra en la URL de Git: ${payload.gitUrl}. El agente ${REFACTOR_AGENT_NAME} (o uno similar con capacidad de acceso a Git y análisis de código) debe ser instruido para obtener el código de esta URL y realizar el análisis.`
+    : `El proyecto es (contenido textual):\n${projectContentForLLM.substring(0, 15000)} ${projectContentForLLM.length > 15000 ? "\\n... (contenido truncado para el prompt inicial del orquestador)" : ""}`
+}
 La respuesta final de un agente especialista en refactorización (probablemente ${REFACTOR_AGENT_NAME}) DEBE ser un objeto JSON con la clave "refactoringSuggestions" como se describe en el prompt del sistema del ${REFACTOR_AGENT_NAME}.
 El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tarea y el código/referencia para analizar.`;
 
@@ -169,14 +159,14 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
       
       const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestratorAgentConfig.id}`, agentsForLookup, workgroupsForLookup, payload.localStorageSnapshot);
       if (!orchestratorLlmOptions) {
-        log('ERROR', `Configuración LLM inválida para Orquestrador (${orchestratorAgentConfig.name}) en grupo ${workgroupForAnalysis.name}.`);
+        log('ERROR', `Configuración LLM inválida para Orquestador (${orchestratorAgentConfig.name}) en grupo ${workgroupForAnalysis.name}.`);
         throw new Error(`Configuración LLM inválida para Orquestrador en grupo '${workgroupForAnalysis.name}'.`);
       }
+      // Ensure specific overrides from agent config are applied on top of resolved global/agent defaults
       orchestratorLlmOptions.providerId = (orchestratorAgentConfig.llmConfig !== 'default' ? orchestratorAgentConfig.llmConfig.providerId : orchestratorLlmOptions.providerId);
       orchestratorLlmOptions.modelName = (orchestratorAgentConfig.llmConfig !== 'default' ? orchestratorAgentConfig.llmConfig.modelName : orchestratorLlmOptions.modelName);
-      orchestratorLlmOptions.apiKey = (orchestratorAgentConfig.llmConfig !== 'default' ? orchestratorAgentConfig.llmConfig.apiKey : orchestratorLlmOptions.apiKey) || '';
+      orchestratorLlmOptions.apiKey = (orchestratorAgentConfig.llmConfig !== 'default' ? orchestratorAgentConfig.llmConfig.apiKey : orchestratorLlmOptions.apiKey) || ''; // Ensure apiKey is string
       orchestratorLlmOptions.apiUrl = (orchestratorAgentConfig.llmConfig !== 'default' ? orchestratorAgentConfig.llmConfig.apiUrl : orchestratorLlmOptions.apiUrl);
-
 
       const participantAgentConfigs = workgroupForAnalysis.agentIds
         .filter(id => id !== orchestratorAgentConfig!.id)
@@ -196,14 +186,12 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
           return acc;
         }, {} as WorkgroupTurnPayload['participantAgentConfigs']);
 
-      let conversationHistory: ChatMessage[] = [];
-      // Initial message to orchestrator for workgroup refactoring
-      conversationHistory.push({role: 'user', content: taskForWorkgroup});
+      let conversationHistory: ChatMessage[] = [{role: 'user', content: taskForWorkgroup}];
 
       for (let turn = 1; turn <= MAX_WORKGROUP_TURNS; turn++) {
         log('INFO', `Procesando turno de grupo ${turn}/${MAX_WORKGROUP_TURNS} para refactorización.`);
         const turnPayload: WorkgroupTurnPayload = {
-            workgroupName: workgroupForAnalysis.name, task: taskForWorkgroup, // Pass original task each time
+            workgroupName: workgroupForAnalysis.name, task: taskForWorkgroup, 
             conversationHistory,
             orchestrator: {
                 id: orchestratorAgentConfig.id, name: orchestratorAgentConfig.name, systemMessage: orchestratorAgentConfig.systemMessage,
@@ -237,16 +225,38 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
         }
       }
       throw new Error(`Grupo no completó refactorización en ${MAX_WORKGROUP_TURNS} turnos.`);
-    } else if (llmOptionsToUse) {
+    } else if (llmOptionsToUse) { // Direct LLM call path
       log('INFO', `Usando llamada directa a LLM para refactorización con proveedor ${llmOptionsToUse.providerId}, modelo ${llmOptionsToUse.modelName}.`);
-      
       const allSuggestions: RefactoringSuggestionItem[] = [];
       
-      if (projectContent.length > MAX_CHARS_PER_REFACTOR_CHUNK) {
-        log('INFO', `El contenido del proyecto (${projectContent.length} caracteres) excede el límite por fragmento (${MAX_CHARS_PER_REFACTOR_CHUNK}). Se dividirá en fragmentos.`);
+      let contentForLLM: string = projectContentForLLM!;
+      // If it's a Git URL, projectContentForLLM already contains the instruction + URL
+      // If it's uploaded content, projectContentForLLM is the actual code.
+
+      if (payload.gitUrl && !payload.configSource.startsWith('workgroup:')) {
+          // Single call for Git URL, LLM fetches and analyzes
+          log('INFO', `Llamada única al LLM para que obtenga y analice la URL de Git: ${payload.gitUrl}`);
+          const messages: ChatMessage[] = [
+            { role: "system", content: systemPromptForLLM },
+            { role: "user", content: contentForLLM } // This is "Por favor, obtén y analiza..."
+          ];
+          
+          const result = await makeLLMRequest<RefactorProjectAIResponse>(
+            { ...llmOptionsToUse, timeoutMs: REFACTOR_LLM_API_TIMEOUT_MS * 3 }, // Longer timeout for fetch + analysis
+            messages,
+            "json_object" 
+          );
+          if (result && Array.isArray(result.refactoringSuggestions)) {
+            allSuggestions.push(...result.refactoringSuggestions);
+          } else {
+            log('WARN', `LLM no devolvió sugerencias válidas para la URL de Git. Respuesta:`, result);
+          }
+      } else if (contentForLLM.length > MAX_CHARS_PER_REFACTOR_CHUNK) { 
+        // Large uploaded content, needs chunking
+        log('INFO', `El contenido del proyecto (${contentForLLM.length} caracteres) excede el límite por fragmento (${MAX_CHARS_PER_REFACTOR_CHUNK}). Se dividirá en fragmentos.`);
         const chunks: string[] = [];
-        for (let i = 0; i < projectContent.length; i += MAX_CHARS_PER_REFACTOR_CHUNK) {
-          chunks.push(projectContent.substring(i, i + MAX_CHARS_PER_REFACTOR_CHUNK));
+        for (let i = 0; i < contentForLLM.length; i += MAX_CHARS_PER_REFACTOR_CHUNK) {
+          chunks.push(contentForLLM.substring(i, i + MAX_CHARS_PER_REFACTOR_CHUNK));
         }
         log('INFO', `Proyecto dividido en ${chunks.length} fragmentos.`);
 
@@ -276,14 +286,12 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
             await new Promise(resolve => setTimeout(resolve, INTER_CHUNK_REFACTOR_DELAY_MS));
           }
         }
-        log('INFO', `Procesamiento de todos los fragmentos completado. Total de sugerencias: ${allSuggestions.length}`);
-        return { success: true, data: allSuggestions, workgroupLogs: serverLogs };
-
       } else { 
-        log('INFO', `El contenido del proyecto (${projectContent.length} caracteres) es suficientemente pequeño para una sola llamada.`);
+        // Small uploaded content, single call
+        log('INFO', `El contenido del proyecto (${contentForLLM.length} caracteres) es suficientemente pequeño para una sola llamada.`);
         const messages: ChatMessage[] = [
           { role: "system", content: systemPromptForLLM },
-          { role: "user", content: projectContent }
+          { role: "user", content: contentForLLM }
         ];
         
         const result = await makeLLMRequest<RefactorProjectAIResponse>(
@@ -293,13 +301,14 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
         );
 
         if (result && Array.isArray(result.refactoringSuggestions)) {
-          log('INFO', 'Respuesta de refactorización directa recibida y parseada correctamente.');
-          return { success: true, data: result.refactoringSuggestions, workgroupLogs: serverLogs };
+          allSuggestions.push(...result.refactoringSuggestions);
         } else {
           log('ERROR', 'La respuesta directa del LLM no contenía sugerencias de refactorización válidas en el formato esperado.', {response: result});
           throw new Error("La respuesta del LLM no contenía sugerencias válidas para refactorización en el formato esperado.");
         }
       }
+      log('INFO', `Procesamiento directo completado. Total de sugerencias: ${allSuggestions.length}`);
+      return { success: true, data: allSuggestions, workgroupLogs: serverLogs };
     } else {
         log('ERROR', 'Configuración LLM inválida para iniciar refactorización (ni directa ni de grupo).');
         throw new Error("Configuración LLM inválida para iniciar refactorización.");
@@ -311,10 +320,7 @@ El Orquestador debe guiar el flujo para que ${REFACTOR_AGENT_NAME} reciba la tar
     } else {
         detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación de refactorización.";
     }
-    if (!detailMessage || detailMessage.trim() === "") {
-        detailMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
-    }
-    log('ERROR', `Error obteniendo sugerencias de refactorización: ${detailMessage}`);
+    log('ERROR', `Error obteniendo sugerencias de refactorización: ${detailMessage}.`, { stack: (error as Error)?.stack });
     return { success: false, error: detailMessage, workgroupLogs: serverLogs };
   }
 }
@@ -331,10 +337,14 @@ export interface ApplyRefactoringSuggestionResult {
   updatedFileContent?: string;
 }
 
+// This function remains simulated as per current scope for external projects.
 export async function handleApplyRefactoringSuggestion(
   payload: ApplyRefactoringSuggestionPayload
 ): Promise<ApplyRefactoringSuggestionResult> {
-  console.log("TODO: Implementar lógica para aplicar sugerencia de refactorización", payload);
+  console.log("[SIMULATED] Aplicando sugerencia de refactorización:", payload);
   await new Promise(resolve => setTimeout(resolve, 500));
-  return { success: true, updatedFileContent: "// Contenido del archivo actualizado (simulado)" };
+  // In a real scenario, this would involve file system operations or Git operations
+  // if the project source was a Git repository.
+  return { success: true, updatedFileContent: "// Contenido del archivo actualizado (simulado para proyecto externo)" };
 }
+

@@ -2,74 +2,66 @@
 'use server';
 
 import type { LLMOptions, ChatMessage, ChatLLMResponse as ChatResponse } from '@/services/groq';
-import { chatWithLLM } from '@/services/groq'; // Use the generic LLM chat function
+import { chatWithLLM } from '@/services/groq'; 
 import { LLM_PROVIDERS, type LLMProviderId } from '@/config/llm-config';
 
 export interface AgentChatCompletionResponse {
   success: boolean;
-  data?: ChatResponse; // Use generic response type
+  data?: ChatResponse; 
   error?: string;
 }
 
-const AGENT_CHAT_TIMEOUT_MS = 90000; // 90 seconds for agent chat test
+const AGENT_CHAT_TIMEOUT_MS = 90000; 
 
 export async function handleAgentChatCompletion(
   systemMessage: string,
   messages: ChatMessage[],
-  llmOptions: LLMOptions // Expect resolved LLMOptions from the client
+  llmOptions: LLMOptions 
 ): Promise<AgentChatCompletionResponse> {
-
-  // Validate received LLM options
-  const currentProvider = LLM_PROVIDERS.find(p => p.id === llmOptions.providerId);
-  if (!currentProvider) {
-    return { success: false, error: `Proveedor LLM '${llmOptions.providerId}' no encontrado.` };
-  }
-  if (currentProvider.requiresApiKey && !llmOptions.apiKey) {
-    return { success: false, error: `La clave API para ${currentProvider.name} es obligatoria.` };
-  }
-  if (!llmOptions.modelName) {
-     return { success: false, error: `El nombre del modelo para ${currentProvider.name} es obligatorio.` };
-  }
-   if (!messages || messages.length === 0) {
-    return { success: false, error: "Se requiere al menos un mensaje de usuario para iniciar el chat de prueba." };
-  }
-
-  // Prepend the agent's specific system message
-  const messagesForApi: ChatMessage[] = [
-    { role: 'system', content: systemMessage },
-    ...messages // User messages
-  ];
-
-  const payload = {
-    messages: messagesForApi,
-    options: {
-        ...llmOptions, // Use the resolved options passed from client
-        timeoutMs: llmOptions.timeoutMs || AGENT_CHAT_TIMEOUT_MS // Ensure timeout is set
-    },
-  };
-
-  const operationName = `la respuesta del chat de prueba del agente con ${currentProvider.name}`;
   try {
+    const currentProvider = LLM_PROVIDERS.find(p => p.id === llmOptions.providerId);
+    if (!currentProvider) {
+      return { success: false, error: `Proveedor LLM '${llmOptions.providerId}' no encontrado.` };
+    }
+    if (currentProvider.requiresApiKey && !llmOptions.apiKey) {
+      return { success: false, error: `La clave API para ${currentProvider.name} es obligatoria.` };
+    }
+    if (!llmOptions.modelName) {
+      return { success: false, error: `El nombre del modelo para ${currentProvider.name} es obligatorio.` };
+    }
+    if (!messages || messages.length === 0) {
+      return { success: false, error: "Se requiere al menos un mensaje de usuario para iniciar el chat de prueba." };
+    }
+
+    const messagesForApi: ChatMessage[] = [
+      { role: 'system', content: systemMessage },
+      ...messages 
+    ];
+
+    const payload = {
+      messages: messagesForApi,
+      options: {
+          ...llmOptions, 
+          timeoutMs: llmOptions.timeoutMs || AGENT_CHAT_TIMEOUT_MS 
+      },
+    };
+
+    const operationName = `la respuesta del chat de prueba del agente con ${currentProvider.name}`;
     console.log(`[Agent Test] Calling chatWithLLM for agent with provider: ${llmOptions.providerId}, model: ${llmOptions.modelName}`);
     const result = await chatWithLLM(payload);
     return { success: true, data: result };
   } catch (error) {
-    console.error(`Error en ${operationName}:`, error);
+    const err = error as Error;
+    console.error(`Error en handleAgentChatCompletion: ${err.message}`, {stack: err.stack});
 
-    let detailMessage: string;
-    if (error instanceof Error) {
-        detailMessage = error.message;
-        if (detailMessage.toLowerCase().includes("timeout") || detailMessage.toLowerCase().includes("excedió el tiempo límite")) {
-          detailMessage = `La solicitud de chat de prueba excedió el tiempo límite de ${AGENT_CHAT_TIMEOUT_MS / 1000} segundos.`;
-        }
-    } else {
-        detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
-    }
-    
-    if (!detailMessage || detailMessage.trim() === "") {
+    let detailMessage: string = err.message;
+    if (detailMessage.toLowerCase().includes("timeout") || detailMessage.toLowerCase().includes("excedió el tiempo límite")) {
+      detailMessage = `La solicitud de chat de prueba excedió el tiempo límite de ${AGENT_CHAT_TIMEOUT_MS / 1000} segundos.`;
+    } else if (!detailMessage || detailMessage.trim() === "") {
         detailMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
     }
 
-    return { success: false, error: `Falló ${operationName}: ${detailMessage}` };
+    return { success: false, error: `Falló la respuesta del chat de prueba del agente: ${detailMessage}` };
   }
 }
+

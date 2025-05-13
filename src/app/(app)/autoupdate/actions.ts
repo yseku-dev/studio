@@ -45,37 +45,54 @@ export async function handleAutoAnalyzeAppSource(
     executionLogs.push(timestampedMessage);
   };
   
+  try {
+    const currentProvider = LLM_PROVIDERS.find(p => p.id === providerId);
+    log(`Iniciando análisis del código fuente de la aplicación con proveedor: ${currentProvider?.name || providerId}. ${gitRepoUrl ? `Fuente: Git (${gitRepoUrl})` : 'Fuente: Local'}`, 'INFO');
 
-  const currentProvider = LLM_PROVIDERS.find(p => p.id === providerId);
-  log(`Iniciando análisis del código fuente de la aplicación con proveedor: ${currentProvider?.name || providerId}. ${gitRepoUrl ? `Fuente: Git (${gitRepoUrl})` : 'Fuente: Local'}`, 'INFO');
 
-
-  if (!currentProvider) {
-    const errorMsg = `Proveedor LLM '${providerId}' no encontrado.`;
-    log(errorMsg, 'ERROR');
-    return { success: false, error: `${errorMsg} Por favor, configúralo en ajustes.`, detailedExecutionLogs: executionLogs };
-  }
-  if (currentProvider.requiresApiKey && !apiKey) {
-    const errorMsg = `Configuración de API incompleta para ${currentProvider.name}. Clave API es obligatoria.`;
-    log(errorMsg, 'ERROR');
-    return { success: false, error: `${errorMsg} Por favor, configúrala en ajustes.`, detailedExecutionLogs: executionLogs };
-  }
-  if (!modelName) {
-    const errorMsg = `Configuración de API incompleta para ${currentProvider.name}. Nombre de modelo es obligatorio.`;
-    log(errorMsg, 'ERROR');
-    return { success: false, error: `${errorMsg} Por favor, configúrala en ajustes.`, detailedExecutionLogs: executionLogs };
-  }
-  log(`Usando modelo: ${modelName}. Preferencias de análisis: ${analysisPreferences || 'Ninguna'}. Timeout por fragmento: ${LLM_API_TIMEOUT_MS_AUTOUPDATE / 1000}s. Retraso entre fragmentos: ${INTER_CHUNK_PROCESSING_DELAY_MS / 1000}s.`, 'INFO');
-
-  let filesToAnalyze = sourceFiles;
-
-  if (gitRepoUrl) {
-    log(`Obteniendo código fuente desde Git URL: ${gitRepoUrl}`, 'INFO');
-    const gitBundleResult = await fetchRepositoryContents(gitRepoUrl);
-    if (!gitBundleResult.success || !gitBundleResult.files || gitBundleResult.files.length === 0) {
-      const errorMsg = gitBundleResult.error || "No se pudo obtener el código fuente desde Git para analizar.";
+    if (!currentProvider) {
+      const errorMsg = `Proveedor LLM '${providerId}' no encontrado.`;
       log(errorMsg, 'ERROR');
+      return { success: false, error: `${errorMsg} Por favor, configúralo en ajustes.`, detailedExecutionLogs: executionLogs };
+    }
+    if (currentProvider.requiresApiKey && !apiKey) {
+      const errorMsg = `Configuración de API incompleta para ${currentProvider.name}. Clave API es obligatoria.`;
+      log(errorMsg, 'ERROR');
+      return { success: false, error: `${errorMsg} Por favor, configúrala en ajustes.`, detailedExecutionLogs: executionLogs };
+    }
+    if (!modelName) {
+      const errorMsg = `Configuración de API incompleta para ${currentProvider.name}. Nombre de modelo es obligatorio.`;
+      log(errorMsg, 'ERROR');
+      return { success: false, error: `${errorMsg} Por favor, configúrala en ajustes.`, detailedExecutionLogs: executionLogs };
+    }
+    log(`Usando modelo: ${modelName}. Preferencias de análisis: ${analysisPreferences || 'Ninguna'}. Timeout por fragmento: ${LLM_API_TIMEOUT_MS_AUTOUPDATE / 1000}s. Retraso entre fragmentos: ${INTER_CHUNK_PROCESSING_DELAY_MS / 1000}s.`, 'INFO');
+
+    let filesToAnalyze = sourceFiles;
+
+    if (gitRepoUrl) {
+      log(`Obteniendo código fuente desde Git URL: ${gitRepoUrl}`, 'INFO');
+      const gitBundleResult = await fetchRepositoryContents(gitRepoUrl);
+      if (!gitBundleResult.success || !gitBundleResult.files || gitBundleResult.files.length === 0) {
+        const errorMsg = gitBundleResult.error || "No se pudo obtener el código fuente desde Git para analizar.";
+        log(errorMsg, 'ERROR');
+        if(gitBundleResult.logsBuilt) executionLogs.push(...gitBundleResult.logsBuilt);
+        return {
+          success: false,
+          error: errorMsg,
+          chunksProcessed: 0,
+          totalChunks: 0,
+          detailedExecutionLogs: executionLogs
+        };
+      }
+      filesToAnalyze = gitBundleResult.files;
       if(gitBundleResult.logsBuilt) executionLogs.push(...gitBundleResult.logsBuilt);
+      log(`Se obtuvieron ${filesToAnalyze.length} archivos desde Git para procesar.`, 'INFO');
+    }
+
+
+    if (!filesToAnalyze || filesToAnalyze.length === 0) {
+      const errorMsg = "No se proporcionó código fuente (lista de archivos vacía) para analizar.";
+      log(errorMsg, 'ERROR');
       return {
         success: false,
         error: errorMsg,
@@ -84,184 +101,173 @@ export async function handleAutoAnalyzeAppSource(
         detailedExecutionLogs: executionLogs
       };
     }
-    filesToAnalyze = gitBundleResult.files;
-    if(gitBundleResult.logsBuilt) executionLogs.push(...gitBundleResult.logsBuilt);
-    log(`Se obtuvieron ${filesToAnalyze.length} archivos desde Git para procesar.`, 'INFO');
-  }
+    log(`Se recibieron ${filesToAnalyze.length} archivos para procesar.`, 'INFO');
 
+    const chunks: string[] = [];
+    let currentChunk = "";
+    let currentChunkChars = 0;
+    let totalSourceChars = filesToAnalyze.reduce((sum, f) => sum + f.content.length, 0);
 
-  if (!filesToAnalyze || filesToAnalyze.length === 0) {
-    const errorMsg = "No se proporcionó código fuente (lista de archivos vacía) para analizar.";
-    log(errorMsg, 'ERROR');
-    return {
-      success: false,
-      error: errorMsg,
-      chunksProcessed: 0,
-      totalChunks: 0,
-      detailedExecutionLogs: executionLogs
-    };
-  }
-  log(`Se recibieron ${filesToAnalyze.length} archivos para procesar.`, 'INFO');
+    log(`Iniciando división del código fuente en fragmentos. Total de caracteres en ${filesToAnalyze.length} archivos: ${totalSourceChars}. MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}.`, 'INFO');
 
-  const chunks: string[] = [];
-  let currentChunk = "";
-  let currentChunkChars = 0;
-  let totalSourceChars = filesToAnalyze.reduce((sum, f) => sum + f.content.length, 0);
+    for (const file of filesToAnalyze) {
+      log(`Procesando archivo para fragmentación: ${file.fileName} (${file.content.length} caracteres).`, 'DETAIL');
+      const baseFileName = file.fileName;
+      let fileEffectiveContent = file.content;
 
-  log(`Iniciando división del código fuente en fragmentos. Total de caracteres en ${filesToAnalyze.length} archivos: ${totalSourceChars}. MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}.`, 'INFO');
+      const fileMarkerTemplate = `\n\n// --- Archivo: ${baseFileName}{part_info} ---\n\n`;
+      const fileMarkerLength = fileMarkerTemplate.replace("{part_info}", "").length;
 
-  for (const file of filesToAnalyze) {
-    log(`Procesando archivo para fragmentación: ${file.fileName} (${file.content.length} caracteres).`, 'DETAIL');
-    const baseFileName = file.fileName;
-    let fileEffectiveContent = file.content;
-
-    const fileMarkerTemplate = `\n\n// --- Archivo: ${baseFileName}{part_info} ---\n\n`;
-    const fileMarkerLength = fileMarkerTemplate.replace("{part_info}", "").length;
-
-    if (fileEffectiveContent.length + fileMarkerLength > MAX_CHARS_PER_CHUNK) {
-      log(`Archivo ${baseFileName} es demasiado grande (${fileEffectiveContent.length} caracteres) para un solo fragmento, se dividirá.`, 'DETAIL');
-      if (currentChunk.length > 0) {
-        chunks.push(currentChunk);
-        log(`Fragmento parcial anterior (${currentChunk.length} caracteres) añadido antes de dividir archivo grande. Contenido (inicio): '${currentChunk.substring(0,100)}...'`, 'DETAIL');
-        currentChunk = "";
-        currentChunkChars = 0;
-      }
-
-      let offset = 0;
-      let partIndex = 1;
-      while(offset < fileEffectiveContent.length) {
-        const partInfo = ` (parte ${partIndex})`;
-        const partMarker = fileMarkerTemplate.replace("{part_info}", partInfo);
-        const charsToTake = MAX_CHARS_PER_CHUNK - partMarker.length;
-
-        if (charsToTake <= 0) {
-            log(`El marcador para ${baseFileName}${partInfo} es demasiado largo (${partMarker.length}) para el tamaño del fragmento (MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}). Omitiendo esta parte del archivo.`, 'ERROR');
-            break; 
+      if (fileEffectiveContent.length + fileMarkerLength > MAX_CHARS_PER_CHUNK) {
+        log(`Archivo ${baseFileName} es demasiado grande (${fileEffectiveContent.length} caracteres) para un solo fragmento, se dividirá.`, 'DETAIL');
+        if (currentChunk.length > 0) {
+          chunks.push(currentChunk);
+          log(`Fragmento parcial anterior (${currentChunk.length} caracteres) añadido antes de dividir archivo grande. Contenido (inicio): '${currentChunk.substring(0,100)}...'`, 'DETAIL');
+          currentChunk = "";
+          currentChunkChars = 0;
         }
-        const part = fileEffectiveContent.substring(offset, offset + charsToTake);
-        chunks.push(partMarker + part);
-        log(`Archivo ${baseFileName}${partInfo} creado como fragmento No. ${chunks.length}. Tamaño de contenido: ${part.length} caracteres. Contenido (inicio): '${part.substring(0,100)}...'`, 'DETAIL');
-        offset += part.length;
-        partIndex++;
-      }
-      continue; 
-    }
 
-    const fileContentMarker = fileMarkerTemplate.replace("{part_info}", "");
-    if (currentChunkChars + fileEffectiveContent.length + fileContentMarker.length > MAX_CHARS_PER_CHUNK) {
-      if (currentChunk.length > 0) {
-        chunks.push(currentChunk);
-        log(`Fragmento actual No. ${chunks.length} (${currentChunk.length} caracteres) añadido. Contenido (inicio): '${currentChunk.substring(0,100)}...'. Iniciando nuevo fragmento con ${baseFileName}.`, 'DETAIL');
-      }
-      currentChunk = fileContentMarker + fileEffectiveContent;
-      currentChunkChars = fileEffectiveContent.length + fileContentMarker.length;
-    } else {
-      currentChunk += fileContentMarker + fileEffectiveContent;
-      currentChunkChars += fileEffectiveContent.length + fileContentMarker.length;
-    }
-    log(`Archivo ${baseFileName} (${fileEffectiveContent.length} caracteres) añadido al fragmento actual. Tamaño actual del fragmento: ${currentChunkChars}. Contenido (inicio): '${currentChunk.substring(0,100)}...'`, 'DETAIL');
-  }
+        let offset = 0;
+        let partIndex = 1;
+        while(offset < fileEffectiveContent.length) {
+          const partInfo = ` (parte ${partIndex})`;
+          const partMarker = fileMarkerTemplate.replace("{part_info}", partInfo);
+          const charsToTake = MAX_CHARS_PER_CHUNK - partMarker.length;
 
-  if (currentChunk.length > 0) {
-    chunks.push(currentChunk);
-    log(`Fragmento restante No. ${chunks.length} (${currentChunk.length} caracteres) añadido. Contenido (inicio): '${currentChunk.substring(0,100)}...'`, 'DETAIL');
-  }
-
-  const totalChunks = chunks.length;
-  log(`División del código fuente completada. Total de fragmentos generados: ${totalChunks}.`, 'INFO');
-  if (chunks.length > 0) {
-    chunks.forEach((c, i) => log(`Vista previa Fragmento ${i+1}/${totalChunks} - Tamaño: ${c.length} caracteres. Contenido (inicio): '${c.substring(0,100)}...'`, 'DETAIL'));
-  }
-
-
-  if (totalChunks === 0) {
-    log("No se generaron fragmentos de código para analizar. Esto puede ocurrir si no hay archivos o son muy pequeños.", 'WARN');
-    return {
-      success: true,
-      data: { analysisTitle: "Sin Contenido para Analizar", identifiedAreas: [], suggestions: [], overallAssessment: "No se encontraron archivos o contenido para analizar." },
-      chunksProcessed: 0,
-      totalChunks: 0,
-      detailedExecutionLogs: executionLogs
-    };
-  }
-
-  const allResults: ProjectAnalysisResponse[] = [];
-  let processedChunks = 0;
-
-  const llmAPIOptions: LLMOptions = {
-    providerId: currentProvider.id,
-    apiKey: apiKey,
-    modelName: modelName,
-    apiUrl: apiUrl || currentProvider.apiUrl,
-    timeoutMs: LLM_API_TIMEOUT_MS_AUTOUPDATE
-  };
-
-  for (const chunk of chunks) {
-    const currentChunkNum = processedChunks + 1;
-    log(`[CHUNK_ANALYSIS] Iniciando análisis del fragmento ${currentChunkNum} de ${totalChunks}. Tamaño: ${chunk.length} caracteres.`, 'INFO');
-    log(`[CHUNK_ANALYSIS_CONTENT ${currentChunkNum}/${totalChunks}] Contenido del fragmento (primeros 200 caracteres): ${chunk.substring(0,200)}...`, 'DETAIL');
-
-    try {
-      const result = await analyzeProjectSourceChunk(chunk, llmAPIOptions, analysisPreferences);
-      allResults.push(result);
-      processedChunks++;
-      log(`[CHUNK_ANALYSIS_SUCCESS] Fragmento ${currentChunkNum}/${totalChunks} procesado exitosamente.`, 'INFO');
-      log(`[CHUNK_ANALYSIS_RESPONSE ${currentChunkNum}/${totalChunks}] Respuesta del LLM (primeros 200 caracteres): ${JSON.stringify(result).substring(0,200)}...`, 'DETAIL');
-
-      if (processedChunks < totalChunks) {
-        log(`[CHUNK_DELAY] Esperando ${INTER_CHUNK_PROCESSING_DELAY_MS / 1000}s antes del siguiente fragmento para gestionar los límites de TPM/RPM.`, 'INFO');
-        await new Promise(resolve => setTimeout(resolve, INTER_CHUNK_PROCESSING_DELAY_MS));
+          if (charsToTake <= 0) {
+              log(`El marcador para ${baseFileName}${partInfo} es demasiado largo (${partMarker.length}) para el tamaño del fragmento (MAX_CHARS_PER_CHUNK: ${MAX_CHARS_PER_CHUNK}). Omitiendo esta parte del archivo.`, 'ERROR');
+              break; 
+          }
+          const part = fileEffectiveContent.substring(offset, offset + charsToTake);
+          chunks.push(partMarker + part);
+          log(`Archivo ${baseFileName}${partInfo} creado como fragmento No. ${chunks.length}. Tamaño de contenido: ${part.length} caracteres. Contenido (inicio): '${part.substring(0,100)}...'`, 'DETAIL');
+          offset += part.length;
+          partIndex++;
+        }
+        continue; 
       }
 
-    } catch (error) {
-      let errorMessage: string;
-       if (error instanceof Error) {
-          errorMessage = error.message;
+      const fileContentMarker = fileMarkerTemplate.replace("{part_info}", "");
+      if (currentChunkChars + fileEffectiveContent.length + fileContentMarker.length > MAX_CHARS_PER_CHUNK) {
+        if (currentChunk.length > 0) {
+          chunks.push(currentChunk);
+          log(`Fragmento actual No. ${chunks.length} (${currentChunk.length} caracteres) añadido. Contenido (inicio): '${currentChunk.substring(0,100)}...'. Iniciando nuevo fragmento con ${baseFileName}.`, 'DETAIL');
+        }
+        currentChunk = fileContentMarker + fileEffectiveContent;
+        currentChunkChars = fileEffectiveContent.length + fileContentMarker.length;
       } else {
-          errorMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante el análisis de un fragmento.";
+        currentChunk += fileContentMarker + fileEffectiveContent;
+        currentChunkChars += fileEffectiveContent.length + fileContentMarker.length;
       }
-      if (!errorMessage || errorMessage.trim() === "") {
-          errorMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles durante el análisis de un fragmento.";
-      }
-      log(`[CHUNK_ANALYSIS_ERROR] Error analizando el fragmento ${currentChunkNum}/${totalChunks}. ${errorMessage}`, 'ERROR');
+      log(`Archivo ${baseFileName} (${fileEffectiveContent.length} caracteres) añadido al fragmento actual. Tamaño actual del fragmento: ${currentChunkChars}. Contenido (inicio): '${currentChunk.substring(0,100)}...'`, 'DETAIL');
+    }
+
+    if (currentChunk.length > 0) {
+      chunks.push(currentChunk);
+      log(`Fragmento restante No. ${chunks.length} (${currentChunk.length} caracteres) añadido. Contenido (inicio): '${currentChunk.substring(0,100)}...'`, 'DETAIL');
+    }
+
+    const totalChunks = chunks.length;
+    log(`División del código fuente completada. Total de fragmentos generados: ${totalChunks}.`, 'INFO');
+    if (chunks.length > 0) {
+      chunks.forEach((c, i) => log(`Vista previa Fragmento ${i+1}/${totalChunks} - Tamaño: ${c.length} caracteres. Contenido (inicio): '${c.substring(0,100)}...'`, 'DETAIL'));
+    }
+
+
+    if (totalChunks === 0) {
+      log("No se generaron fragmentos de código para analizar. Esto puede ocurrir si no hay archivos o son muy pequeños.", 'WARN');
       return {
-        success: false,
-        error: `Falló el análisis del fragmento ${currentChunkNum}: ${errorMessage}`,
-        chunksProcessed: processedChunks,
-        totalChunks: totalChunks,
+        success: true,
+        data: { analysisTitle: "Sin Contenido para Analizar", identifiedAreas: [], suggestions: [], overallAssessment: "No se encontraron archivos o contenido para analizar." },
+        chunksProcessed: 0,
+        totalChunks: 0,
         detailedExecutionLogs: executionLogs
       };
     }
-  }
 
-  if (allResults.length === 0 && totalChunks > 0) {
-     const errorMsg = "No se obtuvieron resultados del análisis de los fragmentos, aunque se procesaron algunos o todos.";
-    log(errorMsg, 'ERROR');
+    const allResults: ProjectAnalysisResponse[] = [];
+    let processedChunks = 0;
+
+    const llmAPIOptions: LLMOptions = {
+      providerId: currentProvider.id,
+      apiKey: apiKey,
+      modelName: modelName,
+      apiUrl: apiUrl || currentProvider.apiUrl,
+      timeoutMs: LLM_API_TIMEOUT_MS_AUTOUPDATE
+    };
+
+    for (const chunk of chunks) {
+      const currentChunkNum = processedChunks + 1;
+      log(`[CHUNK_ANALYSIS] Iniciando análisis del fragmento ${currentChunkNum} de ${totalChunks}. Tamaño: ${chunk.length} caracteres.`, 'INFO');
+      log(`[CHUNK_ANALYSIS_CONTENT ${currentChunkNum}/${totalChunks}] Contenido del fragmento (primeros 200 caracteres): ${chunk.substring(0,200)}...`, 'DETAIL');
+
+      try {
+        const result = await analyzeProjectSourceChunk(chunk, llmAPIOptions, analysisPreferences);
+        allResults.push(result);
+        processedChunks++;
+        log(`[CHUNK_ANALYSIS_SUCCESS] Fragmento ${currentChunkNum}/${totalChunks} procesado exitosamente.`, 'INFO');
+        log(`[CHUNK_ANALYSIS_RESPONSE ${currentChunkNum}/${totalChunks}] Respuesta del LLM (primeros 200 caracteres): ${JSON.stringify(result).substring(0,200)}...`, 'DETAIL');
+
+        if (processedChunks < totalChunks) {
+          log(`[CHUNK_DELAY] Esperando ${INTER_CHUNK_PROCESSING_DELAY_MS / 1000}s antes del siguiente fragmento para gestionar los límites de TPM/RPM.`, 'INFO');
+          await new Promise(resolve => setTimeout(resolve, INTER_CHUNK_PROCESSING_DELAY_MS));
+        }
+
+      } catch (error) {
+        let errorMessage: string;
+        if (error instanceof Error) {
+            errorMessage = error.message;
+        } else {
+            errorMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante el análisis de un fragmento.";
+        }
+        log(`[CHUNK_ANALYSIS_ERROR] Error analizando el fragmento ${currentChunkNum}/${totalChunks}. ${errorMessage}`, 'ERROR');
+        return {
+          success: false,
+          error: `Falló el análisis del fragmento ${currentChunkNum}: ${errorMessage}`,
+          chunksProcessed: processedChunks,
+          totalChunks: totalChunks,
+          detailedExecutionLogs: executionLogs
+        };
+      }
+    }
+
+    if (allResults.length === 0 && totalChunks > 0) {
+      const errorMsg = "No se obtuvieron resultados del análisis de los fragmentos, aunque se procesaron algunos o todos.";
+      log(errorMsg, 'ERROR');
+      return {
+          success: false,
+          error: errorMsg,
+          chunksProcessed: processedChunks,
+          totalChunks: totalChunks,
+          detailedExecutionLogs: executionLogs
+      };
+    }
+    log(`Análisis de todos los ${processedChunks} fragmentos completado. Agregando resultados...`, 'INFO');
+
+    const aggregatedResult: ProjectAnalysisResponse = {
+      analysisTitle: allResults.length > 0 && allResults[0].analysisTitle ? `${allResults[0].analysisTitle} (Agregado de ${totalChunks} fragmentos)` : `Análisis Agregado de ${totalChunks} Fragmentos`,
+      identifiedAreas: Array.from(new Set(allResults.flatMap(r => r.identifiedAreas || []))),
+      suggestions: allResults.flatMap(r => (r.suggestions || []).map(s => ({...s, area: s.area || "General (Fragmento)" }))),
+      overallAssessment: allResults.map(r => r.overallAssessment || "").filter(a => a.trim() !== "").join('\n\n---\n\n') || "No se generó una evaluación general agregada.",
+    };
+    log("Resultados agregados exitosamente.", 'INFO');
+
     return {
-        success: false,
-        error: errorMsg,
-        chunksProcessed: processedChunks,
-        totalChunks: totalChunks,
-        detailedExecutionLogs: executionLogs
+      success: true,
+      data: aggregatedResult,
+      chunksProcessed: processedChunks,
+      totalChunks: totalChunks,
+      detailedExecutionLogs: executionLogs
+    };
+  } catch (e) {
+    const error = e as Error;
+    log(`Error crítico en handleAutoAnalyzeAppSource: ${error.message}`, 'ERROR');
+    return {
+      success: false,
+      error: `Error crítico durante el auto-análisis: ${error.message}`,
+      detailedExecutionLogs: executionLogs,
     };
   }
-  log(`Análisis de todos los ${processedChunks} fragmentos completado. Agregando resultados...`, 'INFO');
-
-  const aggregatedResult: ProjectAnalysisResponse = {
-    analysisTitle: allResults.length > 0 && allResults[0].analysisTitle ? `${allResults[0].analysisTitle} (Agregado de ${totalChunks} fragmentos)` : `Análisis Agregado de ${totalChunks} Fragmentos`,
-    identifiedAreas: Array.from(new Set(allResults.flatMap(r => r.identifiedAreas || []))),
-    suggestions: allResults.flatMap(r => (r.suggestions || []).map(s => ({...s, area: s.area || "General (Fragmento)" }))),
-    overallAssessment: allResults.map(r => r.overallAssessment || "").filter(a => a.trim() !== "").join('\n\n---\n\n') || "No se generó una evaluación general agregada.",
-  };
-  log("Resultados agregados exitosamente.", 'INFO');
-
-  return {
-    success: true,
-    data: aggregatedResult,
-    chunksProcessed: processedChunks,
-    totalChunks: totalChunks,
-    detailedExecutionLogs: executionLogs
-  };
 }
 
 
@@ -293,7 +299,7 @@ export async function getApplicationSourceBundle(
     const timestampedMessage = `[SourceBundle ${level} ${new Date().toISOString()}] ${message}`;
     switch(level) {
         case 'INFO': console.log(timestampedMessage); break;
-        case 'DETAIL': console.log(timestampedMessage); break; // For very verbose logs
+        case 'DETAIL': console.log(timestampedMessage); break; 
         case 'WARN': console.warn(timestampedMessage); break;
         case 'ERROR': console.error(timestampedMessage); break;
     }
@@ -301,23 +307,23 @@ export async function getApplicationSourceBundle(
     if (parentExecutionLogs) parentExecutionLogs.push(timestampedMessage);
   };
 
-  if (gitRepoUrl) {
-    log(`Obteniendo paquete de código fuente desde Git URL: ${gitRepoUrl}`, 'INFO');
-    const gitResult = await fetchRepositoryContents(gitRepoUrl, undefined, ignorePatterns);
-    if (gitResult.logsBuilt) internalLogs.unshift(...gitResult.logsBuilt);
-    
-    if (!gitResult.success || !gitResult.files) {
-      log(`Error obteniendo contenido de Git: ${gitResult.error}`, 'ERROR');
-      return { success: false, error: gitResult.error || "Fallo al obtener contenido de Git.", logsBuilt: internalLogs };
-    }
-    if (concatenate) {
-      return { success: true, files: gitResult.files, concatenatedSource: gitResult.concatenatedSource, logsBuilt: internalLogs };
-    }
-    return { success: true, files: gitResult.files, logsBuilt: internalLogs };
-  }
-
-  log("Iniciando obtención del paquete de código fuente de la aplicación (local).", 'INFO');
   try {
+    if (gitRepoUrl) {
+      log(`Obteniendo paquete de código fuente desde Git URL: ${gitRepoUrl}`, 'INFO');
+      const gitResult = await fetchRepositoryContents(gitRepoUrl, undefined, ignorePatterns);
+      if (gitResult.logsBuilt) internalLogs.unshift(...gitResult.logsBuilt);
+      
+      if (!gitResult.success || !gitResult.files) {
+        log(`Error obteniendo contenido de Git: ${gitResult.error}`, 'ERROR');
+        return { success: false, error: gitResult.error || "Fallo al obtener contenido de Git.", logsBuilt: internalLogs };
+      }
+      if (concatenate) {
+        return { success: true, files: gitResult.files, concatenatedSource: gitResult.concatenatedSource, logsBuilt: internalLogs };
+      }
+      return { success: true, files: gitResult.files, logsBuilt: internalLogs };
+    }
+
+    log("Iniciando obtención del paquete de código fuente de la aplicación (local).", 'INFO');
     const projectRoot = process.cwd();
     log(`Directorio raíz del proyecto: ${projectRoot}. Patrones de ignorados aplicados.`, 'DETAIL');
 
@@ -352,7 +358,7 @@ export async function getApplicationSourceBundle(
             log(`Archivo omitido de la concatenación por tamaño excesivo: ${relativeFilePath} (${(stats.size / 1024).toFixed(2)} KB)`, 'WARN');
             const message = `// Archivo ${relativeFilePath} omitido de la concatenación por ser demasiado grande (${(stats.size / 1024).toFixed(2)} KB).\n`;
             concatenatedContent += `\n\n// --- Archivo: ${relativeFilePath} ---\n\n${message}`;
-             if (!concatenate) filesData.push({ fileName: relativeFilePath, content: "// Archivo omitido por tamaño excesivo." }); // Still list it if not concatenating
+             if (!concatenate) filesData.push({ fileName: relativeFilePath, content: "// Archivo omitido por tamaño excesivo." }); 
             continue;
         }
 
@@ -364,7 +370,7 @@ export async function getApplicationSourceBundle(
         } catch (readError) {
           const error = readError as NodeJS.ErrnoException;
           if (error.code === 'EACCES' || error.code === 'ENOENT' || error.code === 'EISDIR') {
-              log(`Acceso/Permiso denegado o archivo no encontrado/es directorio para ${relativeFilePath}: ${error.message}. Omitiendo.`, 'WARN'); // Changed to WARN
+              log(`Acceso/Permiso denegado o archivo no encontrado/es directorio para ${relativeFilePath}: ${error.message}. Omitiendo.`, 'WARN'); 
               continue; 
           } else {
               log(`No se pudo leer el archivo ${relativeFilePath} como texto (podría ser binario o error desconocido): ${error.message}. Código: ${error.code}`, 'WARN');
@@ -410,10 +416,6 @@ export async function getApplicationSourceBundle(
     } else {
       errorMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
     }
-    if (!errorMessage || errorMessage.trim() === "") {
-        errorMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
-    }
-
     log(`Error crítico empaquetando el código fuente de la aplicación: ${errorMessage}`, 'ERROR');
     if (error instanceof Error && error.stack) {
         log(`Stack del error crítico: ${error.stack}`, 'ERROR');
@@ -442,28 +444,28 @@ export async function applySuggestedChange(
         if (parentExecutionLogs) parentExecutionLogs.push(timestampedMessage);
     };
 
-    log(`Intentando aplicar cambio al archivo: ${filePath}`, 'INFO');
-
-    let fullPath: string;
     try {
-        const projectRoot = process.cwd();
-        fullPath = path.resolve(projectRoot, filePath); 
-        log(`Ruta absoluta del archivo para escritura: ${fullPath}`, 'DETAIL');
+      log(`Intentando aplicar cambio al archivo: ${filePath}`, 'INFO');
 
-        if (!fullPath.startsWith(projectRoot + path.sep) && fullPath !== projectRoot) {
-            log(`Intento de escritura fuera del directorio del proyecto denegado: ${filePath} (Resuelto a: ${fullPath})`, 'ERROR');
-            return { success: false, error: `Acceso denegado: La ruta del archivo está fuera de los límites permitidos.` };
-        }
+      let fullPath: string;
+      const projectRoot = process.cwd();
+      fullPath = path.resolve(projectRoot, filePath); 
+      log(`Ruta absoluta del archivo para escritura: ${fullPath}`, 'DETAIL');
 
-        const dirName = path.dirname(fullPath);
-        log(`Asegurando que el directorio existe: ${dirName}`, 'DETAIL');
-        await fs.mkdir(dirName, { recursive: true });
-        log(`Directorio ${dirName} asegurado/creado.`, 'INFO');
+      if (!fullPath.startsWith(projectRoot + path.sep) && fullPath !== projectRoot) {
+          log(`Intento de escritura fuera del directorio del proyecto denegado: ${filePath} (Resuelto a: ${fullPath})`, 'ERROR');
+          return { success: false, error: `Acceso denegado: La ruta del archivo está fuera de los límites permitidos.` };
+      }
 
-        log(`Escribiendo ${suggestedContent.length} caracteres en ${filePath}.`, 'DETAIL');
-        await fs.writeFile(fullPath, suggestedContent, 'utf-8');
-        log(`ARCHIVO ACTUALIZADO: El archivo ${filePath} ha sido actualizado con el contenido sugerido.`, 'INFO');
-        return { success: true, newContent: suggestedContent };
+      const dirName = path.dirname(fullPath);
+      log(`Asegurando que el directorio existe: ${dirName}`, 'DETAIL');
+      await fs.mkdir(dirName, { recursive: true });
+      log(`Directorio ${dirName} asegurado/creado.`, 'INFO');
+
+      log(`Escribiendo ${suggestedContent.length} caracteres en ${filePath}.`, 'DETAIL');
+      await fs.writeFile(fullPath, suggestedContent, 'utf-8');
+      log(`ARCHIVO ACTUALIZADO: El archivo ${filePath} ha sido actualizado con el contenido sugerido.`, 'INFO');
+      return { success: true, newContent: suggestedContent };
 
     } catch (error) {
         let errorMessage: string;
@@ -472,9 +474,6 @@ export async function applySuggestedChange(
             if (error.stack) log(`Stack del error de escritura: ${error.stack}`, 'ERROR');
         } else {
             errorMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
-        }
-        if (!errorMessage || errorMessage.trim() === "") {
-            errorMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles al aplicar el cambio.";
         }
         log(`Error al aplicar el cambio al archivo ${filePath}: ${errorMessage}`, 'ERROR');
         return { success: false, error: `Error al escribir en ${filePath}: ${errorMessage}` };
@@ -505,44 +504,44 @@ export async function handleGetErrorFixSuggestion(
         if (parentExecutionLogs) parentExecutionLogs.push(timestampedMessage);
     };
 
-  const currentProvider = LLM_PROVIDERS.find(p => p.id === providerId);
-  log(`Solicitando sugerencia de auto-corrección para error: "${errorMessage.substring(0,150)}..." con proveedor ${currentProvider?.name || providerId}`, 'INFO');
-
-  if (!currentProvider) {
-    const errorMsg = `Proveedor LLM '${providerId}' no encontrado para auto-corrección.`;
-    log(errorMsg, 'ERROR');
-    return { success: false, error: errorMsg };
-  }
-  if (currentProvider.requiresApiKey && !apiKey) {
-    const errorMsg = `Configuración de API incompleta para auto-corrección con ${currentProvider.name}. Falta la clave API.`;
-    log(errorMsg, 'ERROR');
-    return { success: false, error: errorMsg };
-  }
-   if (!modelName) {
-    const errorMsg = `Nombre de modelo no proporcionado para auto-corrección con ${currentProvider.name}.`;
-    log(errorMsg, 'ERROR');
-    return { success: false, error: errorMsg };
-  }
-
-  const llmOptions: LLMOptions = { 
-    providerId: currentProvider.id,
-    apiKey,
-    modelName,
-    apiUrl: apiUrl || currentProvider.apiUrl,
-    timeoutMs: LLM_API_TIMEOUT_MS_AUTOUPDATE, 
-  };
-
-  const contextForIA = customContext || "Error ocurrido durante la función AutoUpdate (análisis del propio código de CodeAlchemist). Por favor, proporciona un análisis de causa raíz y sugerencias de solución específicas. Si el error es por límites de API, explica cómo mitigar el problema (ej. reducir payloads, ajustar timeouts, fragmentar datos, etc.).";
-  log(`Contexto para la IA (AutoFix): "${contextForIA.substring(0,100)}..."`, 'INFO');
-
-  const input: SuggestErrorFixInput = {
-    error_message: errorMessage,
-    context: contextForIA,
-    llmOptions: llmOptions, 
-  };
-
-  const operationName = `la obtención de sugerencia para corrección con ${currentProvider.name}`;
   try {
+    const currentProvider = LLM_PROVIDERS.find(p => p.id === providerId);
+    log(`Solicitando sugerencia de auto-corrección para error: "${errorMessage.substring(0,150)}..." con proveedor ${currentProvider?.name || providerId}`, 'INFO');
+
+    if (!currentProvider) {
+      const errorMsg = `Proveedor LLM '${providerId}' no encontrado para auto-corrección.`;
+      log(errorMsg, 'ERROR');
+      return { success: false, error: errorMsg };
+    }
+    if (currentProvider.requiresApiKey && !apiKey) {
+      const errorMsg = `Configuración de API incompleta para auto-corrección con ${currentProvider.name}. Falta la clave API.`;
+      log(errorMsg, 'ERROR');
+      return { success: false, error: errorMsg };
+    }
+    if (!modelName) {
+      const errorMsg = `Nombre de modelo no proporcionado para auto-corrección con ${currentProvider.name}.`;
+      log(errorMsg, 'ERROR');
+      return { success: false, error: errorMsg };
+    }
+
+    const llmOptions: LLMOptions = { 
+      providerId: currentProvider.id,
+      apiKey,
+      modelName,
+      apiUrl: apiUrl || currentProvider.apiUrl,
+      timeoutMs: LLM_API_TIMEOUT_MS_AUTOUPDATE, 
+    };
+
+    const contextForIA = customContext || "Error ocurrido durante la función AutoUpdate (análisis del propio código de CodeAlchemist). Por favor, proporciona un análisis de causa raíz y sugerencias de solución específicas. Si el error es por límites de API, explica cómo mitigar el problema (ej. reducir payloads, ajustar timeouts, fragmentar datos, etc.).";
+    log(`Contexto para la IA (AutoFix): "${contextForIA.substring(0,100)}..."`, 'INFO');
+
+    const input: SuggestErrorFixInput = {
+      error_message: errorMessage,
+      context: contextForIA,
+      llmOptions: llmOptions, 
+    };
+
+    const operationName = `la obtención de sugerencia para corrección con ${currentProvider.name}`;
     const result = await suggestErrorFix(input); 
     log("Sugerencia de auto-corrección recibida exitosamente.", 'INFO');
     return { success: true, data: result };
@@ -554,11 +553,8 @@ export async function handleGetErrorFixSuggestion(
     } else {
         specificErrorMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
     }
-    if (!specificErrorMessage || specificErrorMessage.trim() === "") {
-        specificErrorMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles al obtener sugerencia.";
-    }
-    log(`Error obteniendo sugerencia para la corrección con ${currentProvider.name}: ${specificErrorMessage}`, 'ERROR');
-    return { success: false, error: `Falló ${operationName}: ${specificErrorMessage}` };
+    log(`Error obteniendo sugerencia para la corrección: ${specificErrorMessage}`, 'ERROR');
+    return { success: false, error: `Falló la obtención de sugerencia para corrección: ${specificErrorMessage}` };
   }
 }
 
@@ -721,17 +717,10 @@ export async function handleUploadToGit(
                   errorMsg = "Falló la autenticación Git (no se pudo leer el nombre de usuario). Verifica tu PAT y permisos.";
              }
         }
-        
-        if (!errorMsg || errorMsg.trim() === "") {
-            errorMsg = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles durante la subida a Git.";
-        }
-
-
         log(`Error crítico durante la subida a Git: ${errorMsg}`, 'ERROR');
         if (errorDetails) {
             log(`Stack/Detalles del error de Git: ${errorDetails}`, 'ERROR');
         }
-
         return { success: false, message: `Falló la subida a Git: ${errorMsg}`, logs: internalLogs };
     } finally {
         if (tempRepoPath) {
@@ -745,3 +734,4 @@ export async function handleUploadToGit(
         }
     }
 }
+
