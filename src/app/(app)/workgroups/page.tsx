@@ -26,7 +26,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { WorkgroupExecutionModal } from '@/components/workgroup-execution-modal';
 import { LOCALSTORAGE_WORKGROUPS_KEY, LOCALSTORAGE_AGENTS_KEY, ORCHESTRATOR_AGENT_NAME, REFACTOR_AGENT_NAME } from '@/config/agent-config';
@@ -88,55 +87,124 @@ export default function WorkgroupsPage() {
     resolver: zodResolver(workgroupSchema),
     defaultValues: { agentIds: [] }
   });
-
-  useEffect(() => {
-    const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
-    let agentsList: AgentConfig[] = [];
-    if (storedAgents) {
-      try {
-        agentsList = JSON.parse(storedAgents);
-        setAvailableAgents(agentsList);
-      } catch (e) {
-        console.error("Error parsing stored agents:", e);
-        setAvailableAgents([]);
-      }
-    }
-
-    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
-    if (storedWorkgroups) {
-       try {
-           setWorkgroups(JSON.parse(storedWorkgroups));
-       } catch(e) {
-            console.error("Error parsing stored workgroups:", e);
-            localStorage.removeItem(LOCALSTORAGE_WORKGROUPS_KEY); 
-            setWorkgroups([]);
-            initializeDefaultWorkgroup(agentsList); 
-       }
-    } else if (agentsList.length > 0) {
-      initializeDefaultWorkgroup(agentsList);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
   
-  const initializeDefaultWorkgroup = (agentsList: AgentConfig[]) => {
-    const defaultAgentIds = defaultWorkgroup.agentNames
+  const initializeDefaultWorkgroup = useCallback((agentsList: AgentConfig[]) => {
+    const orchestrator = agentsList.find(a => a.name === ORCHESTRATOR_AGENT_NAME);
+    if (!orchestrator) {
+      console.error(`[WorkgroupsPage] No se puede inicializar el grupo de trabajo por defecto: Agente Orquestador "${ORCHESTRATOR_AGENT_NAME}" no encontrado.`);
+      toast({ title: "Error de Configuración", description: `Agente Orquestador "${ORCHESTRATOR_AGENT_NAME}" no encontrado. El grupo por defecto no se pudo crear.`, variant: "destructive", duration: 7000 });
+      return [];
+    }
+
+    const defaultMemberIds = defaultWorkgroup.agentNames
       .map(name => agentsList.find(a => a.name === name)?.id)
       .filter((id): id is string => !!id);
-  
-    const orchestrator = agentsList.find(a => a.name === ORCHESTRATOR_AGENT_NAME);
-  
-    if (orchestrator && defaultAgentIds.length > 0) { 
-      const initialWorkgroup: WorkgroupConfig = {
-        id: crypto.randomUUID(),
-        name: defaultWorkgroup.name,
-        description: defaultWorkgroup.description,
-        task: defaultWorkgroup.task,
-        agentIds: Array.from(new Set([orchestrator.id, ...defaultAgentIds])), 
-      };
-      setWorkgroups([initialWorkgroup]);
-      localStorage.setItem(LOCALSTORAGE_WORKGROUPS_KEY, JSON.stringify([initialWorkgroup]));
+
+    if (defaultMemberIds.length === 0 && defaultWorkgroup.agentNames.length > 0) { // Only warn if default members were expected but not found
+         console.warn(`[WorkgroupsPage] No se encontraron agentes miembros por defecto (aparte del orquestrador) para el grupo de trabajo por defecto. Creando con Orquestrador únicamente si es necesario.`);
     }
-  };
+    
+    const initialWorkgroup: WorkgroupConfig = {
+      id: crypto.randomUUID(),
+      name: defaultWorkgroup.name,
+      description: defaultWorkgroup.description,
+      task: defaultWorkgroup.task,
+      agentIds: Array.from(new Set([orchestrator.id, ...defaultMemberIds])),
+    };
+    return [initialWorkgroup];
+  }, [toast]); // Added toast dependency
+
+  useEffect(() => {
+    const storedAgentsRaw = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
+    let currentAvailableAgents: AgentConfig[] = [];
+    if (storedAgentsRaw) {
+      try {
+        currentAvailableAgents = JSON.parse(storedAgentsRaw).map((agent: any) => ({
+          ...agent,
+          id: agent.id || crypto.randomUUID(),
+          capabilities: {
+            selfCodeAccess: agent.capabilities?.selfCodeAccess ?? false,
+            executionCapability: agent.capabilities?.executionCapability ?? false,
+            virtualEnvCapability: agent.capabilities?.virtualEnvCapability ?? false,
+            readWriteCapability: agent.capabilities?.readWriteCapability ?? false,
+          }
+        }));
+        setAvailableAgents(currentAvailableAgents);
+      } catch (e) {
+        console.error("Error parsing stored agents for workgroups:", e);
+        setAvailableAgents([]);
+      }
+    } else {
+      console.warn("[WorkgroupsPage] No agents found in localStorage. Default workgroup creation might be incomplete until agents are initialized.");
+    }
+
+    const storedWorkgroupsRaw = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
+    let currentWorkgroups: WorkgroupConfig[] = [];
+    let workgroupsModified = false;
+
+    if (storedWorkgroupsRaw) {
+      try {
+        const parsedWorkgroups = JSON.parse(storedWorkgroupsRaw);
+        if (Array.isArray(parsedWorkgroups)) {
+          currentWorkgroups = parsedWorkgroups.map((wg: any) => ({
+            ...wg,
+            id: wg.id || crypto.randomUUID(),
+            agentIds: Array.isArray(wg.agentIds) ? wg.agentIds : [],
+          }));
+        } else {
+          throw new Error("Stored workgroups is not an array");
+        }
+      } catch (e) {
+        console.error("Error parsing stored workgroups, attempting to initialize defaults:", e);
+        localStorage.removeItem(LOCALSTORAGE_WORKGROUPS_KEY);
+        // currentWorkgroups will be empty, logic below will initialize
+      }
+    }
+    
+    // Ensure default workgroup "EquipoDesarrolloSoftware" exists
+    const orchestrator = currentAvailableAgents.find(a => a.name === ORCHESTRATOR_AGENT_NAME);
+    const defaultWgInstance = currentWorkgroups.find(wg => wg.name === defaultWorkgroup.name);
+
+    if (orchestrator && currentAvailableAgents.length > 0) { // Check if there are agents to form a group
+      if (!defaultWgInstance) {
+        console.warn(`Default workgroup "${defaultWorkgroup.name}" not found. Initializing.`);
+        const newDefaultWorkgroups = initializeDefaultWorkgroup(currentAvailableAgents);
+        if (newDefaultWorkgroups.length > 0) {
+          currentWorkgroups.push(...newDefaultWorkgroups);
+          workgroupsModified = true;
+        }
+      } else {
+        // Check if orchestrator and other default members are in the existing default workgroup
+        const defaultMemberTargetIds = defaultWorkgroup.agentNames
+          .map(name => currentAvailableAgents.find(a => a.name === name)?.id)
+          .filter((id): id is string => !!id);
+        
+        const requiredIdsInDefaultWg = new Set([orchestrator.id, ...defaultMemberTargetIds]);
+        const currentIdsInDefaultWg = new Set(defaultWgInstance.agentIds);
+        let changed = false;
+
+        requiredIdsInDefaultWg.forEach(reqId => {
+          if (!currentIdsInDefaultWg.has(reqId)) {
+            defaultWgInstance.agentIds.push(reqId);
+            changed = true;
+          }
+        });
+        if (changed) {
+            console.warn(`Default workgroup "${defaultWorkgroup.name}" updated with missing essential agents.`);
+            workgroupsModified = true;
+        }
+      }
+    } else if (!orchestrator && currentAvailableAgents.length > 0) {
+        console.warn(`[WorkgroupsPage] Orchestrator agent "${ORCHESTRATOR_AGENT_NAME}" not found among available agents. Default workgroup cannot be fully initialized.`);
+    }
+    
+    setWorkgroups(currentWorkgroups);
+    if (workgroupsModified || (!storedWorkgroupsRaw && currentWorkgroups.length > 0)) {
+      localStorage.setItem(LOCALSTORAGE_WORKGROUPS_KEY, JSON.stringify(currentWorkgroups));
+      if (!storedWorkgroupsRaw && currentWorkgroups.length > 0) console.log("Initialized workgroups in localStorage with defaults.");
+      else if (workgroupsModified) console.log("Updated workgroups in localStorage.");
+    }
+  }, [initializeDefaultWorkgroup]);
 
   const handleOpenForm = (workgroup?: WorkgroupConfig) => {
      if (!orchestratorAgent) {
@@ -219,11 +287,11 @@ export default function WorkgroupsPage() {
     const agent = availableAgents.find(a => a.id === agentId);
     return {
         name: agent?.name || 'Agente Desconocido',
-        capabilities: {
-            selfCodeAccess: agent?.selfCodeAccess ?? false,
-            executionCapability: agent?.executionCapability ?? false,
-            virtualEnvCapability: agent?.virtualEnvCapability ?? false,
-            readWriteCapability: agent?.readWriteCapability ?? false,
+        capabilities: { // Ensure this structure matches AgentConfig
+            selfCodeAccess: agent?.capabilities?.selfCodeAccess ?? false,
+            executionCapability: agent?.capabilities?.executionCapability ?? false,
+            virtualEnvCapability: agent?.capabilities?.virtualEnvCapability ?? false,
+            readWriteCapability: agent?.capabilities?.readWriteCapability ?? false,
         }
     };
   }

@@ -23,7 +23,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"; // Import AlertDialog components
 import { useToast } from '@/hooks/use-toast';
 import { PlusCircle, Users2, Edit2, Trash2, Wand2, UploadCloud, DownloadCloud, MessageSquare, Code, Terminal, FolderGit2, FileCode, ShieldCheck } from 'lucide-react';
@@ -33,7 +32,8 @@ import { AgentTestChatModal } from '@/components/agent-test-chat-modal'; // Impo
 import type { LLMOptions } from '@/services/groq'; // Import LLMOptions type
 import { Separator } from '@/components/ui/separator'; // Import Separator
 import { Badge } from '@/components/ui/badge'; // Import Badge
-import { LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGENT_NAME, REFACTOR_AGENT_NAME } from '@/config/agent-config';
+import { LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGENT_NAME, REFACTOR_AGENT_NAME, LOCALSTORAGE_AGENTS_KEY } from '@/config/agent-config';
+import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
 
 
 const agentSchema = z.object({
@@ -62,8 +62,6 @@ const agentSchema = z.object({
 
 type AgentFormData = z.infer<typeof agentSchema>;
 
-const LOCALSTORAGE_AGENTS_KEY = 'codealchemist_agents';
-
 const defaultAgents: Omit<AgentConfig, 'id'>[] = [
   { name: "JefeDeProducto", description: "Define requisitos, historias de usuario y prioridades.", systemMessage: "Eres un Jefe de Producto experimentado. Tu tarea es definir claramente los requisitos del proyecto, crear historias de usuario detalladas y establecer prioridades. Comunícate de forma efectiva con el equipo.", llmConfig: 'default' },
   { name: "ArquitectoSoftware", description: "Diseña la arquitectura del sistema y selecciona tecnologías.", systemMessage: "Eres un Arquitecto de Software senior. Tu responsabilidad es diseñar una arquitectura robusta, escalable y mantenible. Selecciona las tecnologías y patrones de diseño más adecuados.", llmConfig: 'default' },
@@ -74,7 +72,7 @@ const defaultAgents: Omit<AgentConfig, 'id'>[] = [
   {
     name: ORCHESTRATOR_AGENT_NAME,
     description: "Agente central obligatorio en cada Grupo de Trabajo. Recibe y gestiona todas las respuestas generadas dentro del grupo y, si el usuario no propone un paso, decide qué agente o subgrupo actúa a continuación. Todas las respuestas deben pasar obligatoriamente por él para garantizar un flujo coordinado y la toma de decisiones centralizada. Limita los turnos a 10 por defecto.",
-    systemMessage: "Eres el Orquestador del Grupo de Trabajo. Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti para asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realizas la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso. Si el usuario no propone un paso explícito, prioriza agentes con capacidades relevantes para la tarea actual (ej. 'RefactorizadorCodigoExperto' para mejoras de código). Tu respuesta DEBE SER EXCLUSIVAMENTE un objeto JSON válido con las claves 'next_agent_name' (string, el nombre EXACTO de un agente disponible o 'COMPLETADO') y 'reason' (string, justificación concisa). No incluyas NADA más.",
+    systemMessage: "Eres el Orquestador del Grupo de Trabajo. Tu rol es crítico: debes recibir y gestionar todas las respuestas generadas dentro del grupo. Basado en la tarea principal, el historial de conversación y el estado actual del proceso, decides a qué agente o subgrupo derivar la interacción. Todas las respuestas de los agentes deben pasar obligatoriamente por ti para asegurar un flujo coordinado y la toma de decisiones centralizada para completar la tarea del grupo eficientemente. No realices la tarea directamente; facilitas que los otros agentes la completen. Pide aclaraciones si es necesario y resume el progreso. Si el usuario no propone un paso explícito, prioriza agentes con capacidades relevantes para la tarea actual (ej. 'RefactorizadorCodigoExperto' para mejoras de código). Tu respuesta DEBE SER EXCLUSIVAMENTE un objeto JSON válido con las claves 'next_agent_name' (string, el nombre EXACTO de un agente disponible o 'COMPLETADO') y 'reason' (string, justificación concisa). No incluyas NADA más.",
     llmConfig: 'default'
   },
   {
@@ -122,49 +120,77 @@ export default function AgentsPage() {
   const [availableCustomModels, setAvailableCustomModels] = useState<string[]>([]);
 
    useEffect(() => {
-    const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
-    if (storedAgents) {
+    const storedAgentsRaw = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
+    let currentAgents: AgentConfig[] = [];
+    let agentsModified = false;
+
+    if (storedAgentsRaw) {
       try {
-        const parsedAgents = JSON.parse(storedAgents);
+        const parsedAgents = JSON.parse(storedAgentsRaw);
         if (Array.isArray(parsedAgents)) {
-          // Ensure new capability flags have default values if missing from storage
-          const agentsWithDefaults = parsedAgents.map(agent => ({
+          currentAgents = parsedAgents.map(agent => ({
               ...agent,
-              capabilities: {
-                selfCodeAccess: agent.capabilities?.selfCodeAccess ?? agent.selfCodeAccess ?? false, // Maintain old structure for a bit for migration
+              id: agent.id || crypto.randomUUID(), // Ensure ID exists
+              llmConfig: agent.llmConfig || 'default', // Ensure llmConfig exists
+              capabilities: { // Ensure capabilities object and its properties exist with defaults
+                selfCodeAccess: agent.capabilities?.selfCodeAccess ?? agent.selfCodeAccess ?? false,
                 executionCapability: agent.capabilities?.executionCapability ?? agent.executionCapability ?? false,
                 virtualEnvCapability: agent.capabilities?.virtualEnvCapability ?? agent.virtualEnvCapability ?? false,
                 readWriteCapability: agent.capabilities?.readWriteCapability ?? agent.readWriteCapability ?? false,
               }
           }));
-          setAgents(agentsWithDefaults);
         } else {
           throw new Error("Stored agents is not an array");
         }
       } catch (e) {
-        console.error("Error parsing stored agents:", e);
+        console.error("Error parsing stored agents, re-initializing with defaults:", e);
         localStorage.removeItem(LOCALSTORAGE_AGENTS_KEY); // Clear corrupted data
-        initializeDefaultAgents();
+        // currentAgents will be empty, leading to full initialization below
       }
-    } else {
-      initializeDefaultAgents();
+    }
+
+    // Ensure essential default agents exist by name, add if missing
+    defaultAgents.forEach(defaultAgentData => {
+      const existingAgent = currentAgents.find(a => a.name === defaultAgentData.name);
+      if (!existingAgent) {
+        console.warn(`Default agent "${defaultAgentData.name}" not found in storage. Adding it.`);
+        currentAgents.push({
+          ...defaultAgentData,
+          id: crypto.randomUUID(),
+          llmConfig: defaultAgentData.llmConfig || 'default',
+          capabilities: {
+            selfCodeAccess: defaultAgentData.capabilities?.selfCodeAccess ?? false,
+            executionCapability: defaultAgentData.capabilities?.executionCapability ?? false,
+            virtualEnvCapability: defaultAgentData.capabilities?.virtualEnvCapability ?? false,
+            readWriteCapability: defaultAgentData.capabilities?.readWriteCapability ?? false,
+          }
+        });
+        agentsModified = true;
+      } else {
+        // Ensure existing agents have the capabilities structure
+        if (typeof existingAgent.capabilities !== 'object' || existingAgent.capabilities === null) {
+           console.warn(`Agent "${existingAgent.name}" missing capabilities object. Initializing.`);
+           existingAgent.capabilities = {
+                selfCodeAccess: defaultAgentData.capabilities?.selfCodeAccess ?? false,
+                executionCapability: defaultAgentData.capabilities?.executionCapability ?? false,
+                virtualEnvCapability: defaultAgentData.capabilities?.virtualEnvCapability ?? false,
+                readWriteCapability: defaultAgentData.capabilities?.readWriteCapability ?? false,
+           };
+           agentsModified = true;
+        }
+      }
+    });
+    
+    setAgents(currentAgents);
+
+    // Save back to localStorage if agents were added/modified or if localStorage was initially empty/corrupted
+    if (agentsModified || !storedAgentsRaw) {
+      localStorage.setItem(LOCALSTORAGE_AGENTS_KEY, JSON.stringify(currentAgents));
+      if (!storedAgentsRaw) console.log("Initialized agents in localStorage with defaults.");
+      else if (agentsModified) console.log("Updated agents in localStorage with missing defaults.");
     }
   }, []);
 
-  const initializeDefaultAgents = () => {
-    const initialAgents = defaultAgents.map(agent => ({
-        ...agent,
-        id: crypto.randomUUID(),
-        capabilities: {
-            selfCodeAccess: agent.capabilities?.selfCodeAccess ?? agent.selfCodeAccess ?? false,
-            executionCapability: agent.capabilities?.executionCapability ?? agent.executionCapability ?? false,
-            virtualEnvCapability: agent.capabilities?.virtualEnvCapability ?? agent.virtualEnvCapability ?? false,
-            readWriteCapability: agent.capabilities?.readWriteCapability ?? agent.readWriteCapability ?? false,
-        }
-    }));
-    setAgents(initialAgents);
-    localStorage.setItem(LOCALSTORAGE_AGENTS_KEY, JSON.stringify(initialAgents));
-  };
 
   useEffect(() => {
     if (watchedLlmConfigType === 'custom' && watchedCustomProviderId) {
@@ -191,10 +217,10 @@ export default function AgentsPage() {
         customModelName: agent.llmConfig !== 'default' ? agent.llmConfig.modelName : undefined,
         customApiKey: agent.llmConfig !== 'default' ? agent.llmConfig.apiKey || '' : '',
         customApiUrl: agent.llmConfig !== 'default' ? agent.llmConfig.apiUrl || '' : '',
-        selfCodeAccess: agent.capabilities?.selfCodeAccess ?? agent.selfCodeAccess ?? false,
-        executionCapability: agent.capabilities?.executionCapability ?? agent.executionCapability ?? false,
-        virtualEnvCapability: agent.capabilities?.virtualEnvCapability ?? agent.virtualEnvCapability ?? false,
-        readWriteCapability: agent.capabilities?.readWriteCapability ?? agent.readWriteCapability ?? false,
+        selfCodeAccess: agent.capabilities?.selfCodeAccess ?? false,
+        executionCapability: agent.capabilities?.executionCapability ?? false,
+        virtualEnvCapability: agent.capabilities?.virtualEnvCapability ?? false,
+        readWriteCapability: agent.capabilities?.readWriteCapability ?? false,
       });
     } else {
       setEditingAgent(null);
@@ -753,5 +779,3 @@ export default function AgentsPage() {
     </>
   );
 }
-
-
