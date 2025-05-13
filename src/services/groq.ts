@@ -303,6 +303,7 @@ export async function makeLLMRequest<TResponse>(
     if (contentToParse) {
       if (expectedResponseFormat === "json_object") {
         try {
+          // Attempt to clean the JSON string: remove potential markdown backticks and ensure it's a single JSON object.
           const cleanedContent = contentToParse.replace(/^```json\s*/, '').replace(/\s*```$/, '');
           return JSON.parse(cleanedContent) as TResponse;
         } catch (parseError) {
