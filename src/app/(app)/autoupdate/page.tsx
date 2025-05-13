@@ -24,21 +24,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Textarea } from '@/components/ui/textarea';
-import { Input } from '@/components/ui/input'; // Added Input
+import { Input } from '@/components/ui/input';
 import JSZip from 'jszip';
 import { Label } from '@/components/ui/label';
 import { Progress } from "@/components/ui/progress";
 import { cn } from '@/lib/utils';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
-import { LOCALSTORAGE_AGENTS_KEY, LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS } from '@/config/agent-config';
+import { LOCALSTORAGE_AGENTS_KEY, REFACTOR_AGENT_NAME, MAX_WORKGROUP_TURNS } from '@/config/agent-config';
 import {
     LLM_PROVIDERS,
     LOCALSTORAGE_GIT_REPO_URL_KEY,
@@ -50,18 +43,18 @@ import {
     getLocalStorageModelName,
     type LLMProviderId
 } from '@/config/llm-config';
-import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
-import type { ChatMessage } from '@/services/groq';
 import { useDebug, type DebugLogEntry } from '@/contexts/DebugContext';
 
 
-type AutoUpdateStatus = "idle" | "loading_source" | "chunking_source" | "analyzing" | "processing_workgroup_turn" | "success" | "error" | "fixing_error" | "uploading_git" | "fixing_git_error";
+type AutoUpdateStatus = "idle" | "loading_source" | "chunking_source" | "analyzing" | "success" | "error" | "fixing_error" | "uploading_git" | "fixing_git_error";
 
 type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
 
 
+// Define the type for a single suggestion item from the response
+// Correctly extend the type of an element in the 'suggestions' array
 interface SingleSuggestion extends SuggestionItem {
-  id?: string; 
+  id?: string; // id might not exist initially, make it optional
   area: string;
 }
 
@@ -85,6 +78,8 @@ interface GitConfig {
   pat: string | null;
 }
 
+type RefactorAgentStatus = 'loading' | 'found' | 'not_found' | 'error_config';
+
 export default function AutoUpdatePage() {
   const [status, setStatus] = useState<AutoUpdateStatus>("idle");
   const [analysisResult, setAnalysisResult] = useState<ProjectAnalysisResponse | null>(null);
@@ -102,20 +97,18 @@ export default function AutoUpdatePage() {
   const { addDebugLog } = useDebug();
 
   const [agents, setAgents] = useState<AgentConfig[]>([]);
-  const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
-  const [selectedConfigSource, setSelectedConfigSource] = useState<string>('global');
-  const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null);
-  const [gitSourceUrl, setGitSourceUrl] = useState<string>(""); // For Git URL input
+  const [gitSourceUrl, setGitSourceUrl] = useState<string>(""); 
 
   const [gitConfig, setGitConfig] = useState<GitConfig>({ repoUrl: null, username: null, email: null, pat: null });
   const [gitUploadRetryCount, setGitUploadRetryCount] = useState(0);
   const MAX_GIT_UPLOAD_RETRIES = 5;
   const [currentGitError, setCurrentGitError] = useState<string | null>(null);
 
-  const workgroupExecutionControllerRef = useRef<AbortController | null>(null);
   const isMountedRef = useRef(false);
-  const [currentWorkgroupTurn, setCurrentWorkgroupTurn] = useState(0); 
-  const [workgroupConversationHistory, setWorkgroupConversationHistoryState] = useState<ChatMessage[]>([]);
+  
+  const [refactorAgentLlmOptions, setRefactorAgentLlmOptions] = useState<LLMOptions | null>(null);
+  const [refactorAgentStatus, setRefactorAgentStatus] = useState<RefactorAgentStatus>('loading');
+  const [refactorAgentInstance, setRefactorAgentInstance] = useState<AgentConfig | null>(null);
 
 
   const { toast } = useToast();
@@ -125,12 +118,20 @@ export default function AutoUpdatePage() {
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Componente AutoUpdatePage montado.' });
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
     if (storedAgents) {
-      try { setAgents(JSON.parse(storedAgents)); } catch (e) { console.error("Error parsing stored agents:", e); setAgents([]); addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: 'Error al parsear agentes de localStorage.', data: e });}
+      try { 
+        const parsedAgents = JSON.parse(storedAgents);
+        setAgents(parsedAgents); 
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'DEBUG', message: 'Agentes cargados desde localStorage.', data: { count: parsedAgents.length } });
+      } catch (e) { 
+        console.error("Error parsing stored agents:", e); 
+        setAgents([]); 
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: 'Error al parsear agentes de localStorage.', data: e });
+      }
+    } else {
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'WARN', message: 'No se encontraron agentes en localStorage.' });
+      setRefactorAgentStatus('not_found'); // If no agents stored, refactor agent cannot be found
     }
-    const storedWorkgroups = localStorage.getItem(LOCALSTORAGE_WORKGROUPS_KEY);
-    if (storedWorkgroups) {
-      try { setWorkgroups(JSON.parse(storedWorkgroups)); } catch (e) { console.error("Error parsing stored workgroups:", e); setWorkgroups([]); addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: 'Error al parsear grupos de localStorage.', data: e });}
-    }
+
     setGitConfig({
       repoUrl: localStorage.getItem(LOCALSTORAGE_GIT_REPO_URL_KEY),
       username: localStorage.getItem(LOCALSTORAGE_GIT_USERNAME_KEY),
@@ -141,33 +142,41 @@ export default function AutoUpdatePage() {
     return () => {
       isMountedRef.current = false;
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Componente AutoUpdatePage desmontado.' });
-      if (workgroupExecutionControllerRef.current) {
-        workgroupExecutionControllerRef.current.abort();
-        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'WARN', message: 'Ejecución de grupo abortada en desmontaje.' });
-      }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [addDebugLog]);
 
   useEffect(() => {
-    const options = resolveLlmOptionsForSource(selectedConfigSource, agents, workgroups, {
-      [LOCALSTORAGE_PROVIDER_ID_KEY]: typeof window !== 'undefined' ? localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null : null,
-      apiKeys: LLM_PROVIDERS.reduce((acc, p) => {
-        acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(getLocalStorageApiKeyName(p.id)) : null;
-        return acc;
-      }, {} as LocalStorageSnapshot['apiKeys']),
-      modelNames: LLM_PROVIDERS.reduce((acc, p) => {
-        acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(getLocalStorageModelName(p.id)) : null;
-        return acc;
-      }, {} as LocalStorageSnapshot['modelNames']),
-      apiUrls: LLM_PROVIDERS.reduce((acc, p) => {
-        acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(`codealchemist_apiurl_${p.id}`) : null;
-        return acc;
-      }, {} as LocalStorageSnapshot['apiUrls']),
-    });
-    setResolvedLlmOptions(options);
-     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'DEBUG', message: `Opciones LLM resueltas para ${selectedConfigSource}`, data: options });
-  }, [selectedConfigSource, agents, workgroups, addDebugLog]);
+    if (agents.length > 0) {
+      setRefactorAgentStatus('loading');
+      const foundAgent = agents.find(a => a.name === REFACTOR_AGENT_NAME);
+      if (foundAgent) {
+        setRefactorAgentInstance(foundAgent);
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Agente ${REFACTOR_AGENT_NAME} encontrado.`});
+        const localStorageSnapshot: LocalStorageSnapshot = {
+          [LOCALSTORAGE_PROVIDER_ID_KEY]: typeof window !== 'undefined' ? localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null : null,
+          apiKeys: LLM_PROVIDERS.reduce((acc, p) => { acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(getLocalStorageApiKeyName(p.id)) : null; return acc; }, {} as LocalStorageSnapshot['apiKeys']),
+          modelNames: LLM_PROVIDERS.reduce((acc, p) => { acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(getLocalStorageModelName(p.id)) : null; return acc; }, {} as LocalStorageSnapshot['modelNames']),
+          apiUrls: LLM_PROVIDERS.reduce((acc, p) => { acc[p.id] = typeof window !== 'undefined' ? localStorage.getItem(`codealchemist_apiurl_${p.id}`) : null; return acc; }, {} as LocalStorageSnapshot['apiUrls']),
+        };
+
+        const options = resolveLlmOptionsForSource(`agent:${foundAgent.id}`, agents, [], localStorageSnapshot);
+        if (options) {
+          setRefactorAgentLlmOptions(options);
+          setRefactorAgentStatus('found');
+          addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Opciones LLM resueltas para ${REFACTOR_AGENT_NAME}.`, data: options });
+        } else {
+          setRefactorAgentLlmOptions(null);
+          setRefactorAgentStatus('error_config');
+          addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Error al resolver opciones LLM para ${REFACTOR_AGENT_NAME}.` });
+        }
+      } else {
+        setRefactorAgentInstance(null);
+        setRefactorAgentLlmOptions(null);
+        setRefactorAgentStatus('not_found');
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'WARN', message: `Agente ${REFACTOR_AGENT_NAME} no encontrado.` });
+      }
+    }
+  }, [agents, addDebugLog]);
   
   const addServerLogsToDebugAndPage = useCallback((serverLogs: string[] | undefined, sourcePrefix: string = 'SERVER_AUTOUDDATE') => {
     if (serverLogs) {
@@ -240,174 +249,22 @@ export default function AutoUpdatePage() {
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Análisis completado y resultados procesados en UI.', data });
   }, [projectFiles, toast, addDebugLog]);
 
-  const runWorkgroupAnalysisTurn = useCallback(async (
-    turn: number,
-    history: ChatMessage[],
-    signal: AbortControllerSignal,
-    workgroup: WorkgroupConfig,
-    task: string
-  ) => {
-    if (!isMountedRef.current || signal.aborted) {
-        addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'WARN', message: 'Ejecución de análisis de grupo detenida (componente desmontado o señal abortada).'});
-        if (status === "processing_workgroup_turn") setStatus("idle"); 
-        return;
-    }
-    addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'SYSTEM', message: `Iniciando turno de análisis ${turn}/${MAX_WORKGROUP_TURNS} para el grupo ${workgroup.name}...` });
-    setCurrentWorkgroupTurn(turn);
-    setStatus("processing_workgroup_turn");
-
-    const orchestratorAgent = agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME && workgroup.agentIds.includes(a.id));
-    if (!orchestratorAgent) {
-        addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'ERROR', message: 'Error crítico: Agente Orquestador no encontrado en el grupo.'});
-        setCurrentAnalysisError("Orquestrador no encontrado en el grupo.");
-        setStatus("error");
-        return;
-    }
-    
-    const localStorageSnapshotForServer: LocalStorageSnapshot = {
-        [LOCALSTORAGE_PROVIDER_ID_KEY]: typeof window !== 'undefined' ? localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null : null,
-        apiKeys: {},
-        modelNames: {},
-        apiUrls: {},
-    };
-    if (typeof window !== 'undefined') {
-        LLM_PROVIDERS.forEach(provider => {
-            localStorageSnapshotForServer.apiKeys[provider.id] = localStorage.getItem(getLocalStorageApiKeyName(provider.id));
-            localStorageSnapshotForServer.modelNames[provider.id] = localStorage.getItem(getLocalStorageModelName(provider.id));
-            localStorageSnapshotForServer.apiUrls[provider.id] = localStorage.getItem(`codealchemist_apiurl_${provider.id}`);
-        });
-    }
-
-    const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestratorAgent.id}`, agents, workgroups, localStorageSnapshotForServer);
-    if (!orchestratorLlmOptions) {
-        addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'ERROR', message: `Configuración LLM inválida para Orquestrador (${orchestratorAgent.name})`});
-        setCurrentAnalysisError(`Configuración LLM inválida para Orquestrador.`);
-        setStatus("error");
-        return;
-    }
-    
-    const participantAgentDetails = workgroup.agentIds
-        .filter(id => id !== orchestratorAgent.id)
-        .map(id => agents.find(a => a.id === id))
-        .filter(agentItem => agentItem !== undefined) as AgentConfig[];
-
-    const participantAgentConfigs = participantAgentDetails.reduce((acc, agent) => {
-        const llmOptions = resolveLlmOptionsForSource(`agent:${agent.id}`, agents, workgroups, localStorageSnapshotForServer);
-        if (llmOptions) {
-            acc[agent.id] = {
-                id: agent.id, name: agent.name, systemMessage: agent.systemMessage,
-                llmProviderId: llmOptions.providerId, llmModelName: llmOptions.modelName,
-                llmApiKey: llmOptions.apiKey, llmApiUrl: llmOptions.apiUrl
-            };
-        }
-        return acc;
-    }, {} as WorkgroupTurnPayload['participantAgentConfigs']);
-
-
-    const payload: WorkgroupTurnPayload = {
-        workgroupName: workgroup.name, task, conversationHistory: history,
-        orchestrator: {
-            id: orchestratorAgent.id, name: orchestratorAgent.name, systemMessage: orchestratorAgent.systemMessage,
-            llmProviderId: orchestratorLlmOptions.providerId, llmModelName: orchestratorLlmOptions.modelName,
-            llmApiKey: orchestratorLlmOptions.apiKey, llmApiUrl: orchestratorLlmOptions.apiUrl
-        },
-        participantAgentConfigs, currentTurn: turn, maxTurns: MAX_WORKGROUP_TURNS,
-        localStorageSnapshot: localStorageSnapshotForServer,
-    };
-
-    addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'DEBUG', message: `Enviando payload a handleWorkgroupTurn para el turno ${turn}. Tarea (inicio): ${task.substring(0,100)}...`, data: { orchestratorModel: payload.orchestrator.llmModelName, numParticipants: Object.keys(payload.participantAgentConfigs).length, historyLength: payload.conversationHistory.length } });
-
-    try {
-        const result: WorkgroupTurnResponse = await handleWorkgroupTurn(payload);
-        addServerLogsToDebugAndPage(result.serverLogs, 'SERVER_WORKGROUP_TURN');
-
-        if (result.error) {
-            addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'ERROR', message: `Error en servidor (turno ${turn}): ${result.error}` });
-            setCurrentAnalysisError(result.error);
-            setStatus("error");
-            return;
-        }
-        
-        const newHistory = result.updatedHistory || history;
-        setWorkgroupConversationHistoryState(newHistory);
-
-        if (result.orchestratorDecision) {
-            const nextAgentConfig = agents.find(a => a.id === result.orchestratorDecision?.nextAgentId);
-            addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'ORCHESTRATOR', agentName: orchestratorAgent.name, message: `Decisión: ${result.orchestratorDecision.reason}. Próximo: ${nextAgentConfig?.name || result.orchestratorDecision.nextAgentId}`, data: {raw: result.orchestratorDecision.rawOutput} });
-        }
-        if (result.agentResponse) {
-            const respondingAgent = agents.find(a => a.id === result.agentResponse?.agentId);
-            addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'AGENT', agentName: respondingAgent?.name || result.agentResponse.agentId, message: `Respuesta (inicio): ${result.agentResponse.content.substring(0, 100)}...`, data: {raw: result.agentResponse.rawOutput} });
-           
-            if (result.isComplete || result.orchestratorDecision?.nextAgentId === "COMPLETADO") {
-                try {
-                    const finalAnalysis = JSON.parse(result.agentResponse.content) as ProjectAnalysisResponse;
-                    if (finalAnalysis && finalAnalysis.analysisTitle && Array.isArray(finalAnalysis.suggestions)) {
-                         processAnalysisResult(finalAnalysis);
-                         addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'SYSTEM', message: `Análisis del grupo de trabajo completado y procesado.`});
-                         return; 
-                    } else {
-                         throw new Error("La respuesta final del agente no tiene el formato ProjectAnalysisResponse esperado.");
-                    }
-                } catch (parseError) {
-                    addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'ERROR', message: `Error al parsear la respuesta final del agente como JSON para ProjectAnalysisResponse: ${(parseError as Error).message}. Contenido completo en logs del servidor.`});
-                    setCurrentAnalysisError("La respuesta final del grupo de trabajo no pudo ser interpretada como un análisis de proyecto válido.");
-                    setStatus("error");
-                    return;
-                }
-            }
-        }
-
-        if (result.isComplete || turn >= MAX_WORKGROUP_TURNS) {
-            addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'SYSTEM', message: `Ejecución del análisis de grupo ${result.isComplete ? 'marcada como completada' : 'alcanzó el límite de turnos'}.` });
-             if (!analysisResult && !(result.agentResponse && result.orchestratorDecision?.nextAgentId === "COMPLETADO")) { 
-                setCurrentAnalysisError("El grupo de trabajo finalizó pero no se obtuvo un resultado de análisis claro.");
-                setStatus("error");
-            } else {
-                 setStatus("success"); 
-            }
-        } else if (!signal.aborted) {
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            if (!signal.aborted && isMountedRef.current) {
-                runWorkgroupAnalysisTurn(turn + 1, newHistory, signal, workgroup, task);
-            }
-        }
-    } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Error desconocido en cliente procesando turno de grupo.';
-        addDebugLog({ source: 'AUTOUPDATE_WORKGROUP', type: 'ERROR', message: `Error en cliente (turno ${turn}): ${errorMsg}` });
-        setCurrentAnalysisError(errorMsg);
-        setStatus("error");
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agents, workgroups, processAnalysisResult, status, addDebugLog, addServerLogsToDebugAndPage, setWorkgroupConversationHistoryState]); 
-
   const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
-    const options = resolvedLlmOptions;
-    let workgroupForAnalysis: WorkgroupConfig | undefined;
     setDetailedLogs([]); 
 
-    if (selectedConfigSource.startsWith("workgroup:")) {
-        const workgroupId = selectedConfigSource.split(":")[1];
-        workgroupForAnalysis = workgroups.find(wg => wg.id === workgroupId);
-        if (!workgroupForAnalysis) {
-            toast({ title: "Error de Configuración", description: "Grupo de trabajo seleccionado no encontrado.", variant: "destructive" });
-            addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Grupo de trabajo con ID ${workgroupId} no encontrado.` });
-            return;
-        }
-    } else if (!options) {
-        toast({
-            title: "Configuración LLM Incompleta",
-            description: `Configuración LLM para '${getSourceName(selectedConfigSource)}' incompleta.`,
-            variant: "destructive", duration: 7000,
-        });
-        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Configuración LLM para '${getSourceName(selectedConfigSource)}' incompleta.` });
+    if (refactorAgentStatus !== 'found' || !refactorAgentLlmOptions) {
+        const errorMsg = refactorAgentStatus === 'not_found' 
+            ? `El agente '${REFACTOR_AGENT_NAME}' no fue encontrado. Por favor, créalo y configúralo.`
+            : `El agente '${REFACTOR_AGENT_NAME}' no tiene una configuración LLM válida.`;
+        toast({ title: "Error de Configuración de Agente", description: errorMsg, variant: "destructive", duration: 7000 });
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Auto-Análisis fallido: ${errorMsg}` });
         return;
     }
 
     if (!isRetry) {
-       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Iniciando nuevo Auto-Análisis. Limpiando logs previos.` });
+       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Iniciando nuevo Auto-Análisis con ${REFACTOR_AGENT_NAME}. Limpiando logs previos.` });
     } else {
-        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: "Reintentando análisis..." });
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Reintentando análisis con ${REFACTOR_AGENT_NAME}...` });
     }
 
     setStatus("loading_source");
@@ -417,7 +274,6 @@ export default function AutoUpdatePage() {
     setSuggestionsWithStatus([]);
     setAnalysisProgress({ processed: 0, total: 0 });
     setAutoFixSuggestion(null);
-    setWorkgroupConversationHistoryState([]); 
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: "Paso 1: Obteniendo código fuente de la aplicación..."});
 
     toast({
@@ -425,59 +281,38 @@ export default function AutoUpdatePage() {
       description: `Paso 1: Cargando y preparando el código fuente... ${gitSourceUrl ? `desde ${gitSourceUrl}` : '(local)'}`
     });
 
-    const bundleResult = await getApplicationSourceBundle(workgroupForAnalysis ? true : false, undefined, gitSourceUrl || undefined);
+    const bundleResult = await getApplicationSourceBundle(false, undefined, gitSourceUrl || undefined);
     addServerLogsToDebugAndPage(bundleResult.logsBuilt, 'SERVER_SOURCE_BUNDLE');
 
-    if (!bundleResult.success || (!bundleResult.files && !bundleResult.concatenatedSource)) {
+    if (!bundleResult.success || !bundleResult.files) {
       const errorMsg = bundleResult.error || "No se pudo obtener el código fuente para analizar.";
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Error en Paso 1: ${errorMsg}`});
       handleAnalysisError(errorMsg);
       return;
     }
-    if (bundleResult.files) setProjectFiles(bundleResult.files);
+    setProjectFiles(bundleResult.files);
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Paso 1 completado. ${bundleResult.files?.length || 'Varios'} archivos obtenidos.`});
 
 
-    if (workgroupForAnalysis) {
-        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Análisis iniciado usando el grupo de trabajo: ${workgroupForAnalysis.name}.`});
-        setStatus("processing_workgroup_turn");
-        workgroupExecutionControllerRef.current = new AbortController();
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Paso 2: Enviando ${bundleResult.files.length} archivos al servidor para análisis y fragmentación usando ${REFACTOR_AGENT_NAME}'s config.`});
+    setStatus("analyzing");
 
-        if (!bundleResult.concatenatedSource) {
-            addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Error: No se pudo obtener el código fuente concatenado para el grupo de trabajo.`});
-            setStatus("error");
-            setCurrentAnalysisError("Error al obtener código fuente para el grupo.");
-            return;
-        }
-        const taskForWorkgroup = `Analiza el siguiente código fuente completo de la aplicación CodeAlchemist. ${analysisPreferences ? `Preferencias de análisis: "${analysisPreferences}".` : ''} El código es:\n\n${bundleResult.concatenatedSource}`;
-        
-        await runWorkgroupAnalysisTurn(1, [], workgroupExecutionControllerRef.current.signal, workgroupForAnalysis, taskForWorkgroup);
+    const analysisActionResult = await handleAutoAnalyzeAppSource(
+        bundleResult.files,
+        refactorAgentLlmOptions.providerId,
+        refactorAgentLlmOptions.apiKey,
+        refactorAgentLlmOptions.modelName,
+        refactorAgentLlmOptions.apiUrl,
+        analysisPreferences,
+        gitSourceUrl || undefined 
+    );
+    addServerLogsToDebugAndPage(analysisActionResult.detailedExecutionLogs, 'SERVER_AUTO_ANALYZE');
+    setAnalysisProgress({ processed: analysisActionResult.chunksProcessed || 0, total: analysisActionResult.totalChunks || 0 });
 
-    } else if (options && bundleResult.files) {
-        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Paso 2: Enviando ${bundleResult.files.length} archivos al servidor para análisis y fragmentación...`});
-        setStatus("analyzing");
-
-        const analysisActionResult = await handleAutoAnalyzeAppSource(
-            bundleResult.files,
-            options.providerId,
-            options.apiKey,
-            options.modelName,
-            options.apiUrl,
-            analysisPreferences,
-            gitSourceUrl || undefined // Pass Git URL if it was used
-        );
-        addServerLogsToDebugAndPage(analysisActionResult.detailedExecutionLogs, 'SERVER_AUTO_ANALYZE');
-        setAnalysisProgress({ processed: analysisActionResult.chunksProcessed || 0, total: analysisActionResult.totalChunks || 0 });
-
-        if (analysisActionResult.success && analysisActionResult.data) {
-            processAnalysisResult(analysisActionResult.data);
-        } else {
-            handleAnalysisError(analysisActionResult.error);
-        }
+    if (analysisActionResult.success && analysisActionResult.data) {
+        processAnalysisResult(analysisActionResult.data);
     } else {
-        const errMsg = "Error de lógica interna: No se pudo determinar el flujo de análisis.";
-        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: errMsg });
-        handleAnalysisError(errMsg);
+        handleAnalysisError(analysisActionResult.error);
     }
   };
   
@@ -493,13 +328,17 @@ export default function AutoUpdatePage() {
 
   const handleAttemptAutoFix = async (errorToFix?: string | null, errorContext?: string) => {
     const targetError = errorToFix || currentAnalysisError || currentGitError;
-    const options = resolvedLlmOptions;
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Intentando auto-corrección.', data: { error: targetError, context: errorContext }});
-    if (!options) {
-      toast({ title: "Configuración Faltante", description: "La configuración LLM seleccionada está incompleta para Auto-Fix.", variant: "destructive" });
-      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: 'Auto-corrección fallida: Configuración LLM incompleta.'});
+    
+    if (refactorAgentStatus !== 'found' || !refactorAgentLlmOptions) {
+      const errorMsg = refactorAgentStatus === 'not_found'
+        ? `El agente '${REFACTOR_AGENT_NAME}' no fue encontrado. Necesario para Auto-Fix.`
+        : `El agente '${REFACTOR_AGENT_NAME}' no tiene una configuración LLM válida para Auto-Fix.`;
+      toast({ title: "Error de Configuración de Agente", description: errorMsg, variant: "destructive" });
+      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Auto-corrección fallida: ${errorMsg}`});
       return;
     }
+    
     if (!targetError) {
       toast({ title: "Información Faltante", description: "No hay error actual para corregir.", variant: "destructive" });
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'WARN', message: 'Auto-corrección solicitada sin error activo.'});
@@ -510,12 +349,18 @@ export default function AutoUpdatePage() {
     let fixingStatus: AutoUpdateStatus = currentGitError ? "fixing_git_error" : "fixing_error";
     setStatus(fixingStatus);
     setAutoFixSuggestion(null);
-    toast({ title: "Intentando Auto-Corrección", description: `Consultando a ${options.providerId} para una posible solución...` });
-    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Consultando a ${options.providerId} para auto-corrección.`});
+    toast({ title: "Intentando Auto-Corrección", description: `Consultando a ${refactorAgentLlmOptions.providerId} (via ${REFACTOR_AGENT_NAME}) para una posible solución...` });
+    addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Consultando a ${refactorAgentLlmOptions.providerId} para auto-corrección.`});
 
     const tempLogsForAction: string[] = [];
     const fixResult = await handleGetErrorFixSuggestion(
-      targetError, options.providerId, options.apiKey, options.modelName, options.apiUrl, tempLogsForAction, errorContext
+      targetError, 
+      refactorAgentLlmOptions.providerId, 
+      refactorAgentLlmOptions.apiKey, 
+      refactorAgentLlmOptions.modelName, 
+      refactorAgentLlmOptions.apiUrl, 
+      tempLogsForAction, 
+      errorContext
     );
     addServerLogsToDebugAndPage(tempLogsForAction, 'SERVER_ERROR_FIX');
 
@@ -523,7 +368,7 @@ export default function AutoUpdatePage() {
     if (fixResult.success && fixResult.data) {
       setAutoFixSuggestion(fixResult.data);
       setIsAutoFixModalOpen(true);
-      toast({ title: "Sugerencia de Corrección Recibida", description: `La IA (${options.providerId}) ha proporcionado una sugerencia.` });
+      toast({ title: "Sugerencia de Corrección Recibida", description: `La IA (${refactorAgentLlmOptions.providerId}) ha proporcionado una sugerencia.` });
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Sugerencia de corrección recibida de la IA.`, data: fixResult.data });
     } else {
       toast({ title: "Error en Auto-Corrección", description: fixResult.error || `No se pudo obtener sugerencia.`, variant: "destructive" });
@@ -691,24 +536,22 @@ export default function AutoUpdatePage() {
   };
   const handleInitialGitUpload = () => { setGitUploadRetryCount(0); performGitUpload(false); };
   const handleRetryGitUploadFromModal = () => { setIsAutoFixModalOpen(false); performGitUpload(true); };
-
-  const getSourceName = (sourceId: string): string => {
-    if (sourceId === 'global') return 'Global';
-    if (sourceId.startsWith('agent:')) {
-      const agentId = sourceId.split(':')[1];
-      return agents.find(a => a.id === agentId)?.name || `Agente ${agentId.substring(0,6)}...`;
-    }
-    if (sourceId.startsWith('workgroup:')) {
-      const workgroupId = sourceId.split(':')[1];
-      return workgroups.find(wg => wg.id === workgroupId)?.name || `Grupo ${workgroupId.substring(0,6)}...`;
-    }
-    return 'Desconocido';
-  };
-  const isProcessing = ["analyzing", "loading_source", "chunking_source", "fixing_error", "uploading_git", "fixing_git_error", "processing_workgroup_turn"].includes(status);
+  
+  const isProcessing = ["analyzing", "loading_source", "chunking_source", "fixing_error", "uploading_git", "fixing_git_error"].includes(status);
   const isGitConfigured = gitConfig.repoUrl && gitConfig.username && gitConfig.email && gitConfig.pat;
-  const isWorkgroupSelected = selectedConfigSource.startsWith('workgroup:');
 
   const sourceDescription = gitSourceUrl ? `Git: ${gitSourceUrl.split('/').pop() || gitSourceUrl}` : 'Local';
+
+  let agentDisplayStatus = "";
+  if (refactorAgentStatus === 'loading') {
+    agentDisplayStatus = "Cargando configuración del agente...";
+  } else if (refactorAgentStatus === 'not_found') {
+    agentDisplayStatus = `Error: Agente '${REFACTOR_AGENT_NAME}' no encontrado.`;
+  } else if (refactorAgentStatus === 'error_config') {
+    agentDisplayStatus = `Error: Agente '${REFACTOR_AGENT_NAME}' no tiene una config. LLM válida.`;
+  } else if (refactorAgentLlmOptions) {
+    agentDisplayStatus = `Análisis con Agente: ${REFACTOR_AGENT_NAME} (Usando: ${refactorAgentLlmOptions.providerId} - ${refactorAgentLlmOptions.modelName})`;
+  }
 
 
   return (
@@ -721,40 +564,16 @@ export default function AutoUpdatePage() {
             AutoUpdate: Análisis de CodeAlchemist
           </CardTitle>
           <CardDescription className="text-lg text-foreground">
-            Analiza el código fuente de CodeAlchemist (local o desde Git) usando la config LLM seleccionada.
-            {!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource ? (
-              <span className="text-destructive block mt-1"> (Configuración para '{getSourceName(selectedConfigSource)}' incompleta)</span>
-            ) : resolvedLlmOptions && !isWorkgroupSelected ? (
-              <span className="text-foreground block mt-1">(Usando: {getSourceName(selectedConfigSource)} - {resolvedLlmOptions.providerId} - {resolvedLlmOptions.modelName})</span>
-            ) : isWorkgroupSelected ? (
-                 <span className="text-foreground block mt-1">(Usando Grupo: {getSourceName(selectedConfigSource)})</span>
-            ) : (
-              <span className="text-muted-foreground block mt-1">(Selecciona fuente de configuración)</span>
-            )}
+            Analiza el código fuente de CodeAlchemist (local o desde Git) usando el agente '{REFACTOR_AGENT_NAME}'.
+            <span className={cn("block mt-1", refactorAgentStatus === 'error_config' || refactorAgentStatus === 'not_found' ? "text-destructive" : "text-foreground")}>
+                {agentDisplayStatus}
+            </span>
              <span className="text-foreground block mt-1">(Fuente actual: {sourceDescription})</span>
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-2">
-              <Label htmlFor="configSource" className="text-base flex items-center gap-1"><Settings2 className="h-4 w-4" /> Usar Configuración LLM De:</Label>
-              <Select onValueChange={setSelectedConfigSource} value={selectedConfigSource}>
-                <SelectTrigger id="configSource" className="w-full"><SelectValue placeholder="Seleccionar fuente" /></SelectTrigger>
-                <SelectContent>
-                  <ScrollArea className="h-[--radix-select-content-available-height] max-h-60"> 
-                      <SelectItem value="global">Ajustes Globales</SelectItem>
-                      {workgroups.map(wg => <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>Grupo: {wg.name}</SelectItem>)}
-                      {agents.map(agent => <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>Agente: {agent.name}</SelectItem>)}
-                  </ScrollArea>
-                </SelectContent>
-              </Select>
-              {(!resolvedLlmOptions && !isWorkgroupSelected && selectedConfigSource) && (
-                <p className="text-xs text-destructive mt-1">Configuración para '{getSourceName(selectedConfigSource)}' incompleta. Revisa Ajustes, Agentes o Grupos.</p>
-              )}
-              {(isWorkgroupSelected && !workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1])) && (
-                  <p className="text-xs text-destructive mt-1">Grupo de trabajo '{getSourceName(selectedConfigSource)}' no encontrado o no disponible.</p>
-              )}
-            </div>
+            {/* Removed LLM Source Selector */}
              <div className="space-y-2">
               <Label htmlFor="gitSourceUrl" className="text-base flex items-center gap-1"><Github className="h-4 w-4" /> URL del Repositorio Git (Opcional)</Label>
               <Input 
@@ -776,8 +595,8 @@ export default function AutoUpdatePage() {
             <p className="text-xs text-muted-foreground">Describe qué tipo de actualizaciones o áreas te gustaría que la IA priorizara.</p>
           </div>
           <div className="flex flex-wrap gap-4">
-            <Button onClick={() => handleStartAutoAnalysis(false)} disabled={isProcessing || (!resolvedLlmOptions && !isWorkgroupSelected) || (isWorkgroupSelected && workgroups.length === 0 && !workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1])) } className="text-base py-3 px-6">
-              {isProcessing && (status === "analyzing" || status === "loading_source" || status === "chunking_source" || status === "processing_workgroup_turn") ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Sparkles className="mr-2 h-5 w-5" />}
+            <Button onClick={() => handleStartAutoAnalysis(false)} disabled={isProcessing || refactorAgentStatus !== 'found' } className="text-base py-3 px-6">
+              {isProcessing && (status === "analyzing" || status === "loading_source" || status === "chunking_source") ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Sparkles className="mr-2 h-5 w-5" />}
               Iniciar Auto-Análisis
             </Button>
             <Button onClick={() => handleDownloadSource('zip')} disabled={isDownloading} variant="outline" className="text-base py-3 px-6 text-foreground">
@@ -798,8 +617,7 @@ export default function AutoUpdatePage() {
                 {status === "loading_source" ? "Paso 1: Cargando código fuente..." :
                  status === "chunking_source" ? "Paso 1.5: Dividiendo código en fragmentos..." :
                  status === "analyzing" && analysisProgress.total > 0 ? `Paso 2: Procesando fragmentos LLM... (${analysisProgress.processed}/${analysisProgress.total})` : status === "analyzing" ? "Paso 2: Calculando fragmentos para LLM..." :
-                 status === "processing_workgroup_turn" ? `Paso 2: Procesando con grupo de trabajo... (Turno ${currentWorkgroupTurn}/${MAX_WORKGROUP_TURNS})` :
-                 status === "success" ? `Operación completada ${selectedConfigSource.startsWith("workgroup:") ? `(Grupo finalizado en turno ${currentWorkgroupTurn})` : `(${analysisProgress.processed}/${analysisProgress.total} fragmentos)`}.` :
+                 status === "success" ? `Operación completada (${analysisProgress.processed}/${analysisProgress.total} fragmentos).` :
                  status === "error" && (currentAnalysisError || currentGitError) ? `Operación interrumpida.` :
                  status === "uploading_git" ? `Subiendo a Git (Intento ${gitUploadRetryCount + 1}/${MAX_GIT_UPLOAD_RETRIES})...` :
                  status === "fixing_error" ? "Intentando auto-corrección de error de análisis..." :
@@ -810,7 +628,6 @@ export default function AutoUpdatePage() {
                 status === "chunking_source" ? 10 :
                 status === "analyzing" && analysisProgress.total === 0 ? 15 : 
                 status === "analyzing" && analysisProgress.total > 0 ? 15 + (analysisProgress.processed / analysisProgress.total) * 80 : 
-                status === "processing_workgroup_turn" && MAX_WORKGROUP_TURNS > 0 ? 15 + (currentWorkgroupTurn / MAX_WORKGROUP_TURNS) * 80 :
                 (status === "success" || status === "error" || status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error" ? 100 : 0)
               } className="w-full h-3" />
             </div>
@@ -820,7 +637,7 @@ export default function AutoUpdatePage() {
             <Card className="mt-6 border-accent bg-accent/5">
               <CardHeader className="pb-3">
                 <CardTitle className="text-xl flex items-center gap-2 text-accent"><FileCode className="h-6 w-6" /> {analysisResult.analysisTitle}</CardTitle>
-                <CardDescription>Analizado usando la configuración de '{getSourceName(selectedConfigSource)}'. Fuente: {sourceDescription}</CardDescription>
+                <CardDescription>Analizado usando el agente '{REFACTOR_AGENT_NAME}'. Fuente: {sourceDescription}</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div>
@@ -918,7 +735,7 @@ export default function AutoUpdatePage() {
                 <div className="flex gap-2 mt-2">
                   <Button variant="outline" size="sm" onClick={() => addDebugLog({ source: 'AUTOUPDATE_UI', type: 'ERROR', message: `Error copiado de UI: ${currentAnalysisError || currentGitError}`})} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground"><Copy className="mr-2 h-4 w-4" /> Copiar Error</Button>
                   <Button variant="outline" size="sm" onClick={() => handleAttemptAutoFix(currentAnalysisError || currentGitError, currentGitError ? "Error en subida Git." : "Error en auto-análisis.")}
-                    disabled={status === "fixing_error" || status === "fixing_git_error" || (!resolvedLlmOptions && !selectedConfigSource.startsWith("workgroup:"))} 
+                    disabled={status === "fixing_error" || status === "fixing_git_error" || refactorAgentStatus !== 'found'} 
                     className="text-accent border-accent/50 hover:bg-accent/20 hover:text-accent-foreground">
                     {(status === "fixing_error" || status === "fixing_git_error") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Settings2 className="mr-2 h-4 w-4" />} Auto-Fix
                   </Button>
@@ -1009,5 +826,3 @@ export default function AutoUpdatePage() {
     </>
   );
 }
-
-
