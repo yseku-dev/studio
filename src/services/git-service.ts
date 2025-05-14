@@ -20,10 +20,8 @@ const DEFAULT_IGNORE_PATTERNS = [
   'build/**',
   'dist/**',
   '.env',
-  '.env.local',
-  '.env.development',
-  '.env.production',
-  '.env.test',
+  '.env.*', // Catches .env.local, .env.development, etc.
+  '!.env.example', // Excludes .env.example from being ignored if it exists
   '.git/**', // Ensure .git directory itself is ignored
   'public/generated/**',
   // '*.lock', // Keep lock files
@@ -75,12 +73,12 @@ export async function fetchRepositoryContents(
     log(`Directorio temporal creado para clonar: ${tempRepoPath}`, 'DETAIL');
 
     const git: SimpleGit = simpleGit({ baseDir: tempRepoPath, binary: 'git', maxConcurrentProcesses: 1 });
-    
+
     log(`Clonando repositorio desde ${repoUrl} en ${tempRepoPath}...`, 'INFO');
     await git.clone(repoUrl, tempRepoPath, ['--depth=1', '--no-tags', '--shallow-submodules']); // Shallow clone for speed
     log('Repositorio clonado exitosamente.', 'INFO');
 
-    const basePathForGlob = tempRepoPath; 
+    const basePathForGlob = tempRepoPath;
 
     const filesInRepo = await glob('**/*', {
       cwd: basePathForGlob,
@@ -105,6 +103,7 @@ export async function fetchRepositoryContents(
     const filesData: AppSourceFile[] = [];
     let concatenatedContent = "";
     let totalConcatenatedChars = 0;
+    const MAX_TOTAL_CONCAT_CHARS = 500000; // Limit total concatenated content to prevent excessive memory usage, ~0.5MB
 
     for (const relativeFilePath of filesInRepo) {
       const fullPath = path.join(basePathForGlob, relativeFilePath);
@@ -112,24 +111,42 @@ export async function fetchRepositoryContents(
         log(`Procesando archivo del repo: ${relativeFilePath}`, 'DETAIL');
         const stats = await fs.stat(fullPath);
         log(`Estadísticas para ${relativeFilePath}: tamaño ${stats.size} bytes.`, 'DETAIL');
-        
-        if (stats.size > 1 * 1024 * 1024) { 
-          log(`Archivo omitido de la concatenación por tamaño > 1MB: ${relativeFilePath}`, 'WARN');
+
+        if (stats.size > 1 * 1024 * 1024) { // 1MB limit per file
+          log(`Archivo omitido por tamaño > 1MB: ${relativeFilePath}`, 'WARN');
           filesData.push({ fileName: relativeFilePath, content: `// Contenido omitido: Archivo demasiado grande (${(stats.size / (1024*1024)).toFixed(2)}MB)` });
           continue;
         }
         const content = await fs.readFile(fullPath, 'utf-8');
         filesData.push({ fileName: relativeFilePath, content });
-        const fileMarker = `\n\n// --- Archivo: ${relativeFilePath} ---\n\n`;
-        concatenatedContent += fileMarker + content;
-        totalConcatenatedChars += fileMarker.length + content.length;
-        log(`Archivo ${relativeFilePath} añadido. Longitud total concatenada aprox: ${totalConcatenatedChars}`, 'DETAIL');
+
+        if (totalConcatenatedChars < MAX_TOTAL_CONCAT_CHARS) {
+            const fileMarker = `\n\n// --- Archivo: ${relativeFilePath} ---\n\n`;
+            const potentialNewLength = totalConcatenatedChars + fileMarker.length + content.length;
+            if (potentialNewLength <= MAX_TOTAL_CONCAT_CHARS) {
+                concatenatedContent += fileMarker + content;
+                totalConcatenatedChars = potentialNewLength;
+                log(`Archivo ${relativeFilePath} añadido a concatenación. Longitud total aprox: ${totalConcatenatedChars}`, 'DETAIL');
+            } else {
+                 log(`Archivo ${relativeFilePath} omitido de la concatenación para no exceder el límite total de ${MAX_TOTAL_CONCAT_CHARS} caracteres.`, 'WARN');
+            }
+        } else if (totalConcatenatedChars >= MAX_TOTAL_CONCAT_CHARS && filesInRepo.indexOf(relativeFilePath) === 0) {
+            // First file already exceeds, log once
+            log(`El primer archivo (${relativeFilePath}) ya hace que el contenido concatenado exceda ${MAX_TOTAL_CONCAT_CHARS} caracteres. Solo se incluirá una porción o se omitirá de la concatenación si es demasiado grande por sí mismo.`, 'WARN');
+        }
+
+
       } catch (readError) {
         log(`No se pudo leer el archivo ${relativeFilePath} del repositorio clonado: ${(readError as Error).message}`, 'WARN', readError);
         filesData.push({ fileName: relativeFilePath, content: `// Error al leer archivo: ${(readError as Error).message}` });
       }
     }
-    
+
+    if (totalConcatenatedChars >= MAX_TOTAL_CONCAT_CHARS) {
+        log(`El contenido concatenado total alcanzó el límite de ${MAX_TOTAL_CONCAT_CHARS} caracteres. Algunos archivos posteriores podrían no estar completamente incluidos en la concatenación.`, 'WARN');
+        concatenatedContent += "\n\n// --- FIN DEL CONTENIDO CONCATENADO (LÍMITE ALCANZADO) ---";
+    }
+
     log(`Procesamiento de archivos del repositorio finalizado. Total de archivos procesados: ${filesData.length}. Longitud total concatenada: ${totalConcatenatedChars}`, 'INFO');
 
     return {
@@ -162,4 +179,3 @@ export async function fetchRepositoryContents(
     }
   }
 }
-

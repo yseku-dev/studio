@@ -1,13 +1,12 @@
-
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork, Trash2, Expand, Minimize, Workflow, Bug, Github } from "lucide-react"; 
+import { Sparkles, Loader2, AlertTriangle, DownloadCloud, FileCode, Wand2, CheckCircle, XCircle, Info, Edit3, Copy, Settings2, ListOrdered, ShieldAlert, GitFork, Trash2, Expand, Minimize, Workflow, Bug, Github } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
 import { handleAutoAnalyzeAppSource, getApplicationSourceBundle, applySuggestedChange, handleGetErrorFixSuggestion, handleUploadToGit, initiateAutoUpdateWorkgroupAnalysis } from './actions';
-import type { AppSourceFile } from '@/types/project'; 
+import type { AppSourceFile } from '@/types/project';
 import type { ProjectAnalysisResponse, SuggestionItem } from '@/services/groq';
 import type { SuggestErrorFixOutput } from '@/ai/flows/suggest-error-fix-flow';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -59,6 +58,7 @@ type AutoUpdateStatus = "idle" | "loading_source" | "chunking_source" | "analyzi
 type SuggestionStatus = "pending" | "applying" | "applied" | "error_applying" | "not_applicable";
 
 
+// Define the type for a single suggestion item from the response
 // Correctly extend the type of an element in the 'suggestions' array
 interface SingleSuggestion extends SuggestionItem {
   id?: string; // id might not exist initially, make it optional
@@ -71,10 +71,10 @@ interface SingleSuggestion extends SuggestionItem {
 
 
 interface SuggestionWithStatus extends SingleSuggestion {
-  id: string; 
+  id: string;
   status: SuggestionStatus;
   errorMessage?: string;
-  originalContent?: string;
+  originalContent?: string; // To store the original content for diff or re-application
 }
 
 interface AnalysisProgress {
@@ -103,13 +103,13 @@ export default function AutoUpdatePage() {
   const [isAutoFixModalOpen, setIsAutoFixModalOpen] = useState(false);
   const [detailedLogs, setDetailedLogs] = useState<string[]>([]);
   const [logsExpanded, setLogsExpanded] = useState(false);
-  
+
   const { addDebugLog } = useDebug();
 
   const [agents, setAgents] = useState<AgentConfig[]>([]);
   const [workgroups, setWorkgroups] = useState<WorkgroupConfig[]>([]);
-  const [gitSourceUrl, setGitSourceUrl] = useState<string>(""); 
-  const [selectedConfigSource, setSelectedConfigSource] = useState<string>(''); 
+  const [gitSourceUrl, setGitSourceUrl] = useState<string>("");
+  const [selectedConfigSource, setSelectedConfigSource] = useState<string>('');
   const [currentLlmOptions, setCurrentLlmOptions] = useState<LLMOptions | null>(null);
 
   const [gitConfig, setGitConfig] = useState<GitConfig>({ repoUrl: null, username: null, email: null, pat: null });
@@ -118,24 +118,24 @@ export default function AutoUpdatePage() {
   const [currentGitError, setCurrentGitError] = useState<string | null>(null);
 
   const isMountedRef = useRef(false);
-  
+
 
   const { toast } = useToast();
 
   useEffect(() => {
     isMountedRef.current = true;
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Componente AutoUpdatePage montado.' });
-    
+
     let loadedAgents: AgentConfig[] = [];
     const storedAgents = localStorage.getItem(LOCALSTORAGE_AGENTS_KEY);
     if (storedAgents) {
-      try { 
+      try {
         loadedAgents = JSON.parse(storedAgents);
-        setAgents(loadedAgents); 
+        setAgents(loadedAgents);
         addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'DEBUG', message: 'Agentes cargados desde localStorage.', data: { count: loadedAgents.length } });
-      } catch (e) { 
-        console.error("Error parsing stored agents:", e); 
-        setAgents([]); 
+      } catch (e) {
+        console.error("Error parsing stored agents:", e);
+        setAgents([]);
         addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: 'Error al parsear agentes de localStorage.', data: e });
       }
     } else {
@@ -152,8 +152,18 @@ export default function AutoUpdatePage() {
       setSelectedConfigSource(`agent:${refactorAgent.id}`);
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Fuente de configuración por defecto establecida a: Agente ${REFACTOR_AGENT_NAME}` });
     } else {
-      addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'WARN', message: `Agente ${REFACTOR_AGENT_NAME} no encontrado. El usuario deberá seleccionar una fuente de configuración.` });
-       setSelectedConfigSource(''); 
+      // Attempt to find a group that contains the RefactorAgent (if it were to exist) and an Orchestrator
+      const suitableGroup = workgroups.find(wg =>
+        wg.agentIds.some(id => loadedAgents.find(a => a.id === id)?.name === REFACTOR_AGENT_NAME) &&
+        wg.agentIds.some(id => loadedAgents.find(a => a.id === id)?.name === ORCHESTRATOR_AGENT_NAME)
+      );
+      if (suitableGroup) {
+        setSelectedConfigSource(`workgroup:${suitableGroup.id}`);
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Fuente de configuración por defecto establecida a: Grupo ${suitableGroup.name}` });
+      } else {
+        setSelectedConfigSource('global'); // Fallback to global if no specific agent or suitable group is found
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'WARN', message: `Agente ${REFACTOR_AGENT_NAME} no encontrado ni un grupo adecuado. Se usará la configuración global por defecto.` });
+      }
     }
 
 
@@ -163,16 +173,16 @@ export default function AutoUpdatePage() {
       email: localStorage.getItem(LOCALSTORAGE_GIT_EMAIL_KEY),
       pat: localStorage.getItem(LOCALSTORAGE_GIT_PAT_KEY),
     });
-    
+
     return () => {
       isMountedRef.current = false;
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Componente AutoUpdatePage desmontado.' });
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [addDebugLog]); 
+  }, [addDebugLog]); // Removed workgroups from dependency array, as it's loaded inside and might cause loop if setSelectedConfigSource triggers re-render
 
   useEffect(() => {
-    if (!selectedConfigSource) return; 
+    if (!selectedConfigSource) return;
 
     const localStorageSnapshot: LocalStorageSnapshot = {
       [LOCALSTORAGE_PROVIDER_ID_KEY]: typeof window !== 'undefined' ? localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null : null,
@@ -184,17 +194,17 @@ export default function AutoUpdatePage() {
     setCurrentLlmOptions(options);
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'DEBUG', message: `Opciones LLM resueltas para ${getSourceName(selectedConfigSource)}`, data: options });
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedConfigSource, agents, workgroups]); // Removed addDebugLog to prevent potential loops if it modifies deps
-  
+  }, [selectedConfigSource, agents, workgroups]);
+
   const addServerLogsToDebugAndPage = useCallback((serverLogs: string[] | undefined, sourcePrefix: string = 'SERVER_AUTOUDDATE') => {
     if (serverLogs) {
-      setDetailedLogs(prev => [...prev, ...serverLogs]); 
+      setDetailedLogs(prev => [...prev, ...serverLogs]);
       if (isMountedRef.current) {
           serverLogs.forEach(logMsg => {
-              const match = logMsg.match(/^\[(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/) || 
-                            logMsg.match(/^\[(.*?)\s(.*?)]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/) ||       
-                            logMsg.match(/^\[(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/);             
-              
+              const match = logMsg.match(/^\[(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/) ||
+                            logMsg.match(/^\[(.*?)\s(.*?)]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/) ||
+                            logMsg.match(/^\[(.*?)\]\s\[(.*?)\]\s(.*?)(?:\s\|\sData:\s(.*))?$/);
+
               let parsedLog: Omit<DebugLogEntry, 'timestamp'>;
 
               if (match && match.length >= 5) {
@@ -203,28 +213,28 @@ export default function AutoUpdatePage() {
                   let message = '';
                   let dataStr: string | undefined = undefined;
 
-                  if (match[0].startsWith(`[${sourcePrefix}`)) { 
-                      source = match[1]; 
+                  if (match[0].startsWith(`[${sourcePrefix}`)) {
+                      source = match[1];
                       type = match[3].toUpperCase() as DebugLogEntry['type'];
                       message = match[4];
                       dataStr = match[5];
-                  } else { 
+                  } else {
                       type = match[2].toUpperCase() as DebugLogEntry['type'];
                       message = match[3];
                       dataStr = match[4];
                   }
-                  
+
                   let data: any = undefined;
                   if (dataStr) {
                       try {
                           data = JSON.parse(dataStr);
                       } catch {
-                          data = dataStr; 
+                          data = dataStr;
                       }
                   }
                   parsedLog = { source, type, message, data };
               } else {
-                  
+
                   parsedLog = { source: sourcePrefix, type: 'INFO', message: logMsg };
               }
               addDebugLog(parsedLog);
@@ -251,14 +261,14 @@ export default function AutoUpdatePage() {
       }
       return { ...s, id: `suggestion-${index}-${Date.now()}`, status: currentStatus, originalContent: relatedFile?.content };
     });
-    setSuggestionsWithStatus(initialSuggestions as SuggestionWithStatus[]); 
+    setSuggestionsWithStatus(initialSuggestions as SuggestionWithStatus[]);
     setStatus("success");
     toast({ title: "Análisis Completado", description: `Se han generado sugerencias.` });
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Análisis completado y resultados procesados en UI.', data });
   }, [projectFiles, toast, addDebugLog]);
 
   const handleStartAutoAnalysis = async (isRetry: boolean = false) => {
-    setDetailedLogs([]); 
+    setDetailedLogs([]);
     const isWorkgroupMode = selectedConfigSource.startsWith('workgroup:');
 
     if (!selectedConfigSource) {
@@ -275,11 +285,22 @@ export default function AutoUpdatePage() {
         addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Auto-Análisis fallido: ${errorMsg}` });
         return;
     }
-    if (isWorkgroupMode && (!workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1]) || !agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME))) {
-        const errorMsg = `El grupo de trabajo '${getSourceName(selectedConfigSource)}' o su Orquestador no están configurados correctamente.`;
-        toast({ title: "Error de Configuración de Grupo", description: errorMsg, variant: "destructive", duration: 7000 });
-        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Auto-Análisis fallido: ${errorMsg}` });
-        return;
+    if (isWorkgroupMode) {
+        const workgroupId = selectedConfigSource.split(':')[1];
+        const workgroup = workgroups.find(wg => wg.id === workgroupId);
+        if (!workgroup) {
+            const errorMsg = `Grupo de trabajo '${getSourceName(selectedConfigSource)}' no encontrado.`;
+            toast({ title: "Error de Configuración de Grupo", description: errorMsg, variant: "destructive", duration: 7000 });
+            addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Auto-Análisis fallido: ${errorMsg}` });
+            return;
+        }
+        const orchestratorInGroup = agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME && workgroup.agentIds.includes(a.id));
+        if (!orchestratorInGroup) {
+            const errorMsg = `Grupo de trabajo '${workgroup.name}' no tiene un Orquestador (${ORCHESTRATOR_AGENT_NAME}) asignado o el orquestador no existe.`;
+            toast({ title: "Error de Configuración de Grupo", description: errorMsg, variant: "destructive", duration: 7000 });
+            addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Auto-Análisis fallido: ${errorMsg}` });
+            return;
+        }
     }
 
 
@@ -303,7 +324,7 @@ export default function AutoUpdatePage() {
       description: `Paso 1: Cargando y preparando el código fuente... ${gitSourceUrl ? `desde ${gitSourceUrl}` : '(local)'}`
     });
 
-    const bundleResult = await getApplicationSourceBundle(true, undefined, gitSourceUrl || undefined); 
+    const bundleResult = await getApplicationSourceBundle(true, undefined, gitSourceUrl || undefined);
     addServerLogsToDebugAndPage(bundleResult.logsBuilt, 'SERVER_SOURCE_BUNDLE');
 
     if (!bundleResult.success || !bundleResult.files || !bundleResult.concatenatedSource) {
@@ -312,7 +333,7 @@ export default function AutoUpdatePage() {
       handleAnalysisError(errorMsg);
       return;
     }
-    setProjectFiles(bundleResult.files); 
+    setProjectFiles(bundleResult.files);
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Paso 1 completado. ${bundleResult.files?.length || 'Varios'} archivos obtenidos. Contenido concatenado: ${bundleResult.concatenatedSource.length} caracteres.`});
 
 
@@ -336,8 +357,8 @@ export default function AutoUpdatePage() {
       };
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Iniciando análisis con grupo de trabajo ${workgroupId}. Preferencias: "${finalAnalysisPreferences}"`});
       analysisActionResult = await initiateAutoUpdateWorkgroupAnalysis({
-        sourceFiles: bundleResult.files, 
-        concatenatedSource: bundleResult.concatenatedSource, 
+        sourceFiles: bundleResult.files,
+        concatenatedSource: bundleResult.concatenatedSource,
         gitRepoUrl: gitSourceUrl || undefined,
         workgroupId,
         analysisPreferences: finalAnalysisPreferences,
@@ -349,13 +370,13 @@ export default function AutoUpdatePage() {
     } else if (currentLlmOptions) {
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Iniciando análisis directo con ${currentLlmOptions.providerId} - ${currentLlmOptions.modelName}. Preferencias: "${finalAnalysisPreferences}"`});
       analysisActionResult = await handleAutoAnalyzeAppSource(
-          bundleResult.files, 
+          bundleResult.files,
           currentLlmOptions.providerId,
           currentLlmOptions.apiKey,
           currentLlmOptions.modelName,
           currentLlmOptions.apiUrl,
           finalAnalysisPreferences,
-          gitSourceUrl || undefined 
+          gitSourceUrl || undefined
       );
       addServerLogsToDebugAndPage(analysisActionResult.detailedExecutionLogs, 'SERVER_AUTO_ANALYZE');
       setAnalysisProgress({ processed: analysisActionResult.chunksProcessed || 0, total: analysisActionResult.totalChunks || 0 });
@@ -371,7 +392,7 @@ export default function AutoUpdatePage() {
         handleAnalysisError(analysisActionResult.error);
     }
   };
-  
+
   const handleAnalysisError = (errorMsg: string | undefined) => {
     setStatus("error");
     const finalErrorMsg = errorMsg || "Ocurrió un error desconocido durante el auto-análisis.";
@@ -385,13 +406,16 @@ export default function AutoUpdatePage() {
   const handleAttemptAutoFix = async (errorToFix?: string | null, errorContext?: string) => {
     const targetError = errorToFix || currentAnalysisError || currentGitError;
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: 'Intentando auto-corrección.', data: { error: targetError, context: errorContext }});
-    
-    let llmOptionsForFix = currentLlmOptions; 
+
+    let llmOptionsForFix = currentLlmOptions;
 
     if (selectedConfigSource.startsWith('workgroup:')) {
-        const orchestrator = agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME);
+        const workgroupId = selectedConfigSource.split(':')[1];
+        const workgroup = workgroups.find(wg => wg.id === workgroupId);
+        const orchestrator = workgroup ? agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME && workgroup.agentIds.includes(a.id)) : undefined;
+
         if (orchestrator) {
-            const snapshot: LocalStorageSnapshot = { 
+            const snapshot: LocalStorageSnapshot = {
                 [LOCALSTORAGE_PROVIDER_ID_KEY]: localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null,
                 apiKeys: {}, modelNames: {}, apiUrls: {}
             };
@@ -401,39 +425,65 @@ export default function AutoUpdatePage() {
                 snapshot.apiUrls[p.id] = localStorage.getItem(`codealchemist_apiurl_${p.id}`);
             });
             llmOptionsForFix = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, agents, workgroups, snapshot);
+        } else {
+            // Fallback to global if orchestrator specific options can't be resolved
+             const snapshot: LocalStorageSnapshot = {
+                [LOCALSTORAGE_PROVIDER_ID_KEY]: localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null,
+                apiKeys: {}, modelNames: {}, apiUrls: {}
+             };
+             LLM_PROVIDERS.forEach(p => {
+                snapshot.apiKeys[p.id] = localStorage.getItem(getLocalStorageApiKeyName(p.id));
+                snapshot.modelNames[p.id] = localStorage.getItem(getLocalStorageModelName(p.id));
+                snapshot.apiUrls[p.id] = localStorage.getItem(`codealchemist_apiurl_${p.id}`);
+             });
+            llmOptionsForFix = resolveLlmOptionsForSource('global', agents, workgroups, snapshot);
+            addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'WARN', message: `No se pudo resolver LLM para orquestador del grupo ${getSourceName(selectedConfigSource)}, usando config global para Auto-Fix.`});
         }
+    } else if (!llmOptionsForFix) { // If not workgroup and still no options (e.g. global incomplete)
+         const snapshot: LocalStorageSnapshot = {
+            [LOCALSTORAGE_PROVIDER_ID_KEY]: localStorage.getItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null,
+            apiKeys: {}, modelNames: {}, apiUrls: {}
+         };
+         LLM_PROVIDERS.forEach(p => {
+            snapshot.apiKeys[p.id] = localStorage.getItem(getLocalStorageApiKeyName(p.id));
+            snapshot.modelNames[p.id] = localStorage.getItem(getLocalStorageModelName(p.id));
+            snapshot.apiUrls[p.id] = localStorage.getItem(`codealchemist_apiurl_${p.id}`);
+         });
+        llmOptionsForFix = resolveLlmOptionsForSource('global', agents, workgroups, snapshot);
+        addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'WARN', message: `LLM para ${getSourceName(selectedConfigSource)} no resuelto, usando config global para Auto-Fix.`});
     }
-    
+
+
     if (!llmOptionsForFix) {
-      const errorMsg = `Configuración LLM para '${getSourceName(selectedConfigSource)}' no resuelta o inválida para Auto-Fix.`;
+      const errorMsg = `Configuración LLM para '${getSourceName(selectedConfigSource)}' (o global como fallback) no resuelta o inválida para Auto-Fix.`;
       toast({ title: "Error de Configuración LLM", description: errorMsg, variant: "destructive" });
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Auto-corrección fallida: ${errorMsg}`});
       return;
     }
-    
+
     if (!targetError) {
       toast({ title: "Información Faltante", description: "No hay error actual para corregir.", variant: "destructive" });
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'WARN', message: 'Auto-corrección solicitada sin error activo.'});
       return;
     }
-        
+
     const prevStatus = status;
     let fixingStatus: AutoUpdateStatus = currentGitError ? "fixing_git_error" : "fixing_error";
     setStatus(fixingStatus);
     setAutoFixSuggestion(null);
-    
+
 
     toast({ title: "Intentando Auto-Corrección", description: `Consultando a ${llmOptionsForFix.providerId} para una posible solución...` });
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Consultando a ${llmOptionsForFix.providerId} para auto-corrección.`});
 
     const tempLogsForAction: string[] = [];
     const fixResult = await handleGetErrorFixSuggestion(
-      targetError, 
-      llmOptionsForFix.providerId, 
-      llmOptionsForFix.apiKey, 
-      llmOptionsForFix.modelName, 
-      llmOptionsForFix.apiUrl, 
-      tempLogsForAction, 
+      targetError,
+      llmOptionsForFix.providerId,
+      llmOptionsForFix.apiKey,
+      llmOptionsForFix.modelName,
+      llmOptionsForFix.apiUrl,
+      tempLogsForAction,
       errorContext
     );
     addServerLogsToDebugAndPage(tempLogsForAction, 'SERVER_ERROR_FIX');
@@ -448,8 +498,8 @@ export default function AutoUpdatePage() {
       toast({ title: "Error en Auto-Corrección", description: fixResult.error || `No se pudo obtener sugerencia.`, variant: "destructive" });
       addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'ERROR', message: `Error al obtener sugerencia de corrección: ${fixResult.error || "Desconocido"}`, data: fixResult });
     }
-    setStatus(prevStatus === "fixing_error" || prevStatus === "fixing_git_error" 
-        ? (currentAnalysisError || currentGitError ? "error" : (analysisResult ? "success" : "idle")) 
+    setStatus(prevStatus === "fixing_error" || prevStatus === "fixing_git_error"
+        ? (currentAnalysisError || currentGitError ? "error" : (analysisResult ? "success" : "idle"))
         : prevStatus);
   };
 
@@ -461,7 +511,7 @@ export default function AutoUpdatePage() {
       return;
     }
     const suggestionToApply = suggestionsWithStatus[suggestionIndex];
-    
+
     if (!suggestionToApply.area || !suggestionToApply.originalContent || !suggestionToApply.suggestedFullFileContent) {
       const missingField = !suggestionToApply.area ? "nombre de archivo" : !suggestionToApply.originalContent ? "contenido original" : "contenido sugerido";
       toast({ title: "Error de Aplicación", description: `Falta ${missingField} para ${suggestionToApply.area || 'esta sugerencia'}.`, variant: "destructive" });
@@ -505,7 +555,7 @@ export default function AutoUpdatePage() {
 
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `Obteniendo el paquete de código fuente más reciente para la descarga...`});
     const tempLogsForBundle: string[] = [];
-    const bundleResult = await getApplicationSourceBundle(false, tempLogsForBundle, gitSourceUrl || undefined); 
+    const bundleResult = await getApplicationSourceBundle(false, tempLogsForBundle, gitSourceUrl || undefined);
     addServerLogsToDebugAndPage(tempLogsForBundle, 'SERVER_DOWNLOAD_BUNDLE');
 
     let filesToProcess: AppSourceFile[] = [];
@@ -535,7 +585,7 @@ export default function AutoUpdatePage() {
           });
           blob = await zip.generateAsync({ type: "blob" });
           downloadFileName = 'CodeAlchemist-source.zip';
-        } else { 
+        } else {
           const jsonData = JSON.stringify(filesToProcess, null, 2);
           blob = new Blob([jsonData], { type: 'application/json;charset=utf-8' });
           downloadFileName = 'CodeAlchemist-source.json';
@@ -575,10 +625,10 @@ export default function AutoUpdatePage() {
     setCurrentAnalysisError(null);
     setStatus("uploading_git");
     setDetailedLogs(prev => [...prev, `[${new Date().toISOString()}] [INFO] Iniciando subida a Git...`]);
-    
+
     const attemptNumber = isRetry ? gitUploadRetryCount + 1 : 1;
     if (isRetry) setGitUploadRetryCount(attemptNumber);
-    
+
     const commitMsg = `CodeAlchemist: AutoUpdate Sync (Attempt ${attemptNumber} - ${new Date().toISOString()})`;
     addDebugLog({ source: 'AUTOUPDATE_PAGE', type: 'INFO', message: `${isRetry ? `Reintentando (${attemptNumber}/${MAX_GIT_UPLOAD_RETRIES})` : 'Iniciando'} subida a Git...`, data: { repoUrl, commitMsg }});
     toast({ title: `${isRetry ? `Reintentando Subida Git (${attemptNumber})` : "Subiendo a Git..."}`, description: `Intentando subir a ${repoUrl.split('/').pop()?.replace('.git', ' ')}` });
@@ -610,7 +660,7 @@ export default function AutoUpdatePage() {
   };
   const handleInitialGitUpload = () => { setGitUploadRetryCount(0); performGitUpload(false); };
   const handleRetryGitUploadFromModal = () => { setIsAutoFixModalOpen(false); performGitUpload(true); };
-  
+
   const isProcessing = ["analyzing", "loading_source", "chunking_source", "fixing_error", "uploading_git", "fixing_git_error"].includes(status);
   const isGitConfigured = gitConfig.repoUrl && gitConfig.username && gitConfig.email && gitConfig.pat;
 
@@ -618,10 +668,12 @@ export default function AutoUpdatePage() {
 
   const getSourceName = (sourceId: string): string => {
     if (!sourceId) return 'Seleccionar fuente';
-    
+
+    if (sourceId === 'global') return 'Global (Ajustes Generales)';
+
     const refactorAgent = agents.find(a => a.name === REFACTOR_AGENT_NAME);
     if (sourceId === `agent:${refactorAgent?.id}`) return `Agente: ${REFACTOR_AGENT_NAME} (Por defecto)`;
-    
+
     if (sourceId.startsWith('agent:')) {
       const agentId = sourceId.split(':')[1];
       return agents.find(a => a.id === agentId)?.name || `Agente ${agentId.substring(0,6)}...`;
@@ -632,7 +684,7 @@ export default function AutoUpdatePage() {
     }
     return `Desconocido (${sourceId})`;
   };
-  
+
   let llmConfigDisplayStatus = "";
   const isWorkgroupSelected = selectedConfigSource.startsWith('workgroup:');
 
@@ -643,7 +695,8 @@ export default function AutoUpdatePage() {
   } else if (!isWorkgroupSelected && currentLlmOptions) {
     llmConfigDisplayStatus = `Análisis con: ${getSourceName(selectedConfigSource)} (${currentLlmOptions.providerId} - ${currentLlmOptions.modelName})`;
   } else if (isWorkgroupSelected) {
-      const workgroup = workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1]);
+      const workgroupId = selectedConfigSource.split(':')[1];
+      const workgroup = workgroups.find(wg => wg.id === workgroupId);
       if (workgroup) {
         const orchestrator = agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME && workgroup.agentIds.includes(a.id));
         if (orchestrator) {
@@ -671,8 +724,8 @@ export default function AutoUpdatePage() {
   }
 
   const refactorAgentInstance = agents.find(a => a.name === REFACTOR_AGENT_NAME);
-  const filteredWorkgroups = workgroups.filter(wg => 
-    wg.agentIds.includes(refactorAgentInstance?.id || '') && 
+  const filteredWorkgroups = workgroups.filter(wg =>
+    wg.agentIds.some(id => agents.find(a => a.id === id)?.name === REFACTOR_AGENT_NAME) &&
     wg.agentIds.some(agentId => agents.find(a => a.id === agentId)?.name === ORCHESTRATOR_AGENT_NAME)
   );
 
@@ -704,17 +757,23 @@ export default function AutoUpdatePage() {
                     </SelectTrigger>
                     <SelectContent>
                         <ScrollArea className="h-[--radix-select-content-available-height] max-h-60">
+                            <SelectItem value="global">Global (Ajustes Generales)</SelectItem>
                             {refactorAgentInstance && (
                                 <SelectItem value={`agent:${refactorAgentInstance.id}`}>
                                     Agente: {REFACTOR_AGENT_NAME} (Recomendado)
                                 </SelectItem>
                             )}
+                            {filteredWorkgroups.map(wg => (
+                                <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>
+                                    Grupo: {wg.name} (Contiene {REFACTOR_AGENT_NAME})
+                                </SelectItem>
+                            ))}
                             {agents.filter(a => a.name !== REFACTOR_AGENT_NAME).map(agent => (
                                 <SelectItem key={`agent:${agent.id}`} value={`agent:${agent.id}`}>
                                     Agente: {agent.name}
                                 </SelectItem>
                             ))}
-                            {filteredWorkgroups.map(wg => (
+                             {workgroups.filter(wg => !filteredWorkgroups.find(fwg => fwg.id === wg.id)).map(wg => (
                                 <SelectItem key={`workgroup:${wg.id}`} value={`workgroup:${wg.id}`}>
                                     Grupo: {wg.name}
                                 </SelectItem>
@@ -722,24 +781,24 @@ export default function AutoUpdatePage() {
                         </ScrollArea>
                     </SelectContent>
                 </Select>
-                {(!selectedConfigSource && !refactorAgentInstance) && 
+                {(!selectedConfigSource && !refactorAgentInstance) &&
                     <p className="text-xs text-destructive mt-1">Por favor, crea el agente '{REFACTOR_AGENT_NAME}' o selecciona una fuente de configuración.</p>
                 }
              </div>
              <div className="space-y-2">
               <Label htmlFor="gitSourceUrl" className="text-base flex items-center gap-1"><Github className="h-4 w-4" /> URL del Repositorio Git (Opcional)</Label>
-              <Input 
-                id="gitSourceUrl" 
-                type="url" 
-                value={gitSourceUrl} 
-                onChange={(e) => setGitSourceUrl(e.target.value)} 
+              <Input
+                id="gitSourceUrl"
+                type="url"
+                value={gitSourceUrl}
+                onChange={(e) => setGitSourceUrl(e.target.value)}
                 placeholder="Ej: https://github.com/usuario/repo.git (deja vacío para local)"
-                className="bg-card text-foreground" 
+                className="bg-card text-foreground"
               />
               <p className="text-xs text-muted-foreground">Si se proporciona, se analizará este repositorio en lugar del código local.</p>
             </div>
           </div>
-          
+
           <div className="space-y-2">
             <Label htmlFor="analysis-preferences" className="text-base flex items-center gap-2 text-foreground"><Edit3 className="h-5 w-5" /> Preferencias de Análisis (Opcional)</Label>
             <Textarea id="analysis-preferences" value={analysisPreferences} onChange={(e) => setAnalysisPreferences(e.target.value)}
@@ -747,18 +806,18 @@ export default function AutoUpdatePage() {
             <p className="text-xs text-muted-foreground">Describe qué tipo de actualizaciones o áreas te gustaría que la IA priorizara. Especifica el idioma si es necesario.</p>
           </div>
           <div className="flex flex-wrap gap-4">
-            <Button onClick={() => handleStartAutoAnalysis(false)} 
-              disabled={isProcessing || !selectedConfigSource || (!isWorkgroupSelected && !currentLlmOptions) || (isWorkgroupSelected && (!workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1]) || !agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME))) } 
+            <Button onClick={() => handleStartAutoAnalysis(false)}
+              disabled={isProcessing || !selectedConfigSource || (!isWorkgroupSelected && !currentLlmOptions) || (isWorkgroupSelected && (!workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1]) || !agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME))) }
               className="text-base py-3 px-6"
             >
               {isProcessing && (status === "analyzing" || status === "loading_source" || status === "chunking_source") ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Sparkles className="mr-2 h-5 w-5" />}
               Iniciar Auto-Análisis
             </Button>
             <Button onClick={() => handleDownloadSource('zip')} disabled={isDownloading} variant="outline" className="text-base py-3 px-6 text-foreground">
-              {isDownloading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <DownloadCloud className="mr-2 h-5 w-5" />} Descargar Código (ZIP)
+              {isDownloading && format === 'zip' ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <DownloadCloud className="mr-2 h-5 w-5" />} Descargar Código (ZIP)
             </Button>
              <Button onClick={() => handleDownloadSource('json')} disabled={isDownloading} variant="outline" className="text-base py-3 px-6 text-foreground">
-              {isDownloading ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <DownloadCloud className="mr-2 h-5 w-5" />} Descargar Código (JSON)
+              {isDownloading && format === 'json' ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <DownloadCloud className="mr-2 h-5 w-5" />} Descargar Código (JSON)
             </Button>
             <Button onClick={handleInitialGitUpload} disabled={!isGitConfigured || isProcessing} variant="outline" className="text-base py-3 px-6 text-foreground"
               title={!isGitConfigured ? "Configura Git en Ajustes." : "Subir código a Git"}>
@@ -782,14 +841,14 @@ export default function AutoUpdatePage() {
                 <Progress value={
                   status === "loading_source" ? 5 :
                   status === "chunking_source" ? 10 :
-                  status === "analyzing" && analysisProgress.total === 0 ? 15 : 
-                  status === "analyzing" && analysisProgress.total > 0 ? 15 + (analysisProgress.processed / analysisProgress.total) * 80 : 
+                  status === "analyzing" && analysisProgress.total === 0 ? 15 :
+                  status === "analyzing" && analysisProgress.total > 0 ? 15 + (analysisProgress.processed / analysisProgress.total) * 80 :
                   (status === "uploading_git" || status === "fixing_error" || status === "fixing_git_error" ? 95 : 0) // Keep a high value for these
                 } className="w-full h-3" />
               )}
             </div>
           )}
-          
+
           {analysisResult && status === "success" && (
             <Card className="mt-6 border-accent bg-accent/5">
               <CardHeader className="pb-3">
@@ -876,7 +935,7 @@ export default function AutoUpdatePage() {
             <div data-ai-hint="code processing animation" className="flex flex-col items-center justify-center bg-muted/50 rounded-lg p-8 min-h-[200px] mt-6">
               <Loader2 className="h-12 w-12 animate-spin text-primary mb-4" />
               <p className="text-lg text-foreground">
-                {status === "loading_source" ? "Cargando código..." : 
+                {status === "loading_source" ? "Cargando código..." :
                  status === "chunking_source" ? "Dividiendo código en fragmentos..." :
                  "Preparando análisis..."}
               </p>
@@ -892,7 +951,7 @@ export default function AutoUpdatePage() {
                 <div className="flex gap-2 mt-2">
                   <Button variant="outline" size="sm" onClick={() => addDebugLog({ source: 'AUTOUPDATE_UI', type: 'ERROR', message: `Error copiado de UI: ${currentAnalysisError || currentGitError}`})} className="text-destructive border-destructive/50 hover:bg-destructive/20 hover:text-destructive-foreground"><Copy className="mr-2 h-4 w-4" /> Copiar Error</Button>
                   <Button variant="outline" size="sm" onClick={() => handleAttemptAutoFix(currentAnalysisError || currentGitError, currentGitError ? "Error en subida Git." : "Error en auto-análisis.")}
-                    disabled={status === "fixing_error" || status === "fixing_git_error" || !selectedConfigSource || (!isWorkgroupSelected && !currentLlmOptions) || (isWorkgroupSelected && (!workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1]) || !agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME))) } 
+                    disabled={status === "fixing_error" || status === "fixing_git_error" || !selectedConfigSource || (!isWorkgroupSelected && !currentLlmOptions) || (isWorkgroupSelected && (!workgroups.find(wg => wg.id === selectedConfigSource.split(':')[1]) || !agents.find(a => a.name === ORCHESTRATOR_AGENT_NAME))) }
                     className="text-accent border-accent/50 hover:bg-accent/20 hover:text-accent-foreground">
                     {(status === "fixing_error" || status === "fixing_git_error") ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Settings2 className="mr-2 h-4 w-4" />} Auto-Fix
                   </Button>
@@ -929,13 +988,13 @@ export default function AutoUpdatePage() {
                                 const isWarn = log.includes("[WARN");
                                 const isDetail = log.includes("[DETAIL");
                                 const isChunkAnalysis = log.includes("[CHUNK_ANALYSIS");
-                                
+
                                 return (
                                   <span key={`log-${index}`} className={cn(
-                                      isError ? "text-destructive" 
-                                      : isWarn ? "text-yellow-500 dark:text-yellow-400" 
+                                      isError ? "text-destructive"
+                                      : isWarn ? "text-yellow-500 dark:text-yellow-400"
                                       : isChunkAnalysis ? "text-sky-600 dark:text-sky-400"
-                                      : isDetail ? "text-gray-500 dark:text-gray-400" 
+                                      : isDetail ? "text-gray-500 dark:text-gray-400"
                                       : ""
                                   )}>
                                       {log}\n
@@ -983,5 +1042,3 @@ export default function AutoUpdatePage() {
     </>
   );
 }
-
-

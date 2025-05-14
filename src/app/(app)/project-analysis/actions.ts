@@ -1,3 +1,4 @@
+
 // src/app/(app)/project-analysis/actions.ts
 'use server';
 
@@ -8,20 +9,20 @@ import { fetchRepositoryContents } from '@/services/git-service';
 import type { AgentConfig, WorkgroupConfig } from '@/types/agent';
 import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
 import { handleWorkgroupTurn, type WorkgroupTurnPayload, type WorkgroupTurnResponse } from '@/app/(app)/workgroups/actions';
-import { ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS } from '@/config/agent-config';
+import { ORCHESTRATOR_AGENT_NAME, MAX_WORKGROUP_TURNS, REFACTOR_AGENT_NAME } from '@/config/agent-config';
 import type { ChatMessage } from '@/services/groq';
 
 export interface AnalyzeProjectPayload {
-  projectFileContent?: string; 
+  projectFileContent?: string;
   projectFileName?: string;
-  projectFileType?: string; 
+  projectFileType?: string;
   gitUrl?: string;
   analysisPreferences?: string;
-  configSource: string; 
-  llmOptions?: LLMOptions; 
-  agents?: AgentConfig[]; 
-  workgroups?: WorkgroupConfig[]; 
-  localStorageSnapshot?: LocalStorageSnapshot; 
+  configSource: string;
+  llmOptions?: LLMOptions;
+  agents?: AgentConfig[];
+  workgroups?: WorkgroupConfig[];
+  localStorageSnapshot?: LocalStorageSnapshot;
 }
 
 export interface AnalyzeProjectResult {
@@ -29,12 +30,12 @@ export interface AnalyzeProjectResult {
   data?: ProjectAnalysisResponse;
   error?: string;
   workgroupLogs?: string[];
-  detailedExecutionLogs?: string[]; 
+  detailedExecutionLogs?: string[];
 }
 
-const MAX_CHARS_PER_CHUNK_PROJ_ANALYSIS = 3500;
-const LLM_API_TIMEOUT_MS_PROJ_ANALYSIS = 60000 * 2; 
-const INTER_CHUNK_PROCESSING_DELAY_MS_PROJ_ANALYSIS = 7000;
+const MAX_CHARS_PER_CHUNK_PROJ_ANALYSIS = 7000; // Increased chunk size for project analysis as it might be more holistic
+const LLM_API_TIMEOUT_MS_PROJ_ANALYSIS = 120000; // 2 minutes
+const INTER_CHUNK_PROCESSING_DELAY_MS_PROJ_ANALYSIS = 5000; // 5 seconds
 
 export async function handleAnalyzeProject(
   payload: AnalyzeProjectPayload
@@ -60,7 +61,7 @@ export async function handleAnalyzeProject(
         }
     }
     const logMsg = `[${timestamp}] [ProjAnalysis-${type}] ${message}${dataStringForLogMessage}`;
-    console.log(logMsg.replace(/\n/g, ' ')); 
+    console.log(logMsg.replace(/\n/g, ' '));
     serverLogs.push(logMsg);
   };
 
@@ -68,36 +69,45 @@ export async function handleAnalyzeProject(
     log('INFO', `Iniciando análisis de proyecto completo. ConfigSource: ${payload.configSource}`);
     let projectContentToAnalyze: string | undefined = undefined;
     let sourceDescription = "";
+    const agentsForLookup = payload.agents || [];
+    const workgroupsForLookup = payload.workgroups || [];
+
 
     if (payload.gitUrl) {
-      log('INFO', `Obteniendo contenido desde Git URL: ${payload.gitUrl}`);
+      log('INFO', `Fuente Git: ${payload.gitUrl}. Se pasará la URL al agente/grupo para que obtenga el contenido.`);
       sourceDescription = `el repositorio Git en ${payload.gitUrl}`;
-      const gitResult = await fetchRepositoryContents(payload.gitUrl);
-      if (gitResult.logsBuilt) serverLogs.push(...gitResult.logsBuilt.map(l => `[GIT_FETCH_LOG] ${l}`));
-      if (!gitResult.success || !gitResult.concatenatedSource) {
-        log('ERROR', `No se pudo obtener el contenido del repositorio Git: ${gitResult.error}`, gitResult);
-        return { success: false, error: String(gitResult.error || "Fallo al obtener contenido de Git."), detailedExecutionLogs: serverLogs };
-      }
-      projectContentToAnalyze = gitResult.concatenatedSource;
-      log('INFO', `Contenido Git obtenido. Tamaño: ${projectContentToAnalyze.length}`);
+      projectContentToAnalyze = payload.gitUrl; // Pass URL for agent/group to handle fetching
     } else if (payload.projectFileContent) {
       sourceDescription = `el archivo ${payload.projectFileName || 'subido'}`;
       log('INFO', `Procesando contenido de archivo: ${payload.projectFileName} (${payload.projectFileType})`);
-      projectContentToAnalyze = payload.projectFileContent;
+      if (payload.projectFileType?.includes('zip') && payload.projectFileContent?.startsWith('Contenido_ZIP_Placeholder')) {
+         log('WARN', 'El contenido del ZIP es un placeholder. El análisis se basará en el nombre y tipo si el LLM/agente no puede procesar ZIPs directamente.');
+         projectContentToAnalyze = `Analizar el proyecto contenido en el archivo ZIP llamado '${payload.projectFileName}'. Tipo: ${payload.projectFileType}. Considera una estructura típica para este tipo de archivo.`;
+      } else if (payload.projectFileType?.includes('json')) {
+         try {
+            const parsedJson = JSON.parse(payload.projectFileContent);
+            projectContentToAnalyze = JSON.stringify(parsedJson, null, 2); // Re-stringify for consistent formatting
+            log('INFO', `Contenido JSON parseado y re-formateado. Tamaño: ${projectContentToAnalyze.length}`);
+         } catch (e) {
+            log('ERROR', `Error al parsear archivo JSON '${payload.projectFileName}'. Se analizará como texto plano.`, e);
+            projectContentToAnalyze = payload.projectFileContent;
+         }
+      } else {
+        projectContentToAnalyze = payload.projectFileContent;
+      }
+
       if (!projectContentToAnalyze) {
-        log('ERROR', `Contenido de archivo no proporcionado.`);
+        log('ERROR', `Contenido de archivo no proporcionado o vacío.`);
         return { success: false, error: "Contenido de archivo no proporcionado.", detailedExecutionLogs: serverLogs };
       }
-      log('INFO', `Contenido de archivo procesado. Tamaño: ${projectContentToAnalyze.length}`);
+      log('INFO', `Contenido de archivo preparado para análisis. Tamaño (o descripción): ${projectContentToAnalyze.length}`);
     }
+
 
     if (!projectContentToAnalyze) {
       log('ERROR', 'Fuente de proyecto no especificada o no procesable.');
       return { success: false, error: "Fuente de proyecto no especificada.", detailedExecutionLogs: serverLogs };
     }
-
-    const agentsForLookup = payload.agents || [];
-    const workgroupsForLookup = payload.workgroups || [];
 
     if (payload.configSource.startsWith('workgroup:')) {
       const workgroupId = payload.configSource.split(':')[1];
@@ -112,7 +122,7 @@ export async function handleAnalyzeProject(
         log('ERROR', `Orquestrador no encontrado en grupo ${workgroup.name}.`);
         return { success: false, error: `Orquestrador no encontrado en grupo ${workgroup.name}.`, workgroupLogs: serverLogs, detailedExecutionLogs: serverLogs };
       }
-      
+
       const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, agentsForLookup, workgroupsForLookup, payload.localStorageSnapshot);
       if (!orchestratorLlmOptions) {
           log('ERROR', `Configuración LLM inválida para Orquestrador (${orchestrator.name}).`);
@@ -136,11 +146,15 @@ export async function handleAnalyzeProject(
           return acc;
         }, {} as WorkgroupTurnPayload['participantAgentConfigs']);
 
-      const taskForWorkgroup = `Analiza exhaustivamente ${sourceDescription}. Identifica áreas clave, posibles mejoras, bugs, vulnerabilidades de seguridad, y ofrece una evaluación general. Preferencias de análisis: ${payload.analysisPreferences || 'Generales'}.
-  El proyecto (contenido textual):
-  ${projectContentToAnalyze.substring(0, 25000)} ${projectContentToAnalyze.length > 25000 ? "\n... (contenido truncado para el prompt)" : ""}
-  La respuesta final DEBE ser un objeto JSON con el formato de ProjectAnalysisResponse: { "analysisTitle": "string", "identifiedAreas": ["string"], "suggestions": [{ "area": "string", "suggestion": "string", "priority": "string", "suggestedFullFileContent": "string?" }], "overallAssessment": "string" }.`;
-      
+      let taskForWorkgroup = `Analiza exhaustivamente ${sourceDescription}.`;
+      if (payload.gitUrl) {
+          taskForWorkgroup += ` Debes obtener el contenido del repositorio Git desde la URL: ${payload.gitUrl}. Asegúrate de que el agente responsable (probablemente ${REFACTOR_AGENT_NAME} o uno con capacidad Git) realice esta acción primero.`;
+      } else {
+          taskForWorkgroup += ` El contenido del proyecto es (o representa):\n${projectContentToAnalyze.substring(0, 10000)} ${projectContentToAnalyze.length > 10000 ? "\n... (contenido truncado para el prompt)" : ""}`;
+      }
+      taskForWorkgroup += `\nIdentifica áreas clave, posibles mejoras, bugs, vulnerabilidades de seguridad, y ofrece una evaluación general. Preferencias de análisis: ${payload.analysisPreferences || 'Generales, con foco en buenas prácticas y mantenibilidad.'}.
+La respuesta final DEBE ser un objeto JSON con el formato de ProjectAnalysisResponse: { "analysisTitle": "string", "identifiedAreas": ["string"], "suggestions": [{ "area": "string", "suggestion": "string", "priority": "string", "suggestedFullFileContent": "string?" }], "overallAssessment": "string" }. Todas las descripciones y sugerencias deben estar en castellano.`;
+
       let currentHistory: ChatMessage[] = [];
       for (let turn = 1; turn <= MAX_WORKGROUP_TURNS; turn++) {
         log('INFO', `Procesando turno de grupo ${turn}/${MAX_WORKGROUP_TURNS} para análisis de proyecto.`);
@@ -160,11 +174,11 @@ export async function handleAnalyzeProject(
           log('ERROR', `Error en turno ${turn} del grupo: ${turnResult.error}`);
           return { success: false, error: `Error en turno ${turn} del grupo: ${String(turnResult.error)}`, workgroupLogs: serverLogs, detailedExecutionLogs: serverLogs };
         }
-        
-        currentHistory = turnResult.updatedHistory;
-        if (turnResult.isComplete || turnResult.orchestratorDecision?.nextAgentId === "COMPLETADO") {
+
+        currentHistory = result.updatedHistory || currentHistory; // Ensure history is updated
+        if (result.isComplete || result.orchestratorDecision?.nextAgentId === "COMPLETADO") {
           log('INFO', `Grupo de trabajo completó el análisis de proyecto en el turno ${turn}.`);
-          const finalResponseContent = turnResult.agentResponse?.content || currentHistory.findLast(m => m.role === 'assistant')?.content;
+          const finalResponseContent = result.agentResponse?.content || currentHistory.findLast(m => m.role === 'assistant')?.content;
           if (finalResponseContent) {
             try {
               const cleanedContent = finalResponseContent.replace(/^```json\s*/, '').replace(/\s*```$/, '');
@@ -182,17 +196,43 @@ export async function handleAnalyzeProject(
         }
       }
       return { success: false, error: `Análisis con grupo no produjo resultado después de ${MAX_WORKGROUP_TURNS} turnos.`, workgroupLogs: serverLogs, detailedExecutionLogs: serverLogs };
-    } else { 
+    } else {
       const llmOptionsToUse = payload.llmOptions || resolveLlmOptionsForSource(payload.configSource, agentsForLookup, workgroupsForLookup, payload.localStorageSnapshot);
       if (!llmOptionsToUse) {
         log('ERROR', `Configuración LLM no resuelta para ${payload.configSource}.`);
         return { success: false, error: `Config. LLM no resuelta.`, detailedExecutionLogs: serverLogs };
       }
 
+      // Handle direct LLM call (chunking logic might be needed if projectContentToAnalyze is very large)
+      // This part assumes projectContentToAnalyze is manageable for a single LLM call or that analyzeProjectSourceChunk can handle it.
+      // If projectContentToAnalyze is a Git URL here, it means it wasn't a workgroup source,
+      // so the direct LLM call needs to be smart enough or we need to fetch content first.
+      // For simplicity with the current structure, if it's a Git URL and not a workgroup, we'll fetch it first.
+      let contentForDirectAnalysis = projectContentToAnalyze;
+      if (payload.gitUrl) {
+         log('INFO', `Obteniendo contenido desde Git URL para análisis directo: ${payload.gitUrl}`);
+         const gitResult = await fetchRepositoryContents(payload.gitUrl);
+         if (gitResult.logsBuilt) serverLogs.push(...gitResult.logsBuilt.map(l => `[GIT_FETCH_LOG] ${l}`));
+         if (!gitResult.success || !gitResult.concatenatedSource) {
+            log('ERROR', `No se pudo obtener el contenido del repositorio Git para análisis directo: ${gitResult.error}`, gitResult);
+            return { success: false, error: String(gitResult.error || "Fallo al obtener contenido de Git para análisis directo."), detailedExecutionLogs: serverLogs };
+         }
+         contentForDirectAnalysis = gitResult.concatenatedSource;
+         log('INFO', `Contenido Git obtenido para análisis directo. Tamaño: ${contentForDirectAnalysis.length}`);
+      }
+
+
+      if (contentForDirectAnalysis.length > 300000) { // Example limit for direct analysis
+          log('ERROR', `El contenido del proyecto es demasiado grande (${(contentForDirectAnalysis.length / 1024).toFixed(0)}KB) para el análisis directo. Intente con un proyecto más pequeño o use un grupo de trabajo si está configurado para manejar entradas grandes.`);
+          return { success: false, error: `El contenido del proyecto es demasiado grande (${(contentForDirectAnalysis.length / 1024).toFixed(0)}KB) para el análisis directo. Intente con un proyecto más pequeño o use un grupo de trabajo si está configurado para manejar entradas grandes.`, detailedExecutionLogs: serverLogs };
+      }
+
+
       const chunks: string[] = [];
       let currentChunk = "";
-      const lines = projectContentToAnalyze.split('\n');
+      const lines = contentForDirectAnalysis.split('\n');
       for (const line of lines) {
+          // Add a file marker if the line looks like one, to preserve context for the LLM
           const fileMarkerMatch = line.match(/^\/\/\s*---\s*Archivo:\s*(.*?)\s*---/);
           const lineWithMarker = fileMarkerMatch ? `\n\n// --- Archivo: ${fileMarkerMatch[1]} ---\n\n${line}` : line;
 
@@ -213,7 +253,7 @@ export async function handleAnalyzeProject(
               const result = await analyzeProjectSourceChunk(
                   chunks[i],
                   { ...llmOptionsToUse, timeoutMs: LLM_API_TIMEOUT_MS_PROJ_ANALYSIS },
-                  `Análisis de fragmento ${i+1} de ${chunks.length} para ${sourceDescription}. Preferencias: ${payload.analysisPreferences || 'Generales'}. La respuesta debe ser en formato ProjectAnalysisResponse.`
+                  `Análisis de fragmento ${i+1} de ${chunks.length} para ${sourceDescription}. Preferencias: ${payload.analysisPreferences || 'Generales, con foco en buenas prácticas y mantenibilidad.'}. La respuesta debe ser en formato ProjectAnalysisResponse. Todas las descripciones y sugerencias deben estar en castellano.`
               );
               allResults.push(result);
               if (i < chunks.length - 1) {
@@ -225,7 +265,7 @@ export async function handleAnalyzeProject(
               return { success: false, error: `Error en fragmento ${i+1}: ${String((e as Error).message)}`, detailedExecutionLogs: serverLogs };
           }
       }
-      
+
       const aggregatedResult: ProjectAnalysisResponse = {
           analysisTitle: `Análisis Agregado de ${sourceDescription} (${chunks.length} fragmentos)`,
           identifiedAreas: Array.from(new Set(allResults.flatMap(r => r.identifiedAreas || []))),
@@ -245,4 +285,3 @@ export async function handleAnalyzeProject(
     };
   }
 }
-
