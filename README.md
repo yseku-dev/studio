@@ -243,7 +243,22 @@ A continuación, se describe cómo utilizar cada sección principal de CodeAlche
 ### 1. Navegación y Barra Lateral
 
 *   La interfaz principal cuenta con una **Barra Lateral** a la izquierda que da acceso a todas las secciones de la aplicación.
-    *   **Panel de Control**: Es la página de inicio, ofreciendo una visión general y acceso rápido a las funcionalidades. (Icono: `LayoutDashboard`)
+    *   **Panel de Control**: (Icono: `LayoutDashboard`) Es la página de bienvenida de CodeAlchemist y sirve como punto de partida central para todas las funcionalidades. Presenta un diseño claro y atractivo, destacando el logo de la aplicación (un matraz de alquimista estilizado) para reforzar la identidad visual. La página incluye:
+        *   Un **título de bienvenida** grande y prominente, como "Bienvenido a CodeAlchemist".
+        *   Una **descripción concisa** de la aplicación, enfatizando su propósito como asistente de IA para el desarrollo de software, cubriendo generación, análisis, refactorización y gestión de versiones.
+        *   Una sección de **"Características Principales"** o "Acceso Rápido", que consiste en una cuadrícula de tarjetas interactivas. Cada tarjeta representa una funcionalidad clave de la aplicación (ej. "Generar Código", "Analizar Proyecto", "AutoUpdate", "Configuración", etc.), mostrando:
+            *   El icono distintivo de la funcionalidad (ej. `CodeXml` para Generar Código).
+            *   El título de la funcionalidad.
+            *   Una breve descripción de su propósito.
+            *   Al hacer clic en una tarjeta, el usuario navega directamente a la sección correspondiente. Las tarjetas tienen efectos visuales sutiles al pasar el cursor sobre ellas (ej. cambio de sombra o borde) para mejorar la interactividad.
+        *   Una sección de **"Guía Rápida de Inicio"**, que ofrece una lista numerada de los pasos recomendados para que los nuevos usuarios comiencen a utilizar la aplicación de manera efectiva, como:
+            1.  Configurar los ajustes del proveedor LLM.
+            2.  Explorar la generación de código.
+            3.  Probar el análisis de un fragmento de código.
+            4.  Interactuar con el chat IA.
+            5.  Experimentar con la función de AutoUpdate.
+            Cada paso puede incluir un enlace directo a la sección correspondiente.
+        *   Visualmente, el Panel de Control utiliza la paleta de colores principal de la aplicación para mantener la coherencia, con un uso prominente del color primario y de acento para los elementos interactivos y los títulos.
     *   **Generar Código**: Para crear fragmentos de código a partir de descripciones. (Icono: `CodeXml`)
     *   **Generar Proyecto**: Para iniciar nuevas estructuras de proyecto desde cero. (Icono: `FolderPlus`)
     *   **Refactorizar Proyecto**: Para analizar y obtener sugerencias de refactorización de proyectos existentes. (Icono: `GitPullRequestDraft`)
