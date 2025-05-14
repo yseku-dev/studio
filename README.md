@@ -234,7 +234,7 @@ CodeAlchemist ofrece un conjunto robusto de características diseñadas para asi
             *   `ValidadorCodigo`: Analiza resultados de refactorización para detectar errores y asegurar la calidad del código. Puede tener capacidades de acceso a código propio y ejecución.
         *   **Grupo de Trabajo Creado por Defecto**:
             *   `EquipoDesarrolloSoftware`: Incluye al `OrquestadorFlujoAgentes` y a los agentes `JefeDeProducto`, `ArquitectoSoftware`, `DesarrolladorSoftware`, `RefactorizadorCodigoExperto`, `ValidadorCodigo`, `IngenieroPruebas`, `IngenieroDevOps`, y `RepresentanteUsuario`. Su tarea principal está predefinida para simular un equipo de producción de software completo y versátil, capaz de abordar diversas tareas de desarrollo y de mejorar el sistema "Auto-Fix" de CodeAlchemist mediante la implementación de estrategias de refuerzo (priorización dinámica, aprendizaje predictivo, validación robusta y sincronización con el Orquestador principal).
-    *   Estos elementos por defecto sirven como punto de partida y pueden ser editados (excepto el nombre y la eliminación del `OrquestadorFlujoAgentes`).
+    *   Estos elementos por defecto sirven como punto de partida y pueden ser editados (excepto el nombre y la eliminación del `OrquestadorFlujoAgentes`). Es importante destacar que tanto estos agentes y grupos por defecto, como cualquier otro que el usuario cree, están completamente definidos y son gestionables a través de sus respectivas secciones: "Agentes IA" y "Grupos de Trabajo IA". No existen agentes o grupos "ocultos" o pre-programados fuera de lo que el usuario puede visualizar y modificar en la interfaz.
 
 ## Tutorial de Uso Detallado
 
@@ -430,7 +430,7 @@ Accede mediante el icono `MessageCircle` en la barra lateral.
 
 ### 11. Gestión de Agentes IA (Sección "Agentes IA")
 
-Accede mediante el icono `Users2` en la barra lateral.
+Accede mediante el icono `Users2` en la barra lateral. Todos los agentes, incluyendo los creados por defecto, son completamente gestionables desde esta sección.
 
 *   Muestra una lista de todos los agentes IA creados, con su nombre, descripción, configuración LLM y un resumen de sus capacidades.
 *   Botones **"Importar Agentes"** (permite subir un archivo JSON que contenga la configuración de uno o más agentes) y **"Exportar Todos los Agentes"** (descarga un archivo JSON con la configuración de todos los agentes actuales).
@@ -462,7 +462,7 @@ Accede mediante el icono `Users2` en la barra lateral.
 
 ### 12. Gestión de Grupos de Trabajo IA (Sección "Grupos de Trabajo IA")
 
-Accede mediante el icono `Workflow` en la barra lateral.
+Accede mediante el icono `Workflow` en la barra lateral. Todos los grupos, incluyendo los creados por defecto, son completamente gestionables desde esta sección.
 
 *   Muestra una lista de los grupos de trabajo creados, con su nombre y descripción.
 *   **Formulario "Crear/Editar Grupo"** (accesible mediante un botón "Crear Grupo Nuevo" o al editar un grupo existente):
@@ -584,4 +584,4 @@ CodeAlchemist utiliza una interfaz de usuario moderna y profesional, diseñada p
 
 ¡Gracias por usar CodeAlchemist! Esperamos que esta plataforma te sea de gran utilidad en tus proyectos de desarrollo.
 
-```endregion_README.md
+  
