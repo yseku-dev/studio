@@ -23,7 +23,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger, // Ensure AlertDialogTrigger is imported
+  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from '@/hooks/use-toast';
 import { PlusCircle, Users2, Edit2, Trash2, Wand2, UploadCloud, DownloadCloud, MessageSquare, Code, Terminal, FolderGit2, FileCode, ShieldCheck } from 'lucide-react';
@@ -479,111 +479,111 @@ export default function AgentsPage() {
       <Dialog open={isFormOpen} onOpenChange={handleDialogVisibilityChange}>
         <div className="space-y-6">
           <Card className="shadow-lg border-primary/20">
-            <CardHeader className="flex flex-col space-y-4 border-b pb-4">
-              <div>
-                <CardTitle className="text-2xl flex items-center gap-2">
-                  <Users2 className="h-6 w-6 text-primary" />
-                  Gestión de Agentes IA
-                </CardTitle>
-                <CardDescription className="mt-1 text-muted-foreground">
-                  Crea, administra, prueba, importa y exporta tus agentes de IA.
-                  Los agentes pueden ser configurados con capacidades específicas y asignados a grupos de trabajo.
-                </CardDescription>
-              </div>
-              <div className="flex items-center gap-2 flex-wrap">
-                <Button variant="outline" size="sm" onClick={() => importFileRef.current?.click()}>
-                  <UploadCloud className="mr-2 h-4 w-4" /> Importar
-                </Button>
-                <Input
-                  type="file"
-                  ref={importFileRef}
-                  className="hidden"
-                  accept=".json"
-                  onChange={handleImportAgents}
-                />
-                <Button variant="outline" size="sm" onClick={handleExportAllAgents} disabled={agents.length === 0}>
-                  <DownloadCloud className="mr-2 h-4 w-4" /> Exportar Todos
-                </Button>
-                <DialogTrigger asChild>
-                  <Button onClick={() => handleOpenForm()} size="sm">
-                    <PlusCircle className="mr-2 h-4 w-4" /> Crear Agente
-                  </Button>
-                </DialogTrigger>
+            <CardHeader className="border-b pb-4">
+              <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                  <div>
+                    <CardTitle className="text-2xl flex items-center gap-2">
+                      <Users2 className="h-6 w-6 text-primary" />
+                      Gestión de Agentes IA
+                    </CardTitle>
+                    <CardDescription className="mt-1 text-muted-foreground">
+                      Crea, administra, prueba, importa y exporta tus agentes de IA.
+                      Los agentes pueden ser configurados con capacidades específicas y asignados a grupos de trabajo.
+                    </CardDescription>
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap flex-shrink-0">
+                    <Button variant="outline" size="sm" onClick={() => importFileRef.current?.click()}>
+                      <UploadCloud className="mr-2 h-4 w-4" /> Importar
+                    </Button>
+                    <Input
+                      type="file"
+                      ref={importFileRef}
+                      className="hidden"
+                      accept=".json"
+                      onChange={handleImportAgents}
+                    />
+                    <Button variant="outline" size="sm" onClick={handleExportAllAgents} disabled={agents.length === 0}>
+                      <DownloadCloud className="mr-2 h-4 w-4" /> Exportar Todos
+                    </Button>
+                    <DialogTrigger asChild>
+                      <Button onClick={() => handleOpenForm()} size="sm">
+                        <PlusCircle className="mr-2 h-4 w-4" /> Crear Agente
+                      </Button>
+                    </DialogTrigger>
+                  </div>
               </div>
             </CardHeader>
             <CardContent className="pt-6">
               {agents.length === 0 ? (
                 <p className="text-muted-foreground text-center py-12">No hay agentes creados. ¡Empieza creando uno o importa agentes existentes!</p>
               ) : (
-                <ScrollArea className="h-[calc(100vh-20rem)] lg:h-[calc(100vh-18rem)]"> 
-                  <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"> 
-                    {agents.map(agent => (
-                      <Card key={agent.id} className="flex flex-col bg-card hover:shadow-md transition-shadow duration-200">
-                        <CardHeader className="pb-3">
-                          <CardTitle className="text-lg font-semibold text-primary">{agent.name}</CardTitle>
-                          <CardDescription className="text-sm text-muted-foreground h-10 line-clamp-2">{agent.description}</CardDescription>
-                        </CardHeader>
-                        <CardContent className="flex-grow space-y-3 pt-2 pb-4">
-                           <div className="space-y-1">
-                             <Label className="text-xs font-medium text-foreground">Mensaje de Sistema:</Label>
-                             <ScrollArea className="h-20 p-2 border rounded bg-muted/50 text-xs text-muted-foreground">
-                               <pre className="whitespace-pre-wrap font-mono">{agent.systemMessage}</pre>
-                             </ScrollArea>
-                           </div>
-                           <div className="space-y-1">
-                             <Label className="text-xs font-medium text-foreground">Config LLM:</Label>
-                             <p className="text-xs text-muted-foreground">{getLLMConfigDisplay(agent.llmConfig)}</p>
-                           </div>
-                           <div className="space-y-1">
-                                <Label className="text-xs font-medium text-foreground">Capacidades:</Label>
-                                <div className="flex flex-wrap gap-1">
-                                    {agent.capabilities?.selfCodeAccess && <Badge variant="outline" className="text-xs"><Code className="mr-1 h-3 w-3"/>Código Propio</Badge>}
-                                    {agent.capabilities?.executionCapability && <Badge variant="outline" className="text-xs"><Terminal className="mr-1 h-3 w-3"/>Ejecución</Badge>}
-                                    {agent.capabilities?.virtualEnvCapability && <Badge variant="outline" className="text-xs"><FolderGit2 className="mr-1 h-3 w-3"/>Entorno Virtual</Badge>}
-                                    {agent.capabilities?.readWriteCapability && <Badge variant="outline" className="text-xs"><FileCode className="mr-1 h-3 w-3"/>Lectura/Escritura</Badge>}
-                                    {(!agent.capabilities?.selfCodeAccess && !agent.capabilities?.executionCapability && !agent.capabilities?.virtualEnvCapability && !agent.capabilities?.readWriteCapability) && <span className="text-xs text-muted-foreground italic">Ninguna</span>}
-                                </div>
-                            </div>
-                        </CardContent>
-                        <CardFooter className="flex justify-end gap-2 border-t pt-3 pb-3 bg-muted/30">
-                          <Button variant="outline" size="sm" onClick={() => handleTestAgent(agent)} className="text-xs px-2">
-                            <MessageSquare className="mr-1 h-3 w-3" /> Probar
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"> 
+                  {agents.map(agent => (
+                    <Card key={agent.id} className="flex flex-col bg-card hover:shadow-md transition-shadow duration-200">
+                      <CardHeader className="pb-3">
+                        <CardTitle className="text-lg font-semibold text-primary">{agent.name}</CardTitle>
+                        <CardDescription className="text-sm text-muted-foreground h-10 line-clamp-2">{agent.description}</CardDescription>
+                      </CardHeader>
+                      <CardContent className="flex-grow space-y-3 pt-2 pb-4">
+                         <div className="space-y-1">
+                           <Label className="text-xs font-medium text-foreground">Mensaje de Sistema:</Label>
+                           <ScrollArea className="h-20 p-2 border rounded bg-muted/50 text-xs text-muted-foreground">
+                             <pre className="whitespace-pre-wrap font-mono">{agent.systemMessage}</pre>
+                           </ScrollArea>
+                         </div>
+                         <div className="space-y-1">
+                           <Label className="text-xs font-medium text-foreground">Config LLM:</Label>
+                           <p className="text-xs text-muted-foreground">{getLLMConfigDisplay(agent.llmConfig)}</p>
+                         </div>
+                         <div className="space-y-1">
+                              <Label className="text-xs font-medium text-foreground">Capacidades:</Label>
+                              <div className="flex flex-wrap gap-1">
+                                  {agent.capabilities?.selfCodeAccess && <Badge variant="outline" className="text-xs"><Code className="mr-1 h-3 w-3"/>Código Propio</Badge>}
+                                  {agent.capabilities?.executionCapability && <Badge variant="outline" className="text-xs"><Terminal className="mr-1 h-3 w-3"/>Ejecución</Badge>}
+                                  {agent.capabilities?.virtualEnvCapability && <Badge variant="outline" className="text-xs"><FolderGit2 className="mr-1 h-3 w-3"/>Entorno Virtual</Badge>}
+                                  {agent.capabilities?.readWriteCapability && <Badge variant="outline" className="text-xs"><FileCode className="mr-1 h-3 w-3"/>Lectura/Escritura</Badge>}
+                                  {(!agent.capabilities?.selfCodeAccess && !agent.capabilities?.executionCapability && !agent.capabilities?.virtualEnvCapability && !agent.capabilities?.readWriteCapability) && <span className="text-xs text-muted-foreground italic">Ninguna</span>}
+                              </div>
+                          </div>
+                      </CardContent>
+                      <CardFooter className="flex justify-end gap-2 border-t pt-3 pb-3 bg-muted/30">
+                        <Button variant="outline" size="sm" onClick={() => handleTestAgent(agent)} className="text-xs px-2">
+                          <MessageSquare className="mr-1 h-3 w-3" /> Probar
+                        </Button>
+                        <Button variant="ghost" size="icon" onClick={() => handleExportAgent(agent.id)} title="Exportar Agente" className="text-muted-foreground hover:text-primary">
+                          <DownloadCloud className="h-4 w-4" />
+                        </Button>
+                        <DialogTrigger asChild>
+                          <Button variant="ghost" size="icon" onClick={() => handleOpenForm(agent)} title="Editar Agente" className="text-muted-foreground hover:text-primary">
+                            <Edit2 className="h-4 w-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" onClick={() => handleExportAgent(agent.id)} title="Exportar Agente" className="text-muted-foreground hover:text-primary">
-                            <DownloadCloud className="h-4 w-4" />
-                          </Button>
-                          <DialogTrigger asChild>
-                            <Button variant="ghost" size="icon" onClick={() => handleOpenForm(agent)} title="Editar Agente" className="text-muted-foreground hover:text-primary">
-                              <Edit2 className="h-4 w-4" />
-                            </Button>
-                          </DialogTrigger>
-                           <AlertDialog>
-                             <AlertDialogTrigger asChild>
-                                <Button variant="ghost" size="icon" title="Eliminar Agente" className="text-muted-foreground hover:text-destructive" disabled={agent.name === ORCHESTRATOR_AGENT_NAME}>
-                                  <Trash2 className="h-4 w-4" />
-                                </Button>
-                             </AlertDialogTrigger>
-                              <AlertDialogContent>
-                                <AlertDialogHeader>
-                                  <AlertDialogTitle>¿Eliminar Agente?</AlertDialogTitle>
-                                  <AlertDialogDescription>
-                                    ¿Estás seguro de que quieres eliminar al agente "{agent.name}"? Esta acción no se puede deshacer.
-                                    {agent.name === ORCHESTRATOR_AGENT_NAME && <p className="mt-2 font-semibold text-destructive">Este es el agente Orquestador principal y no puede ser eliminado.</p>}
-                                  </AlertDialogDescription>
-                                </AlertDialogHeader>
-                                <AlertDialogFooter>
-                                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                                  <AlertDialogAction onClick={() => handleDeleteAgent(agent.id)} className="bg-destructive hover:bg-destructive/90" disabled={agent.name === ORCHESTRATOR_AGENT_NAME}>
-                                    Eliminar
-                                  </AlertDialogAction>
-                                </AlertDialogFooter>
-                              </AlertDialogContent>
-                            </AlertDialog>
-                        </CardFooter>
-                      </Card>
-                    ))}
-                  </div>
-                </ScrollArea>
+                        </DialogTrigger>
+                         <AlertDialog>
+                           <AlertDialogTrigger asChild>
+                              <Button variant="ghost" size="icon" title="Eliminar Agente" className="text-muted-foreground hover:text-destructive" disabled={agent.name === ORCHESTRATOR_AGENT_NAME}>
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                           </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>¿Eliminar Agente?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  ¿Estás seguro de que quieres eliminar al agente "{agent.name}"? Esta acción no se puede deshacer.
+                                  {agent.name === ORCHESTRATOR_AGENT_NAME && <p className="mt-2 font-semibold text-destructive">Este es el agente Orquestador principal y no puede ser eliminado.</p>}
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => handleDeleteAgent(agent.id)} className="bg-destructive hover:bg-destructive/90" disabled={agent.name === ORCHESTRATOR_AGENT_NAME}>
+                                  Eliminar
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                      </CardFooter>
+                    </Card>
+                  ))}
+                </div>
               )}
             </CardContent>
           </Card>
