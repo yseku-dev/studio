@@ -56,30 +56,28 @@ Responde ÚNICAMENTE en formato JSON válido con las siguientes claves:
 
 Considera que el error puede estar relacionado con límites de API, configuración incorrecta, problemas de código, dependencias, timeouts, etc.
 
-Si el error indica que un LLM (especialmente un agente Orquestador o un agente que debe devolver JSON) no devolvió una respuesta JSON válida cuando se esperaba (ej. "no contenía un bloque JSON reconocible", "Unexpected token '<'", "not valid JSON"):
-  - Analiza si el prompt del sistema del agente que falló (Orquestador o el agente específico) instruye CLARAMENTE sobre el formato JSON exacto requerido. Asegúrate de que el prompt especifique que la respuesta DEBE SER *EXCLUSIVAMENTE* el objeto JSON, sin texto introductorio, explicaciones adicionales, o etiquetas como "<think>".
-  - Sugiere revisar y simplificar el prompt del sistema del agente que falló para asegurar que la instrucción de formato JSON sea la más prominente y clara.
-  - Considera si el modelo LLM usado por el agente es adecuado para seguir instrucciones de formato estrictas. Algunos modelos son mejores que otros en esto. Si es un modelo menos potente, sugiere probar con uno más avanzado si es posible.
-  - Propón verificar si hay caracteres extraños o texto no JSON (como etiquetas "<think>", comentarios o explicaciones) en la respuesta cruda del LLM, y cómo el código podría intentar extraer el JSON de forma más robusta (ej. buscando el primer '{' y el último '}').
-  - Sugiere añadir reintentos con una re-instrucción más enfática sobre el formato JSON si el agente falla repetidamente, o incluso instruir al LLM para que verifique su propia salida antes de enviarla.
-  - Menciona la posibilidad de que la respuesta del LLM sea demasiado larga y se trunque antes de completar el JSON, sugiriendo pedir al LLM que sea más conciso si el problema persiste.
+**Instrucciones Específicas para Tipos de Error:**
 
-Si el error menciona TIMEOUTS o que una solicitud "excedió el tiempo límite" (especialmente si el contexto implica al OrquestadorFlujoAgentes o una llamada LLM larga):
-  - **Análisis Causa Raíz**: Considera estas posibilidades:
-      1.  **Timeout de Red/Infraestructura**: Problemas de conectividad o lentitud en la respuesta del servidor LLM.
-      2.  **Timeout de Aplicación**: El timeout configurado en CodeAlchemist para la llamada LLM (ej., en \`services/groq.ts\` o en las opciones del agente/orquestador) es demasiado corto para la complejidad de la tarea.
-      3.  **Complejidad del Prompt/Tarea para el LLM**: El prompt del Orquestrador o del agente invocado es demasiado complejo, o el historial de conversación es muy largo, causando que el LLM tarde demasiado en generar una respuesta.
-      4.  **Modelo LLM Lento/Sobrecargado**: El modelo LLM específico utilizado está experimentando alta latencia o está sobrecargado.
-  - **Sugerencias de Solución**:
-      1.  **Aumentar Timeouts (Aplicación)**: Sugiere revisar y aumentar los valores de timeout configurados para las llamadas LLM en CodeAlchemist (ej. \`ORCHESTRATOR_DECISION_TIMEOUT_MS\`, \`AGENT_RESPONSE_TIMEOUT_MS\` en \`src/app/(app)/workgroups/actions.ts\`, o valores similares en \`services/groq.ts\`). Indicar dónde se podrían encontrar estas configuraciones.
-      2.  **Simplificar Prompt/Tarea del Orquestrador**: Si el error ocurre en el turno del Orquestrador, sugiere revisar el prompt del sistema del Orquestrador para simplificar la lógica de decisión o reducir la cantidad de información que debe procesar. Especialmente si el payload de la tarea es muy grande (ej. código fuente completo), considera si el Orquestrador realmente necesita todo ese detalle o si puede trabajar con un resumen/referencia, dejando el detalle para el agente especialista.
-      3.  **Reducir Tamaño del Payload**: Si el historial de conversación es muy extenso, sugiere estrategias para resumirlo o truncarlo antes de enviarlo al LLM.
-      4.  **Reintentos con Backoff (Reforzar)**: Aunque CodeAlchemist puede tener reintentos, recuerda al usuario verificar que la lógica de reintentos en \`services/groq.ts\` (función \`fetchWithRetry\`) está activa y manejando adecuadamente los timeouts (aunque un timeout de aborto de cliente no siempre permite reintento a nivel de fetch).
-      5.  **Probar un Modelo LLM Más Rápido/Potente**: Si el modelo actual es conocido por ser lento o menos capaz, sugiere probar con un modelo más rápido o más potente (si está disponible y configurado en CodeAlchemist) para el agente/orquestrador que está fallando.
-      6.  **Verificar Conectividad de Red**: Aconseja verificar la conexión a internet y la alcanzabilidad del endpoint del LLM.
-      7.  **Monitorear Estado del Proveedor LLM**: Sugiere revisar la página de estado del proveedor LLM (Groq, OpenAI, etc.) para ver si hay incidentes reportados.
+1.  **Errores de Formato JSON (ej. "no contenía un bloque JSON reconocible", "Unexpected token '<'", "not valid JSON"):**
+    -   Analiza si el prompt del sistema del agente que falló (Orquestador o el agente específico) instruye CLARAMENTE sobre el formato JSON exacto requerido. Asegúrate de que el prompt especifique que la respuesta DEBE SER *EXCLUSIVAMENTE* el objeto JSON, sin texto introductorio, explicaciones adicionales, o etiquetas como "<think>".
+    -   Sugiere revisar y simplificar el prompt del sistema del agente que falló para asegurar que la instrucción de formato JSON sea la más prominente y clara.
+    -   Considera si el modelo LLM usado por el agente es adecuado para seguir instrucciones de formato estrictas. Algunos modelos son mejores que otros en esto. Si es un modelo menos potente, sugiere probar con uno más avanzado si es posible.
+    -   Propón verificar si hay caracteres extraños o texto no JSON en la respuesta cruda del LLM y cómo el código podría intentar extraer el JSON de forma más robusta.
 
-Si el error menciona límites de API (ej. TPM, RPM, "Payload Too Large", "Rate limit exceeded"), explica qué significa el límite y cómo el usuario puede ajustar su uso o configuración para respetarlo (ej. reducir tamaño de payload, añadir reintentos con backoff, espaciar las solicitudes, considerar actualizar plan si es una opción).
+2.  **Errores de TIMEOUT o Límite de Tiempo Excedido:**
+    -   **Causa Raíz**: Considera estas posibilidades: 1) Timeout de red/infraestructura. 2) Timeout de la aplicación es demasiado corto para la tarea. 3) Complejidad del prompt o del historial de conversación. 4) Modelo LLM lento o sobrecargado.
+    -   **Sugerencias**: 1) Aumentar los valores de timeout configurados en CodeAlchemist. 2) Simplificar el prompt o la tarea del agente/orquestador. 3) Reducir el tamaño del payload (ej. resumiendo el historial). 4) Probar un modelo LLM más rápido. 5) Verificar la conectividad y el estado del proveedor LLM.
+
+3.  **Errores HTTP (4xx/5xx):**
+    -   **Error 400 (Bad Request)**: Generalmente indica un problema con la solicitud enviada. Revisa los parámetros, el cuerpo (payload) y los encabezados. El error puede ser un campo faltante, un tipo de dato incorrecto o un formato inválido (ej. JSON malformado enviado a la API). Sugiere inspeccionar el payload que se está enviando.
+    -   **Error 401 (Unauthorized) / 403 (Forbidden)**: Claramente es un problema de autenticación o autorización. Sugiere: 1) Verificar que la Clave API es correcta, válida y no ha expirado. 2) Asegurarse de que la clave API tiene los permisos necesarios para el modelo o la acción solicitada. 3) Comprobar que el encabezado de autorización se está enviando correctamente.
+    -   **Error 404 (Not Found)**: Indica que el recurso solicitado no existe. Sugiere: 1) Verificar la URL del endpoint de la API. 2) Comprobar que el nombre del modelo especificado es correcto y está disponible para ese proveedor y clave API.
+    -   **Error 429 (Too Many Requests)**: Indica que se ha excedido el límite de tasa de la API. Sugiere: 1) Reducir la frecuencia de las solicitudes. 2) Implementar o verificar la lógica de reintentos con backoff exponencial. 3) Considerar si es posible actualizar el plan de la API para obtener límites más altos.
+    -   **Errores 5xx (Server Error)**: Indican un problema en el servidor del proveedor LLM. Sugiere: 1) Que el problema es probablemente temporal y del lado del proveedor. 2) Recomienda esperar un tiempo y reintentar. 3) Aconseja verificar la página de estado del proveedor LLM (ej. status.openai.com) para ver si hay incidentes reportados.
+
+4.  **Errores de Límites de API (ej. TPM, RPM, "Payload Too Large"):**
+    - Explica qué significa el límite y cómo el usuario puede ajustar su uso o configuración para respetarlo (ej. reducir tamaño de payload, añadir reintentos con backoff, espaciar las solicitudes, considerar actualizar plan si es una opción).
+
 No incluyas markdown ni texto introductorio/conclusivo fuera del JSON.`;
 
   let userPromptContent = `Mensaje de Error:\n\`\`\`\n${error_message}\n\`\`\`\n`;
