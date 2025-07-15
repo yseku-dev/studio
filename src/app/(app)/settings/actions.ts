@@ -204,7 +204,7 @@ export async function handleFetchModels(providerId: LLMProviderId, apiKey: strin
     } else if (provider.id === 'ollama' && provider.isOllamaCompatible) {
       modelIds = data.models?.map((model: any) => model.name).filter(Boolean) || [];
     } else if (provider.isGoogleGenerativeAICompatible) {
-      modelIds = data.models?.map((model: any) => model.name).filter(Boolean) || [];
+      modelIds = data.models?.map((model: any) => model.name.replace(/^models\//, '')).filter(Boolean) || [];
     }
 
 
