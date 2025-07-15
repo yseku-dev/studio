@@ -120,31 +120,35 @@ export function resolveLlmOptionsForSource(
     }
   }
 
+  // Determine the provider and model
   if (agentForConfigSource && agentForConfigSource.llmConfig !== 'default') {
     finalProviderId = agentForConfigSource.llmConfig.providerId;
-    finalProviderConfig = LLM_PROVIDERS.find(p => p.id === finalProviderId);
-    if (finalProviderConfig) {
-      finalModelName = agentForConfigSource.llmConfig.modelName;
-      finalApiKey = agentForConfigSource.llmConfig.apiKey || getProviderSpecificItem(finalProviderConfig.id, 'apiKey');
-      finalApiUrl = agentForConfigSource.llmConfig.apiUrl || getProviderSpecificItem(finalProviderConfig.id, 'apiUrl') || finalProviderConfig.apiUrl;
-    }
+    finalModelName = agentForConfigSource.llmConfig.modelName;
   } else {
+    // Fallback to global settings if agent is default or it's a global source
     finalProviderId = (localStorageSnapshot ? localStorageSnapshot[LOCALSTORAGE_PROVIDER_ID_KEY] : getLocalStorageItem(LOCALSTORAGE_PROVIDER_ID_KEY) as LLMProviderId | null) || DEFAULT_LLM_PROVIDER;
-    finalProviderConfig = LLM_PROVIDERS.find(p => p.id === finalProviderId);
-    if (finalProviderConfig) {
-      finalModelName = getProviderSpecificItem(finalProviderConfig.id, 'modelName');
-      if (!finalModelName) {
-        finalModelName = getDefaultModelForProvider(finalProviderConfig.id);
-      }
-      finalApiKey = getProviderSpecificItem(finalProviderConfig.id, 'apiKey');
-      finalApiUrl = getProviderSpecificItem(finalProviderConfig.id, 'apiUrl') || finalProviderConfig.apiUrl;
+    if (finalProviderId) {
+       finalModelName = getProviderSpecificItem(finalProviderId, 'modelName') || getDefaultModelForProvider(finalProviderId);
     }
   }
-
-  if (!finalProviderId || !finalProviderConfig) {
-    console.error(`resolveLlmOptions: Provider not found or not resolved for source: ${sourceId}`);
+  
+  if (!finalProviderId) {
+    console.error(`resolveLlmOptions: Could not determine provider ID for source: ${sourceId}`);
     return null;
   }
+
+  finalProviderConfig = LLM_PROVIDERS.find(p => p.id === finalProviderId);
+  if (!finalProviderConfig) {
+     console.error(`resolveLlmOptions: Provider config not found for ID: ${finalProviderId}`);
+    return null;
+  }
+
+  // API Key and URL are ALWAYS sourced from global settings for the determined provider
+  finalApiKey = getProviderSpecificItem(finalProviderId, 'apiKey');
+  finalApiUrl = getProviderSpecificItem(finalProviderId, 'apiUrl') || finalProviderConfig.apiUrl;
+
+
+  // Final validation
   if (!finalModelName) {
     console.error(`resolveLlmOptions: Model name not found for provider: ${finalProviderConfig.name} (Source: ${sourceId})`);
     return null;

@@ -26,7 +26,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from '@/hooks/use-toast';
-import { PlusCircle, Users2, Edit2, Trash2, Wand2, UploadCloud, DownloadCloud, MessageSquare, Code, Terminal, FolderGit2, FileCode, ShieldCheck } from 'lucide-react';
+import { PlusCircle, Users2, Edit2, Trash2, Wand2, UploadCloud, DownloadCloud, MessageSquare, Code, Terminal, FolderGit2, FileCode, ShieldCheck, RefreshCw, Loader2 } from 'lucide-react';
 import type { AgentConfig, AgentLLMConfig, AgentSpecificLLMConfig, WorkgroupConfig } from '@/types/agent';
 import { LLM_PROVIDERS, MODELS_BY_PROVIDER, DEFAULT_LLM_PROVIDER, type LLMProviderId, getLocalStorageApiKeyName, getLocalStorageModelName, LOCALSTORAGE_PROVIDER_ID_KEY as GLOBAL_PROVIDER_ID_KEY } from '@/config/llm-config';
 import { AgentTestChatModal } from '@/components/agent-test-chat-modal'; // Import the new component
@@ -35,6 +35,8 @@ import { Separator } from '@/components/ui/separator'; // Import Separator
 import { Badge } from '@/components/ui/badge'; // Import Badge
 import { LOCALSTORAGE_WORKGROUPS_KEY, ORCHESTRATOR_AGENT_NAME, REFACTOR_AGENT_NAME, LOCALSTORAGE_AGENTS_KEY } from '@/config/agent-config';
 import { resolveLlmOptionsForSource, type LocalStorageSnapshot } from '@/lib/llm-utils';
+import { handleFetchModels } from '@/app/(app)/settings/actions';
+import { cn } from '@/lib/utils';
 
 
 const agentSchema = z.object({
@@ -44,9 +46,8 @@ const agentSchema = z.object({
   llmConfigType: z.enum(['default', 'custom']),
   customProviderId: z.custom<LLMProviderId>().optional(),
   customModelName: z.string().optional(),
-  customApiKey: z.string().optional(),
-  customApiUrl: z.string().url().optional().or(z.literal('')),
-  // --- New Capability Flags ---
+  // customApiKey: z.string().optional(), // Removed
+  // customApiUrl: z.string().url().optional().or(z.literal('')), // Removed
   selfCodeAccess: z.boolean().optional().default(false),
   executionCapability: z.boolean().optional().default(false),
   virtualEnvCapability: z.boolean().optional().default(false),
@@ -86,7 +87,7 @@ const defaultAgents: Omit<AgentConfig, 'id'>[] = [
   {
     name: "ValidadorCodigo",
     description: "Analiza resultados de refactorización para detectar errores y asegurar la calidad del código, por ejemplo, ejecutando linters o tests.",
-    systemMessage: "Eres un Validador de Código. Tu tarea es analizar el código proporcionado o modificado para detectar errores de sintaxis, violaciones de estilo, y asegurar que las pruebas (si existen) pasen. Puedes usar herramientas como linters (ej. ESLint) o ejecutar scripts de prueba. Informa sobre cualquier problema encontrado.",
+    systemMessage: "Eres un Validador de Código. Tu tarea es analizar el código proporcionado o modificado para detectar errores de sintaxis, violaciones de estilo, y asegurar que las pruebas (si existen) pasen. Informa sobre cualquier problema encontrado.",
     llmConfig: 'default',
     capabilities: { selfCodeAccess: true, executionCapability: true, readWriteCapability: false }
   }
@@ -100,11 +101,12 @@ export default function AgentsPage() {
   const [testingAgent, setTestingAgent] = useState<AgentConfig | null>(null); // State for the agent being tested
   const [isTestModalOpen, setIsTestModalOpen] = useState(false); // State for the test modal visibility
   const [resolvedLlmOptions, setResolvedLlmOptions] = useState<LLMOptions | null>(null); // State for resolved LLM options for testing
+  const [isFetchingAgentModels, setIsFetchingAgentModels] = useState(false);
 
   const { toast } = useToast();
   const importFileRef = useRef<HTMLInputElement>(null);
 
-  const { control, register, handleSubmit, reset, setValue, watch, formState: { errors, dirtyFields } } = useForm<AgentFormData>({ // Add control & dirtyFields
+  const { control, register, handleSubmit, reset, setValue, watch, getValues, formState: { errors, dirtyFields } } = useForm<AgentFormData>({
     resolver: zodResolver(agentSchema),
     defaultValues: {
       llmConfigType: 'default',
@@ -198,7 +200,8 @@ export default function AgentsPage() {
       const models = MODELS_BY_PROVIDER[watchedCustomProviderId] || {};
       const modelNames = Object.keys(models).sort((a,b) => (models[b].tpm || 0) - (models[a].tpm || 0) || a.localeCompare(b));
       setAvailableCustomModels(modelNames);
-      if (modelNames.length > 0 && !watch('customModelName')) {
+      const currentModel = watch('customModelName');
+      if (modelNames.length > 0 && (!currentModel || !modelNames.includes(currentModel))) {
         setValue('customModelName', modelNames[0], { shouldDirty: !!editingAgent }); 
       }
     } else {
@@ -209,15 +212,14 @@ export default function AgentsPage() {
   const handleOpenForm = (agent?: AgentConfig) => {
     if (agent) {
       setEditingAgent(agent);
+      const llmConfig = agent.llmConfig;
       reset({
         name: agent.name,
         description: agent.description,
         systemMessage: agent.systemMessage,
-        llmConfigType: agent.llmConfig === 'default' ? 'default' : 'custom',
-        customProviderId: agent.llmConfig !== 'default' ? agent.llmConfig.providerId : undefined,
-        customModelName: agent.llmConfig !== 'default' ? agent.llmConfig.modelName : undefined,
-        customApiKey: agent.llmConfig !== 'default' ? agent.llmConfig.apiKey || '' : '',
-        customApiUrl: agent.llmConfig !== 'default' ? agent.llmConfig.apiUrl || '' : '',
+        llmConfigType: llmConfig === 'default' ? 'default' : 'custom',
+        customProviderId: llmConfig !== 'default' ? llmConfig.providerId : undefined,
+        customModelName: llmConfig !== 'default' ? llmConfig.modelName : undefined,
         selfCodeAccess: agent.capabilities?.selfCodeAccess ?? false,
         executionCapability: agent.capabilities?.executionCapability ?? false,
         virtualEnvCapability: agent.capabilities?.virtualEnvCapability ?? false,
@@ -226,18 +228,11 @@ export default function AgentsPage() {
     } else {
       setEditingAgent(null);
       reset({
-        name: '',
-        description: '',
-        systemMessage: '',
+        name: '', description: '', systemMessage: '',
         llmConfigType: 'default',
-        customProviderId: undefined,
-        customModelName: undefined,
-        customApiKey: '',
-        customApiUrl: '',
-        selfCodeAccess: false,
-        executionCapability: false,
-        virtualEnvCapability: false,
-        readWriteCapability: false,
+        customProviderId: undefined, customModelName: undefined,
+        selfCodeAccess: false, executionCapability: false,
+        virtualEnvCapability: false, readWriteCapability: false,
       });
     }
     setIsFormOpen(true);
@@ -246,12 +241,9 @@ export default function AgentsPage() {
   const onSubmit: SubmitHandler<AgentFormData> = (data) => {
     let llmConfigToSave: AgentLLMConfig = 'default';
     if (data.llmConfigType === 'custom' && data.customProviderId && data.customModelName) {
-      const provider = LLM_PROVIDERS.find(p => p.id === data.customProviderId);
       llmConfigToSave = {
         providerId: data.customProviderId,
         modelName: data.customModelName,
-        apiKey: data.customApiKey || null, 
-        apiUrl: data.customApiUrl || provider?.apiUrl || null, 
       };
     }
 
@@ -358,20 +350,46 @@ export default function AgentsPage() {
     if (!open) {
       setEditingAgent(null);
       reset({
-        name: '',
-        description: '',
-        systemMessage: '',
-        llmConfigType: 'default',
-        customProviderId: undefined,
-        customModelName: undefined,
-        customApiKey: '',
-        customApiUrl: '',
-        selfCodeAccess: false,
-        executionCapability: false,
-        virtualEnvCapability: false,
-        readWriteCapability: false,
+        name: '', description: '', systemMessage: '',
+        llmConfigType: 'default', customProviderId: undefined, customModelName: undefined,
+        selfCodeAccess: false, executionCapability: false, virtualEnvCapability: false, readWriteCapability: false,
       });
     }
+  };
+
+  const onFetchAgentModels = async () => {
+    const providerId = getValues('customProviderId');
+    if (!providerId) {
+        toast({title: "Error", description: "Selecciona un proveedor primero.", variant: "destructive"});
+        return;
+    }
+    const provider = LLM_PROVIDERS.find(p => p.id === providerId);
+    if (!provider) return;
+    
+    const apiKey = localStorage.getItem(getLocalStorageApiKeyName(providerId)) || "";
+    const apiUrl = localStorage.getItem(`codealchemist_apiurl_${providerId}`) || provider.apiUrl;
+
+    if (provider.requiresApiKey && !apiKey) {
+        toast({title: "Clave API Global Requerida", description: `La clave API para ${provider.name} no está configurada en los ajustes globales.`, variant: "destructive", duration: 7000});
+        return;
+    }
+
+    setIsFetchingAgentModels(true);
+    toast({title: "Actualizando Modelos...", description: `Contactando a ${provider.name}...`});
+
+    const result = await handleFetchModels(providerId, apiKey, apiUrl);
+    
+    if (result.success) {
+        setAvailableCustomModels(result.models);
+        if (result.models.length > 0 && !result.models.includes(getValues('customModelName') || '')) {
+            setValue('customModelName', result.models[0], { shouldDirty: true });
+        }
+        toast({title: "Modelos Actualizados", description: `Se encontraron ${result.models.length} modelos para ${provider.name}. ${result.message || ''}`});
+    } else {
+        toast({title: "Error al Actualizar Modelos", description: result.message || "No se pudieron obtener los modelos.", variant: "destructive"});
+    }
+
+    setIsFetchingAgentModels(false);
   };
 
   const handleExportAllAgents = () => {
@@ -687,14 +705,18 @@ export default function AgentsPage() {
 
                       {watchedLlmConfigType === 'custom' && (
                           <div className="space-y-3 pt-3 border-t border-border mt-3">
-                              <p className="text-xs text-muted-foreground">Define qué proveedor y modelo usará específicamente este agente.</p>
+                              <p className="text-xs text-muted-foreground">Define qué proveedor y modelo usará específicamente este agente. La clave API y la URL se heredarán de la configuración global.</p>
                               <div>
                                   <Label htmlFor="customProviderId">Proveedor LLM (Personalizado)</Label>
                                    <Controller
                                       name="customProviderId"
                                       control={control}
                                       render={({ field }) => (
-                                        <Select value={field.value || ''} onValueChange={field.onChange}>
+                                        <Select value={field.value || ''} onValueChange={(value) => {
+                                            field.onChange(value);
+                                            setValue('customModelName', undefined, { shouldDirty: true });
+                                            setAvailableCustomModels([]);
+                                        }}>
                                           <SelectTrigger id="customProviderId">
                                               <SelectValue placeholder="Seleccionar proveedor" />
                                           </SelectTrigger>
@@ -710,17 +732,23 @@ export default function AgentsPage() {
                                   <>
                                       <div>
                                           <Label htmlFor="customModelName">Modelo (Personalizado)</Label>
+                                          <div className="flex items-center gap-2">
+                                            <Button type="button" variant="outline" size="sm" onClick={onFetchAgentModels} disabled={isFetchingAgentModels}>
+                                              <RefreshCw className={cn("mr-2 h-4 w-4", isFetchingAgentModels && "animate-spin")} />
+                                              Actualizar Modelos
+                                            </Button>
+                                          </div>
                                           <Controller
                                                 name="customModelName"
                                                 control={control}
                                                 render={({ field }) => (
-                                                  <Select value={field.value || ''} onValueChange={field.onChange}>
-                                                      <SelectTrigger id="customModelName">
-                                                          <SelectValue placeholder="Seleccionar modelo" />
+                                                  <Select value={field.value || ''} onValueChange={field.onChange} disabled={availableCustomModels.length === 0}>
+                                                      <SelectTrigger id="customModelName" className="mt-2">
+                                                          <SelectValue placeholder={availableCustomModels.length > 0 ? "Seleccionar modelo" : "Pulsa 'Actualizar Modelos'"} />
                                                       </SelectTrigger>
                                                       <SelectContent>
                                                           {availableCustomModels.length > 0 ? availableCustomModels.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)
-                                                          : <div className="p-2 text-sm text-muted-foreground text-center">No hay modelos para este proveedor</div>
+                                                          : <div className="p-2 text-sm text-muted-foreground text-center">No hay modelos. Pulsa 'Actualizar'.</div>
                                                           }
                                                       </SelectContent>
                                                   </Select>
@@ -728,22 +756,6 @@ export default function AgentsPage() {
                                             />
                                           {errors.customModelName && <p className="text-sm text-destructive mt-1">{errors.customModelName.message}</p>}
                                       </div>
-
-                                      {(LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.requiresApiKey) &&
-                                          <div>
-                                              <Label htmlFor="customApiKey">Clave API (Personalizada, opcional)</Label>
-                                              <Input id="customApiKey" type="password" {...register('customApiKey')} placeholder="Sobrescribir clave API global (si aplica)" />
-                                              <p className="text-xs text-muted-foreground mt-1">Deja vacío para usar la clave API global (si está configurada).</p>
-                                          </div>
-                                      }
-                                      {(LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.id === 'lmstudio' || LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.id === 'ollama' || LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.isGroqCompatible || LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.isAnthropicCompatible || LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.isGoogleGenerativeAICompatible) &&
-                                        <div>
-                                            <Label htmlFor="customApiUrl">URL de API (Personalizada, opcional)</Label>
-                                            <Input id="customApiUrl" type="url" {...register('customApiUrl')} placeholder={LLM_PROVIDERS.find(p=>p.id === watch('customProviderId'))?.apiUrl || 'Ej: http://localhost:1234/v1'} />
-                                            {errors.customApiUrl && <p className="text-sm text-destructive mt-1">{errors.customApiUrl.message}</p>}
-                                            <p className="text-xs text-muted-foreground mt-1">Deja vacío para usar la URL global (si está configurada) o el valor por defecto del proveedor.</p>
-                                        </div>
-                                      }
                                   </>
                               )}
                           </div>
@@ -756,7 +768,7 @@ export default function AgentsPage() {
                 <DialogClose asChild>
                   <Button type="button" variant="outline">Cancelar</Button>
                 </DialogClose>
-                <Button type="submit" form="agent-form-id" disabled={editingAgent?.name === ORCHESTRATOR_AGENT_NAME && (dirtyFields.name || dirtyFields.llmConfigType || dirtyFields.customProviderId || dirtyFields.customModelName || dirtyFields.customApiKey || dirtyFields.customApiUrl)}>
+                <Button type="submit" form="agent-form-id" disabled={editingAgent?.name === ORCHESTRATOR_AGENT_NAME && dirtyFields.name}>
                   <Wand2 className="mr-2 h-4 w-4" />
                   {editingAgent ? 'Guardar Cambios' : 'Crear Agente'}
                 </Button>
