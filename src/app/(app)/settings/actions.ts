@@ -1,4 +1,4 @@
-
+// src/app/(app)/settings/actions.ts
 'use server';
 
 import { LLM_PROVIDERS, type LLMProviderId, MODELS_BY_PROVIDER } from '@/config/llm-config';
@@ -92,7 +92,6 @@ export async function handleTestLLMConnection(
   const timeoutForTest = 30000; 
   const timeoutId = setTimeout(() => controller.abort(), timeoutForTest);
 
-  const operationName = `la prueba de conexión con ${provider.name}`;
   try {
     const fetchRequestOptions: RequestInit = {
       method: 'POST',
@@ -138,7 +137,6 @@ export async function handleTestLLMConnection(
 
   } catch (error) {
     clearTimeout(timeoutId); 
-    console.error(`Error en ${operationName}:`, error);
     let detailMessage: string;
 
     if (error instanceof Error) {
@@ -146,14 +144,14 @@ export async function handleTestLLMConnection(
         if (error.name === 'AbortError' || detailMessage.toLowerCase().includes("timeout") || detailMessage.toLowerCase().includes("excedió el tiempo límite")) {
           detailMessage = `La solicitud de prueba de conexión excedió el tiempo límite de ${timeoutForTest / 1000} segundos.`;
         }
+    } else if (typeof error === 'string') {
+        detailMessage = error;
     } else {
-        detailMessage = typeof error === 'string' ? error : "Ha ocurrido un error desconocido durante la operación.";
+        detailMessage = "Ha ocurrido un error desconocido durante la operación.";
     }
     
-    if (!detailMessage || detailMessage.trim() === "") {
-        detailMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
-    }
-    return { success: false, message: `Falló ${operationName}: ${detailMessage}` };
+    console.error(`Error en la prueba de conexión con ${provider.name}:`, error);
+    return { success: false, message: `Falló la prueba de conexión con ${provider.name}: ${detailMessage}` };
   }
 }
 
@@ -214,8 +212,10 @@ export async function handleTestGitConnection(config: GitTestConnectionConfig): 
                 errorMessage = "Falló la autenticación. Verifica tu nombre de usuario y PAT.";
             } else if (error.message.includes("not found")) {
                 errorMessage = "Repositorio no encontrado. Verifica la URL del repositorio.";
+            } else if (error.message.includes("src refspec") && error.message.includes("does not match any")) {
+                 errorMessage = `La rama local por defecto no coincide con ninguna rama remota. Verifica el nombre de la rama principal del repositorio remoto.`;
             } else if (error.message.includes("could not read Username")) {
-                 errorMessage = "Falló la autenticación (no se pudo leer el nombre de usuario). Verifica tu PAT y permisos.";
+                  errorMessage = "Falló la autenticación (no se pudo leer el nombre de usuario). Verifica tu PAT y permisos.";
             }
         }
         
@@ -223,10 +223,6 @@ export async function handleTestGitConnection(config: GitTestConnectionConfig): 
             errorDetails = error.stderr;
         } else if (error.message) {
             errorDetails = error.message; // Fallback if stderr is not available
-        }
-
-        if (!errorMessage || errorMessage.trim() === "") {
-            errorMessage = "Ha ocurrido un error desconocido o el servidor no proporcionó detalles.";
         }
         
         return { 

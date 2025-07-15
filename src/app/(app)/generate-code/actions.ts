@@ -49,18 +49,22 @@ export async function handleGenerateCode(
       timeoutMs: LLM_API_TIMEOUT_MS_GENERATE_CODE,
     };
     
-    const operationName = `la generación del código con ${currentProvider.name}`;
     const result = await callLLMToGenerateCode(prompt, llmOptions);
     return { success: true, data: result };
   } catch (error) {
-    const err = error as Error;
-    console.error(`Error en handleGenerateCode: ${err.message}`, {stack: err.stack}); 
+    let detailMessage: string;
+    if (error instanceof Error) {
+        detailMessage = error.message;
+    } else if (typeof error === 'string') {
+        detailMessage = error;
+    } else {
+        detailMessage = "Ha ocurrido un error desconocido durante la operación.";
+    }
+
+    console.error(`Error en handleGenerateCode: ${detailMessage}`, {stack: (error as Error)?.stack}); 
     
-    let detailMessage: string = err.message;
     if (detailMessage.toLowerCase().includes("timeout") || detailMessage.toLowerCase().includes("excedió el tiempo límite")) {
       detailMessage = `La generación de código excedió el tiempo límite de ${LLM_API_TIMEOUT_MS_GENERATE_CODE / 1000} segundos. Intenta con un prompt más simple o revisa la conexión.`;
-    } else if (!detailMessage || detailMessage.trim() === "") {
-        detailMessage = "Ha ocurrido un error desconocido durante la operación.";
     }
     
     return { success: false, error: `Falló la generación de código: ${detailMessage}` };
@@ -193,13 +197,15 @@ export async function initiateWorkgroupCodeGeneration(
     }
     throw new Error(`Grupo no completó generación en ${MAX_WORKGROUP_TURNS} turnos.`);
   } catch (error) {
-    const err = error as Error;
-    let detailMessage: string = err.message;
-    if (!detailMessage || detailMessage.trim() === "") {
-        detailMessage = "Ha ocurrido un error desconocido durante la generación de código por grupo.";
+    let detailMessage: string;
+    if (error instanceof Error) {
+        detailMessage = error.message;
+    } else if (typeof error === 'string') {
+        detailMessage = error;
+    } else {
+        detailMessage = "Ha ocurrido un error desconocido durante la operación del grupo de generación de código.";
     }
-    log('ERROR', `Error en initiateWorkgroupCodeGeneration: ${detailMessage}`, {stack: err.stack});
+    log('ERROR', `Error en initiateWorkgroupCodeGeneration: ${detailMessage}`, {stack: (error as Error)?.stack});
     return { success: false, error: detailMessage, workgroupLogs: serverLogs };
   }
 }
-

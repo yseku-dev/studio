@@ -51,18 +51,21 @@ export async function handleGenerateProject(
       timeoutMs: LLM_API_TIMEOUT_MS_GENERATE_PROJECT,
     };
     
-    const operationName = `la generación del proyecto con ${currentProvider.name}`;
     const result = await callLLMToGenerateProject(prompt, llmOptions);
     return { success: true, data: result };
   } catch (error) {
-    const err = error as Error;
-    console.error(`Error en handleGenerateProject: ${err.message}`, {stack: err.stack}); 
+    let detailMessage: string;
+    if (error instanceof Error) {
+        detailMessage = error.message;
+    } else if (typeof error === 'string') {
+        detailMessage = error;
+    } else {
+        detailMessage = "Ha ocurrido un error desconocido durante la operación.";
+    }
+    console.error(`Error en handleGenerateProject: ${detailMessage}`, {stack: (error as Error)?.stack}); 
     
-    let detailMessage: string = err.message;
     if (detailMessage.toLowerCase().includes("timeout") || detailMessage.toLowerCase().includes("excedió el tiempo límite")) {
       detailMessage = `La generación del proyecto excedió el tiempo límite de ${LLM_API_TIMEOUT_MS_GENERATE_PROJECT / 1000} segundos. Intenta con un prompt más simple o revisa la conexión.`;
-    } else if (!detailMessage || detailMessage.trim() === "") {
-        detailMessage = "Ha ocurrido un error desconocido durante la operación.";
     }
     
     return { success: false, error: `Falló la generación de proyecto: ${detailMessage}` };
@@ -108,13 +111,13 @@ export async function initiateWorkgroupProjectGeneration(
 
     const orchestrator = allAgents.find(a => a.name === ORCHESTRATOR_AGENT_NAME && workgroup.agentIds.includes(a.id));
     if (!orchestrator) {
-      log('ERROR', `Agente Orquestador no encontrado en el grupo ${workgroup.name}.`);
+      log('ERROR', `Agente Orquestrador no encontrado en el grupo ${workgroup.name}.`);
       return { success: false, error: `Orquestador no encontrado en el grupo.`, workgroupLogs: serverLogs };
     }
 
     const orchestratorLlmOptions = resolveLlmOptionsForSource(`agent:${orchestrator.id}`, allAgents, allWorkgroups, localStorageSnapshot);
     if (!orchestratorLlmOptions) {
-      log('ERROR', `Configuración LLM inválida para Orquestador (${orchestrator.name}) en grupo ${workgroup.name}.`);
+      log('ERROR', `Configuración LLM inválida para Orquestrador (${orchestrator.name}) en grupo ${workgroup.name}.`);
       return { success: false, error: `Configuración LLM inválida para Orquestador.`, workgroupLogs: serverLogs };
     }
     orchestratorLlmOptions.providerId = (orchestrator.llmConfig !== 'default' ? orchestrator.llmConfig.providerId : orchestratorLlmOptions.providerId);
@@ -195,13 +198,15 @@ export async function initiateWorkgroupProjectGeneration(
     }
     throw new Error(`Grupo no completó la generación en ${MAX_WORKGROUP_TURNS} turnos.`);
   } catch (error) {
-    const err = error as Error;
-    let detailMessage: string = err.message;
-    if (!detailMessage || detailMessage.trim() === "") {
-        detailMessage = "Ha ocurrido un error desconocido durante la generación de proyecto por grupo.";
+    let detailMessage: string;
+    if (error instanceof Error) {
+        detailMessage = error.message;
+    } else if (typeof error === 'string') {
+        detailMessage = error;
+    } else {
+        detailMessage = "Ha ocurrido un error desconocido durante la operación del grupo de generación de proyecto.";
     }
-    log('ERROR', `Error en initiateWorkgroupProjectGeneration: ${detailMessage}`, {stack: err.stack});
+    log('ERROR', `Error en initiateWorkgroupProjectGeneration: ${detailMessage}`, {stack: (error as Error)?.stack});
     return { success: false, error: detailMessage, workgroupLogs: serverLogs };
   }
 }
-

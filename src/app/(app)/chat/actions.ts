@@ -53,18 +53,22 @@ export async function handleChatCompletion(
       options: llmOptions,
     };
 
-    const operationName = `la respuesta del chat con ${currentProvider.name}`;
     const result = await chatWithLLM(payload);
     return { success: true, data: result };
   } catch (error) {
-    const err = error as Error;
-    console.error(`Error en handleChatCompletion: ${err.message}`, {stack: err.stack}); 
+    let detailMessage: string;
+    if (error instanceof Error) {
+        detailMessage = error.message;
+    } else if (typeof error === 'string') {
+        detailMessage = error;
+    } else {
+        detailMessage = "Ha ocurrido un error desconocido durante la operación.";
+    }
+
+    console.error(`Error en handleChatCompletion: ${detailMessage}`, {stack: (error as Error)?.stack}); 
     
-    let detailMessage: string = err.message;
     if (detailMessage.toLowerCase().includes("timeout") || detailMessage.toLowerCase().includes("excedió el tiempo límite")) {
       detailMessage = `La solicitud de chat excedió el tiempo límite de ${LLM_API_TIMEOUT_MS_CHAT / 1000} segundos. Intenta con un mensaje más corto o revisa la conexión.`;
-    } else if (!detailMessage || detailMessage.trim() === "") {
-        detailMessage = "Ha ocurrido un error desconocido durante la operación.";
     }
     
     return { success: false, error: `Falló la respuesta del chat: ${detailMessage}` };
@@ -204,13 +208,15 @@ export async function initiateWorkgroupChat(
     }
     throw new Error(`El grupo de trabajo de chat no produjo una respuesta después de ${MAX_CHAT_TURNS} turnos.`);
   } catch (error) {
-    const err = error as Error;
-    let detailMessage: string = err.message;
-    if (!detailMessage || detailMessage.trim() === "") {
-        detailMessage = "Ha ocurrido un error desconocido durante el chat del grupo.";
+    let detailMessage: string;
+    if (error instanceof Error) {
+        detailMessage = error.message;
+    } else if (typeof error === 'string') {
+        detailMessage = error;
+    } else {
+        detailMessage = "Ha ocurrido un error desconocido durante la operación del grupo de chat.";
     }
-    log('ERROR', `Error en initiateWorkgroupChat: ${detailMessage}`, {stack: err.stack});
+    log('ERROR', `Error en initiateWorkgroupChat: ${detailMessage}`, {stack: (error as Error)?.stack});
     return { success: false, error: detailMessage, workgroupLogs: serverLogs };
   }
 }
-
