@@ -26,6 +26,7 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
+  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { WorkgroupExecutionModal } from '@/components/workgroup-execution-modal';
 import { LOCALSTORAGE_WORKGROUPS_KEY, LOCALSTORAGE_AGENTS_KEY, ORCHESTRATOR_AGENT_NAME, REFACTOR_AGENT_NAME } from '@/config/agent-config';
@@ -503,4 +504,3 @@ export default function WorkgroupsPage() {
     </>
   );
 }
-
