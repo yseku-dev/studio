@@ -10,7 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardHeader, CardTitle, CardContent, CardFooter, CardDescription } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { Save, Settings as SettingsIcon, Zap, Loader2, GitFork, CheckCircle, XCircle, Bug } from 'lucide-react';
+import { Save, Settings as SettingsIcon, Zap, Loader2, GitFork, CheckCircle, XCircle, Bug, RefreshCw } from 'lucide-react';
 import { Switch } from "@/components/ui/switch";
 import {
   Select,
@@ -19,7 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { handleTestLLMConnection, handleTestGitConnection } from '@/app/(app)/settings/actions';
+import { handleTestLLMConnection, handleTestGitConnection, handleFetchModels } from '@/app/(app)/settings/actions';
 import { Separator } from '@/components/ui/separator';
 import { useDebug } from '@/contexts/DebugContext';
 import {
@@ -58,6 +58,7 @@ export function SettingsForm() {
   const { isDebugModeActive, setIsDebugModeActive, addDebugLog } = useDebug();
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [isTestingGitConnection, setIsTestingGitConnection] = useState(false);
+  const [isFetchingModels, setIsFetchingModels] = useState(false);
   
   const [currentProvider, setCurrentProvider] = useState<LLMProvider | undefined>(
     LLM_PROVIDERS.find(p => p.id === DEFAULT_LLM_PROVIDER)
@@ -268,6 +269,40 @@ export function SettingsForm() {
     }
   };
 
+  const onFetchModels = async () => {
+    const currentValues = getValues();
+    const provider = currentProvider;
+    if (!provider) {
+        toast({title: "Error", description: "Selecciona un proveedor primero.", variant: "destructive"});
+        return;
+    }
+    if (provider.requiresApiKey && !currentValues.apiKey) {
+        toast({title: "Clave API Requerida", description: `Introduce una clave API para ${provider.name}.`, variant: "destructive"});
+        return;
+    }
+
+    setIsFetchingModels(true);
+    addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: `Obteniendo modelos para ${provider.name}...`});
+    toast({title: "Actualizando Modelos...", description: `Contactando a ${provider.name}...`});
+
+    const result = await handleFetchModels(provider.id, currentValues.apiKey || '', currentValues.apiUrl || provider.apiUrl);
+    
+    if (result.success) {
+        setAvailableModels(result.models);
+        if (result.models.length > 0 && !result.models.includes(getValues('llmModelName'))) {
+            setValue('llmModelName', result.models[0], { shouldDirty: true });
+        }
+        toast({title: "Modelos Actualizados", description: `Se encontraron ${result.models.length} modelos para ${provider.name}. ${result.message || ''}`});
+        addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: `Modelos actualizados para ${provider.name}.`, data: { count: result.models.length }});
+    } else {
+        toast({title: "Error al Actualizar Modelos", description: result.message || "No se pudieron obtener los modelos.", variant: "destructive"});
+        addDebugLog({ source: 'SETTINGS_FORM', type: 'ERROR', message: `Error al obtener modelos para ${provider.name}: ${result.message}`});
+    }
+
+    setIsFetchingModels(false);
+  };
+
+
   const onTestGitConnection = async () => {
     addDebugLog({ source: 'SETTINGS_FORM', type: 'INFO', message: 'Iniciando prueba de conexión Git.'});
     await trigger(["gitRepositoryUrl", "gitUsername", "gitPat"]);
@@ -382,8 +417,15 @@ export function SettingsForm() {
               )}
 
               {currentProvider && (
+                <>
                 <div className="space-y-2">
                   <Label htmlFor="llmModelName" className="text-foreground">Nombre del Modelo ({currentProvider.name})</Label>
+                   <div className="flex items-center gap-2">
+                     <Button type="button" variant="outline" size="sm" onClick={onFetchModels} disabled={isFetchingModels || !currentProvider || (currentProvider.requiresApiKey && !watchedApiKey)}>
+                         <RefreshCw className={cn("mr-2 h-4 w-4", isFetchingModels && "animate-spin")} />
+                         Actualizar Modelos
+                     </Button>
+                    </div>
                   <Select
                     value={watchedModelName || ''}
                     onValueChange={(value) => setValue('llmModelName', value, { shouldDirty: true, shouldValidate: true })}
@@ -404,10 +446,10 @@ export function SettingsForm() {
                       ) : (
                          <div className="p-2 text-sm text-muted-foreground text-center">
                            { currentProvider.requiresApiKey && !watchedApiKey 
-                             ? "Introduce una clave API para ver modelos." 
+                             ? "Introduce una clave API y pulsa 'Actualizar Modelos'." 
                              : currentProvider.id === "ollama" || currentProvider.id === "lmstudio"
-                             ? "Asegúrate de que Ollama/LM Studio está en ejecución y accesible, y de que tienes modelos cargados."
-                             : "No hay modelos configurados para este proveedor."
+                             ? "Asegúrate de que el servidor local está en ejecución y pulsa 'Actualizar Modelos'."
+                             : "No hay modelos configurados. Pulsa 'Actualizar Modelos'."
                            }
                          </div>
                       )}
@@ -420,6 +462,7 @@ export function SettingsForm() {
                     La disponibilidad de modelos puede depender del proveedor y, en algunos casos, de tu clave API o configuración local.
                   </p>
                 </div>
+                </>
               )}
               <Button 
                 type="button" 

@@ -155,6 +155,76 @@ export async function handleTestLLMConnection(
   }
 }
 
+export interface FetchModelsResult {
+  success: boolean;
+  models: string[];
+  message?: string;
+}
+
+export async function handleFetchModels(providerId: LLMProviderId, apiKey: string, apiUrl?: string): Promise<FetchModelsResult> {
+  const provider = LLM_PROVIDERS.find(p => p.id === providerId);
+  if (!provider) {
+    return { success: false, models: [], message: "Proveedor no válido." };
+  }
+
+  if (provider.requiresApiKey && !apiKey) {
+    return { success: false, models: [], message: `La clave API para ${provider.name} es obligatoria.` };
+  }
+
+  const effectiveApiUrl = apiUrl || provider.apiUrl;
+  let endpoint = '';
+  const headers: HeadersInit = {};
+  
+  if (provider.isGroqCompatible || (provider.id === 'lmstudio') || (provider.id === 'ollama' && provider.isGroqCompatible)) {
+    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/models`;
+    if (provider.requiresApiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+  } else if (provider.id === 'ollama' && provider.isOllamaCompatible) {
+     endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/api/tags`; // Ollama's native endpoint
+  } else {
+    // For providers like Anthropic or Gemini, return the statically defined models as they don't have a public 'list models' endpoint.
+    const staticModels = Object.keys(MODELS_BY_PROVIDER[provider.id] || {});
+    return { success: true, models: staticModels, message: `Usando lista de modelos predefinida para ${provider.name}.` };
+  }
+
+  try {
+    const response = await fetch(endpoint, { method: 'GET', headers });
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`Error de API (${response.status}): ${errorBody}`);
+    }
+    const data = await response.json();
+    let modelIds: string[] = [];
+
+    if (provider.isGroqCompatible || provider.id === 'lmstudio' || (provider.id === 'ollama' && provider.isGroqCompatible)) {
+      modelIds = data.data?.map((model: any) => model.id).filter(Boolean) || [];
+    } else if (provider.id === 'ollama' && provider.isOllamaCompatible) {
+      modelIds = data.models?.map((model: any) => model.name).filter(Boolean) || [];
+    }
+
+    if (modelIds.length === 0) {
+      return { success: false, models: [], message: "No se encontraron modelos. Verifica tu clave API, la URL del endpoint o si el servidor está en ejecución." };
+    }
+    
+    // Combine with static list to provide more info like TPM, and sort
+    const staticModelList = MODELS_BY_PROVIDER[providerId] || {};
+    const combinedModels = Array.from(new Set([...modelIds, ...Object.keys(staticModelList)]));
+
+    combinedModels.sort((a,b) => {
+        const tpmA = staticModelList[a]?.tpm || 0;
+        const tpmB = staticModelList[b]?.tpm || 0;
+        if (tpmA !== tpmB) return tpmB - tpmA;
+        return a.localeCompare(b);
+    });
+
+    return { success: true, models: combinedModels };
+
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Error desconocido";
+    return { success: false, models: [], message: `Falló la obtención de modelos: ${message}` };
+  }
+}
 
 export interface GitTestConnectionConfig {
     repoUrl: string;
