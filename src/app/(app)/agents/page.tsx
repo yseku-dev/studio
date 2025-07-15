@@ -479,8 +479,8 @@ export default function AgentsPage() {
       <Dialog open={isFormOpen} onOpenChange={handleDialogVisibilityChange}>
         <div className="space-y-6">
           <Card className="shadow-lg border-primary/20">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4 border-b">
-              <div className="flex-grow">
+            <CardHeader className="flex flex-col space-y-4 border-b pb-4">
+              <div>
                 <CardTitle className="text-2xl flex items-center gap-2">
                   <Users2 className="h-6 w-6 text-primary" />
                   Gestión de Agentes IA
@@ -490,7 +490,7 @@ export default function AgentsPage() {
                   Los agentes pueden ser configurados con capacidades específicas y asignados a grupos de trabajo.
                 </CardDescription>
               </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
+              <div className="flex items-center gap-2 flex-wrap">
                 <Button variant="outline" size="sm" onClick={() => importFileRef.current?.click()}>
                   <UploadCloud className="mr-2 h-4 w-4" /> Importar
                 </Button>
