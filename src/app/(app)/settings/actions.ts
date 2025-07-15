@@ -182,8 +182,10 @@ export async function handleFetchModels(providerId: LLMProviderId, apiKey: strin
     }
   } else if (provider.id === 'ollama' && provider.isOllamaCompatible) {
      endpoint = `${effectiveApiUrl.replace(/\/$/, '')}/api/tags`; // Ollama's native endpoint
+  } else if (provider.isGoogleGenerativeAICompatible) {
+    endpoint = `${effectiveApiUrl.replace(/\/$/, '')}?key=${apiKey}`;
   } else {
-    // For providers like Anthropic or Gemini, return the statically defined models as they don't have a public 'list models' endpoint.
+    // For providers like Anthropic return the statically defined models as they don't have a public 'list models' endpoint.
     const staticModels = Object.keys(MODELS_BY_PROVIDER[provider.id] || {});
     return { success: true, models: staticModels, message: `Usando lista de modelos predefinida para ${provider.name}.` };
   }
@@ -201,7 +203,10 @@ export async function handleFetchModels(providerId: LLMProviderId, apiKey: strin
       modelIds = data.data?.map((model: any) => model.id).filter(Boolean) || [];
     } else if (provider.id === 'ollama' && provider.isOllamaCompatible) {
       modelIds = data.models?.map((model: any) => model.name).filter(Boolean) || [];
+    } else if (provider.isGoogleGenerativeAICompatible) {
+      modelIds = data.models?.map((model: any) => model.name).filter(Boolean) || [];
     }
+
 
     if (modelIds.length === 0) {
       return { success: false, models: [], message: "No se encontraron modelos. Verifica tu clave API, la URL del endpoint o si el servidor está en ejecución." };
