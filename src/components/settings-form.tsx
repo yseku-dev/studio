@@ -36,6 +36,7 @@ import {
   LOCALSTORAGE_GIT_EMAIL_KEY,
   LOCALSTORAGE_GIT_PAT_KEY,
 } from '@/config/llm-config';
+import { cn } from '@/lib/utils';
 
 const settingsSchema = z.object({
   llmProviderId: z.custom<LLMProviderId>(val => LLM_PROVIDERS.some(p => p.id === val), {
@@ -606,4 +607,3 @@ export function SettingsForm() {
     </Card>
   );
 }
-
