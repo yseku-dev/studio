@@ -111,7 +111,7 @@ export function SettingsForm() {
       if (tpmA !== tpmB) return tpmB - tpmA;
       const tokensA = models[a]?.tokens || 0; // Add null check for models[a]
       const tokensB = models[b]?.tokens || 0; // Add null check for models[b]
-      if (tokensA !== tokensB) return tokensB - tokensA; 
+      if (tokensA !== tokensB) return tpmB - tokensA; 
       return a.localeCompare(b);
     });
     setAvailableModels(modelNames);
