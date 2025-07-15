@@ -595,8 +595,8 @@ export default function AgentsPage() {
                 {editingAgent ? 'Modifica los detalles de tu agente.' : 'Define un nuevo agente para tus grupos de trabajo.'}
               </DialogDescription>
             </DialogHeader>
-            <form id="agent-form-id" onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4">
-              <ScrollArea className="max-h-[70vh] p-1 -mx-1 pr-4">
+            <ScrollArea className="max-h-[70vh] w-full" type="always">
+              <form id="agent-form-id" onSubmit={handleSubmit(onSubmit)} className="space-y-4 py-4 pr-6">
                 <div className="space-y-4 px-1">
                   <div>
                     <Label htmlFor="name">Nombre del Agente</Label>
@@ -750,8 +750,8 @@ export default function AgentsPage() {
                       )}
                   </div>
                 </div>
-              </ScrollArea>
-            </form>
+              </form>
+            </ScrollArea>
             <DialogFooter>
                 <DialogClose asChild>
                   <Button type="button" variant="outline">Cancelar</Button>
