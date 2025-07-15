@@ -173,10 +173,14 @@ export function SettingsForm() {
       const apiKeyFromStorage = localStorage.getItem(getLocalStorageApiKeyName(newProvider.id)) || '';
       setValue('apiKey', apiKeyFromStorage, { shouldDirty: dirtyFields.apiKey });
 
+      const modelNameFromStorage = localStorage.getItem(getLocalStorageModelName(newProvider.id));
       const newProviderModels = MODELS_BY_PROVIDER[newProvider.id] || {};
       const newProviderModelKeys = Object.keys(newProviderModels);
       let newModelToSet = '';
-      if (newProviderModelKeys.length > 0) {
+      
+      if (modelNameFromStorage && newProviderModelKeys.includes(modelNameFromStorage)) {
+          newModelToSet = modelNameFromStorage;
+      } else if (newProviderModelKeys.length > 0) {
          const sortedModels = Object.keys(newProviderModels).sort((a,b) => (newProviderModels[b]?.tpm || 0) - (newProviderModels[a]?.tpm || 0) || a.localeCompare(b) );
          newModelToSet = sortedModels[0];
       }
@@ -590,4 +594,3 @@ export function SettingsForm() {
     </Card>
   );
 }
-
